@@ -8,14 +8,15 @@ vi.mock("next/navigation", () => ({
 import Home from "./page";
 
 describe("Cloud home page", () => {
-  it("shows the author and open-source contact information", () => {
+  it("shows the intro content and centers the upload form column", () => {
     const html = renderToStaticMarkup(<Home />);
 
     expect(html).toContain("qq：280475274");
     expect(html).toContain("bilibili：esrgt");
     expect(html).toContain("小红书：esr");
-    expect(html).toContain(
-      "项目已开源，欢迎关注项目更新进度，与错误反馈或修改建议",
-    );
+    expect(html).toContain('id="upload-form"');
+    expect(html).toContain("lg:min-h-[calc(100dvh-5rem)]");
+    expect(html).toContain("视频素材");
+    expect(html).not.toContain("LOCAL");
   });
 });

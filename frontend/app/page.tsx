@@ -20,9 +20,9 @@ const steps = [
 
 export default function Home() {
   return (
-    <main>
-      <section className="mx-auto grid max-w-6xl gap-12 px-5 py-12 sm:px-8 sm:py-16 lg:grid-cols-[0.9fr_1.1fr] lg:items-start lg:py-24">
-        <div className="lg:sticky lg:top-10">
+    <main className="min-h-dvh">
+      <section className="mx-auto grid min-h-dvh max-w-6xl gap-12 px-5 py-8 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:py-10">
+        <div className="self-center lg:sticky lg:top-10">
           <h1 className="font-display text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
             ニコカラ
             <br />
@@ -68,11 +68,13 @@ export default function Home() {
           </aside>
         </div>
 
-        <div
-          id="upload-form"
-          className="rounded-3xl border bg-card/92 p-5 shadow-[0_24px_80px_-48px_color-mix(in_oklab,var(--color-foreground)_45%,transparent)] sm:p-8"
-        >
-          <UploadForm />
+        <div className="flex items-start lg:min-h-[calc(100dvh-5rem)] lg:items-center">
+          <div
+            id="upload-form"
+            className="w-full rounded-3xl border bg-card/92 p-5 shadow-[0_24px_80px_-48px_color-mix(in_oklab,var(--color-foreground)_45%,transparent)] sm:p-8"
+          >
+            <UploadForm />
+          </div>
         </div>
       </section>
     </main>

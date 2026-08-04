@@ -42,7 +42,7 @@ export const UPLOAD_COPY = {
   uploadingButton: "正在上传…",
   submitButton: "提交生成任务",
   footer:
-    "上传完成后，任务会在服务器继续处理。关闭页面不会中断任务，请保存任务链接或任务 ID。",
+    "排队时请保持页面打开；进入任务页后可关闭，保存浏览器地址，之后打开即可查看结果。",
 } as const;
 
 export const JOB_COPY = {

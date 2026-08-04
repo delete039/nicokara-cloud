@@ -51,11 +51,15 @@ def test_api_responses_include_browser_security_headers(tmp_path: Path) -> None:
     )
 
 
-def test_queue_backpressure_rejects_upload_before_writing_files(
+def test_full_runner_still_accepts_upload_as_persisted_queue_item(
     tmp_path: Path,
 ) -> None:
     class FullRunner:
         can_accept = False
+        job_ids: list[str]
+
+        def __init__(self) -> None:
+            self.job_ids = []
 
         async def start(self) -> None:
             pass
@@ -63,12 +67,16 @@ def test_queue_backpressure_rejects_upload_before_writing_files(
         async def stop(self) -> None:
             pass
 
+        async def enqueue(self, job_id: str) -> None:
+            self.job_ids.append(job_id)
+
     settings = Settings(
         data_dir=tmp_path / "data",
         storage_dir=tmp_path / "jobs",
         processing_enabled=False,
     )
-    with TestClient(create_app(settings, runner=FullRunner())) as client:
+    runner = FullRunner()
+    with TestClient(create_app(settings, runner=runner)) as client:
         response = client.post(
             "/api/v1/jobs",
             files={
@@ -81,8 +89,11 @@ def test_queue_backpressure_rejects_upload_before_writing_files(
             data={"lyrics_text": "歌詞"},
         )
 
-    assert response.status_code == 503
-    assert list(settings.storage_dir.iterdir()) == []
+    assert response.status_code == 201
+    assert response.json()["queue_position"] == 1
+    assert response.json()["queue_size"] == 1
+    assert runner.job_ids == [response.json()["id"]]
+    assert (settings.storage_dir / response.json()["id"]).is_dir()
 
 
 def test_cleanup_deletes_only_expired_terminal_jobs(tmp_path: Path) -> None:
@@ -219,27 +230,12 @@ def test_restart_eventually_requeues_every_uploaded_job(
     assert pipeline.job_ids == job_ids
 
 
-def test_upload_uses_atomic_runner_reservation(tmp_path: Path) -> None:
-    class Reservation:
-        def __init__(self, runner) -> None:
-            self.runner = runner
-
-        async def enqueue(self, job_id: str) -> None:
-            self.runner.job_ids.append(job_id)
-
-        def release(self) -> None:
-            pass
-
-    class ReservingRunner:
+def test_upload_enqueues_created_job(tmp_path: Path) -> None:
+    class RecordingRunner:
         can_accept = False
 
         def __init__(self) -> None:
             self.job_ids: list[str] = []
-            self.reservations = 0
-
-        def reserve(self) -> Reservation:
-            self.reservations += 1
-            return Reservation(self)
 
         async def start(self) -> None:
             pass
@@ -247,13 +243,16 @@ def test_upload_uses_atomic_runner_reservation(tmp_path: Path) -> None:
         async def stop(self) -> None:
             pass
 
+        async def enqueue(self, job_id: str) -> None:
+            self.job_ids.append(job_id)
+
     settings = Settings(
         data_dir=tmp_path / "data",
         storage_dir=tmp_path / "jobs",
         processing_enabled=False,
         cleanup_enabled=False,
     )
-    runner = ReservingRunner()
+    runner = RecordingRunner()
     with TestClient(create_app(settings, runner=runner)) as client:
         response = client.post(
             "/api/v1/jobs",
@@ -268,7 +267,6 @@ def test_upload_uses_atomic_runner_reservation(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 201
-    assert runner.reservations == 1
     assert runner.job_ids == [response.json()["id"]]
 
 
@@ -418,7 +416,7 @@ def test_canceling_a_queued_job_updates_the_remaining_queue(
     assert refreshed_second.json()["queue_size"] == 1
 
 
-def test_persisted_backlog_has_priority_over_new_uploads(
+def test_new_upload_joins_persisted_backlog(
     tmp_path: Path,
 ) -> None:
     class PassiveRunner:
@@ -463,8 +461,9 @@ def test_persisted_backlog_has_priority_over_new_uploads(
             data={"lyrics_text": "新任务"},
         )
 
-    assert response.status_code == 503
-    assert response.headers["retry-after"] == "60"
+    assert response.status_code == 201
+    assert response.json()["queue_position"] == 3
+    assert response.json()["queue_size"] == 3
 
 
 def test_startup_cleanup_removes_expired_completed_job(

@@ -6,6 +6,18 @@ services:
       - no-new-privileges:true
     build:
       context: ./backend
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "app",
+      ]
     environment:
       NICOKARA_DATA_DIR: /app/backend/data
       NICOKARA_STORAGE_DIR: /app/storage/jobs
@@ -34,6 +46,8 @@ services:
       NICOKARA_DEEPSEEK_BASE_URL: https://api.deepseek.com
       NICOKARA_DEEPSEEK_MODEL: deepseek-v4-flash
     volumes:
+      - ./backend/app:/app/backend/app
+      - ./backend/tests:/app/backend/tests
       - backend-data:/app/backend/data
       - ./storage:/app/storage
       - whisper-cache:/root/.cache/huggingface
@@ -62,10 +76,20 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
-    build:
-      context: ./frontend
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    image: node:24-alpine
+    working_dir: /app
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -d node_modules/.bin ]; then npm ci; fi
+        npx next dev -H 0.0.0.0 -p 3000
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      NICOKARA_DEV_API_ORIGIN: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
     depends_on:
       backend:
         condition: service_healthy
@@ -81,3 +105,4 @@ volumes:
   backend-data:
   whisper-cache:
   mdx-model-cache:
+  frontend-node-modules:

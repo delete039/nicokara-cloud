@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -12,12 +14,33 @@ from app.core.active_jobs import ActiveJobLimitError
 from app.core.config import Settings
 from app.core.database import Database
 from app.core.rate_limit import resolve_client_key
-from app.schemas.jobs import JobResponse
+from app.schemas.jobs import (
+    JobResponse,
+    UploadChunkResponse,
+    UploadChunkSessionCreate,
+    UploadChunkSessionResponse,
+    UploadTicketCreate,
+    UploadTicketResponse,
+)
+from app.services.chunked_uploads import (
+    acquire_completion_lock,
+    assemble_chunked_mp4,
+    missing_chunk_indices,
+    read_chunked_upload_metadata,
+    received_chunk_count,
+    remove_chunked_upload,
+    save_upload_chunk,
+    start_chunked_upload,
+)
 from app.services.uploads import save_lyrics, save_mp4
-from app.tasks.runner import QueueCapacityError
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+upload_tickets_router = APIRouter(
+    prefix="/upload-tickets",
+    tags=["upload queue"],
+)
+logger = logging.getLogger(__name__)
 
 
 def safe_display_name(filename: str | None) -> str:
@@ -26,8 +49,36 @@ def safe_display_name(filename: str | None) -> str:
     return candidate[:255] or "input.mp4"
 
 
+def normalized_client_submission_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        UUID(candidate)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client_submission_id must be a UUID.",
+        ) from exc
+    return candidate
+
+
 def services(request: Request) -> tuple[Settings, Database]:
     return request.app.state.settings, request.app.state.database
+
+
+def client_key_from_request(request: Request, settings: Settings) -> str:
+    peer_host = request.client.host if request.client else "unknown"
+    return resolve_client_key(
+        peer_host=peer_host,
+        forwarded_for=(
+            request.headers.get("x-forwarded-for")
+            or request.headers.get("x-real-ip")
+        ),
+        trusted_proxies=settings.trusted_proxies,
+    )
 
 
 def job_response(database: Database, job: dict) -> JobResponse:
@@ -41,6 +92,562 @@ def job_response(database: Database, job: dict) -> JobResponse:
     )
 
 
+def refresh_upload_queue(settings: Settings, database: Database) -> None:
+    now = datetime.now(UTC)
+    expired_ticket_ids = database.expire_stale_upload_tickets(
+        waiting_cutoff=(
+            now - timedelta(seconds=settings.upload_ticket_timeout_seconds)
+        ).isoformat(),
+        uploading_cutoff=(
+            now
+            - timedelta(seconds=settings.upload_ticket_upload_timeout_seconds)
+        ).isoformat(),
+    )
+    for ticket_id in expired_ticket_ids:
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+    database.activate_upload_tickets(
+        max_active_uploads=settings.max_upload_slots,
+    )
+
+
+def upload_ticket_response(
+    database: Database,
+    ticket: dict,
+) -> UploadTicketResponse:
+    queue_position, queue_size = database.upload_ticket_metrics(ticket["id"])
+    return UploadTicketResponse.model_validate(
+        {
+            **ticket,
+            "queue_position": queue_position,
+            "queue_size": queue_size,
+        }
+    )
+
+
+async def enqueue_created_job(request: Request, job_id: str) -> None:
+    runner = getattr(request.app.state, "runner", None)
+    if runner is None:
+        return
+    enqueue = getattr(runner, "enqueue", None)
+    if enqueue is None:
+        logger.warning("Configured runner cannot enqueue job %s", job_id)
+        return
+    try:
+        await enqueue(job_id)
+    except Exception:
+        logger.exception(
+            "Job %s was stored but could not be added to the runner queue",
+            job_id,
+        )
+
+
+@upload_tickets_router.post(
+    "",
+    response_model=UploadTicketResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_upload_ticket(
+    request: Request,
+    payload: UploadTicketCreate,
+) -> UploadTicketResponse:
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    client_key = client_key_from_request(request, settings)
+    original_name = safe_display_name(payload.video_name)
+    client_submission_id = normalized_client_submission_id(
+        payload.client_submission_id
+    )
+    if client_submission_id is not None:
+        existing_job = database.get_job_by_client_submission_id(
+            client_submission_id
+        )
+        if existing_job is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Client submission already created a job.",
+            )
+    if Path(original_name).suffix.lower() != ".mp4":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="第一版仅支持 .mp4 视频",
+        )
+    if payload.video_size_bytes <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="视频文件为空",
+        )
+    if payload.video_size_bytes > settings.max_video_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="视频文件超过大小限制",
+        )
+    active_count = (
+        database.count_active_jobs_for_client(client_key)
+        + database.count_active_upload_tickets_for_client(client_key)
+    )
+    if active_count >= settings.max_active_jobs_per_client:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Too many active jobs for this client. Try again later."
+            ),
+            headers={"Retry-After": "60"},
+        )
+
+    ticket = database.create_upload_ticket(
+        ticket_id=str(uuid4()),
+        client_key=client_key,
+        video_name=original_name,
+        video_size_bytes=payload.video_size_bytes,
+        client_submission_id=client_submission_id,
+    )
+    refresh_upload_queue(settings, database)
+    refreshed = database.get_upload_ticket(ticket["id"]) or ticket
+    return upload_ticket_response(database, refreshed)
+
+
+@upload_tickets_router.get(
+    "/{ticket_id}",
+    response_model=UploadTicketResponse,
+)
+def get_upload_ticket(
+    request: Request,
+    ticket_id: str,
+) -> UploadTicketResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.get_upload_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        )
+    if ticket["status"] in {"WAITING", "READY"}:
+        database.touch_upload_ticket(ticket_id)
+        refresh_upload_queue(settings, database)
+        ticket = database.get_upload_ticket(ticket_id) or ticket
+    return upload_ticket_response(database, ticket)
+
+
+@upload_tickets_router.post(
+    "/{ticket_id}/cancel",
+    response_model=UploadTicketResponse,
+)
+def cancel_upload_ticket(
+    request: Request,
+    ticket_id: str,
+) -> UploadTicketResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.get_upload_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        )
+    database.cancel_upload_ticket(ticket_id)
+    remove_chunked_upload(settings.storage_dir, ticket_id)
+    refresh_upload_queue(settings, database)
+    refreshed = database.get_upload_ticket(ticket_id) or ticket
+    return upload_ticket_response(database, refreshed)
+
+
+@upload_tickets_router.post(
+    "/{ticket_id}/chunks/start",
+    response_model=UploadChunkSessionResponse,
+)
+def start_upload_chunks(
+    request: Request,
+    ticket_id: str,
+    payload: UploadChunkSessionCreate,
+) -> UploadChunkSessionResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.begin_upload_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        )
+
+    if not ticket.get("_upload_started"):
+        if ticket["status"] == "UPLOADING":
+            metadata = read_chunked_upload_metadata(
+                settings.storage_dir,
+                ticket_id,
+            )
+            return UploadChunkSessionResponse(
+                ticket_id=ticket_id,
+                status=ticket["status"],
+                chunk_size_bytes=int(metadata["chunk_size_bytes"]),
+                total_chunks=int(metadata["total_chunks"]),
+                received_chunks=received_chunk_count(
+                    settings.storage_dir,
+                    ticket_id,
+                ),
+            )
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if ticket["status"] == "WAITING"
+            else status.HTTP_410_GONE
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Upload ticket is {ticket['status'].lower()}.",
+        )
+
+    original_name = safe_display_name(payload.video_name)
+    if original_name != ticket["video_name"]:
+        original_name = ticket["video_name"]
+    if Path(original_name).suffix.lower() != ".mp4":
+        database.cancel_upload_ticket(ticket_id)
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        refresh_upload_queue(settings, database)
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="绗竴鐗堜粎鏀寔 .mp4 瑙嗛",
+        )
+    if payload.video_size_bytes != ticket["video_size_bytes"]:
+        database.cancel_upload_ticket(ticket_id)
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        refresh_upload_queue(settings, database)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Video size does not match the upload ticket.",
+        )
+
+    try:
+        metadata = start_chunked_upload(
+            settings.storage_dir,
+            ticket_id,
+            video_name=original_name,
+            video_size_bytes=payload.video_size_bytes,
+            chunk_size_bytes=payload.chunk_size_bytes,
+            total_chunks=payload.total_chunks,
+        )
+    except Exception:
+        database.cancel_upload_ticket(ticket_id)
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        refresh_upload_queue(settings, database)
+        raise
+    database.touch_uploading_ticket(ticket_id)
+    return UploadChunkSessionResponse(
+        ticket_id=ticket_id,
+        status="UPLOADING",
+        chunk_size_bytes=int(metadata["chunk_size_bytes"]),
+        total_chunks=int(metadata["total_chunks"]),
+        received_chunks=0,
+    )
+
+
+@upload_tickets_router.post(
+    "/{ticket_id}/chunks/part/{chunk_index}",
+    response_model=UploadChunkResponse,
+)
+async def upload_video_chunk(
+    request: Request,
+    ticket_id: str,
+    chunk_index: int,
+    chunk: UploadFile = File(...),
+) -> UploadChunkResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        await chunk.close()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.get_upload_ticket(ticket_id)
+    if ticket is None:
+        await chunk.close()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        )
+    if ticket["status"] != "UPLOADING":
+        await chunk.close()
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if ticket["status"] == "WAITING"
+            else status.HTTP_410_GONE
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Upload ticket is {ticket['status'].lower()}.",
+        )
+
+    result = await save_upload_chunk(
+        settings.storage_dir,
+        ticket_id,
+        chunk_index,
+        chunk,
+    )
+    database.touch_uploading_ticket(ticket_id)
+    return UploadChunkResponse(
+        ticket_id=ticket_id,
+        chunk_index=chunk_index,
+        received_chunks=result["received_chunks"],
+        total_chunks=result["total_chunks"],
+    )
+
+
+@upload_tickets_router.post(
+    "/{ticket_id}/chunks/complete",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_upload_chunks(
+    request: Request,
+    ticket_id: str,
+    lyrics_text: str | None = Form(default=None),
+    lyrics_file: UploadFile | None = File(default=None),
+    vocal_mode: str = Form(default="on"),
+) -> JobResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        if lyrics_file:
+            await lyrics_file.close()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.get_upload_ticket(ticket_id)
+    if ticket is None:
+        if lyrics_file:
+            await lyrics_file.close()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+        )
+    if ticket["status"] == "COMPLETED" and ticket.get("job_id"):
+        if lyrics_file:
+            await lyrics_file.close()
+        existing_job = database.get_job(ticket["job_id"])
+        if existing_job is not None:
+            return job_response(database, existing_job)
+    if ticket["status"] != "UPLOADING":
+        if lyrics_file:
+            await lyrics_file.close()
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if ticket["status"] == "WAITING"
+            else status.HTTP_410_GONE
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Upload ticket is {ticket['status'].lower()}.",
+        )
+
+    try:
+        missing = missing_chunk_indices(settings.storage_dir, ticket_id)
+    except HTTPException:
+        if lyrics_file:
+            await lyrics_file.close()
+        raise
+    if missing:
+        if lyrics_file:
+            await lyrics_file.close()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Upload chunks are incomplete.",
+        )
+
+    try:
+        acquire_completion_lock(settings.storage_dir, ticket_id)
+    except HTTPException:
+        if lyrics_file:
+            await lyrics_file.close()
+        raise
+    job_id = str(uuid4())
+    job_dir = settings.storage_dir / job_id
+    video_path = job_dir / "input.mp4"
+    lyrics_path = job_dir / "lyrics.txt"
+    original_name = ticket["video_name"]
+    created = False
+    try:
+        saved = assemble_chunked_mp4(
+            settings.storage_dir,
+            ticket_id,
+            video_path,
+            max_bytes=settings.max_video_bytes,
+        )
+        lyrics_source = await save_lyrics(
+            lyrics_text=lyrics_text,
+            lyrics_file=lyrics_file,
+            destination=lyrics_path,
+            max_bytes=settings.max_lyrics_bytes,
+        )
+        job = database.create_job(
+            job_id=job_id,
+            original_video_name=original_name,
+            video_size_bytes=saved.size_bytes,
+            video_sha256=saved.sha256,
+            video_path=saved.path,
+            client_key=ticket["client_key"],
+            lyrics_source=lyrics_source,
+            lyrics_path=lyrics_path if lyrics_source else None,
+            vocal_mode=vocal_mode,
+            client_submission_id=ticket.get("client_submission_id"),
+        )
+        created = True
+        if not database.complete_upload_ticket(ticket_id, job_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Upload ticket is no longer active.",
+            )
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        refresh_upload_queue(settings, database)
+        await enqueue_created_job(request, job_id)
+    except Exception:
+        if created:
+            database.delete_job(job_id)
+        database.cancel_upload_ticket(ticket_id)
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        refresh_upload_queue(settings, database)
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+    current_job = database.get_job(job_id) or job
+    return job_response(database, current_job)
+
+
+@upload_tickets_router.post(
+    "/{ticket_id}/jobs",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_job_from_upload_ticket(
+    request: Request,
+    ticket_id: str,
+    video: UploadFile = File(...),
+    lyrics_text: str | None = Form(default=None),
+    lyrics_file: UploadFile | None = File(default=None),
+    vocal_mode: str = Form(default="on"),
+) -> JobResponse:
+    try:
+        UUID(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        ) from exc
+    settings, database = services(request)
+    refresh_upload_queue(settings, database)
+    ticket = database.begin_upload_ticket(ticket_id)
+    if ticket is None:
+        await video.close()
+        if lyrics_file:
+            await lyrics_file.close()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="上传排队号不存在",
+        )
+    if not ticket.get("_upload_started"):
+        await video.close()
+        if lyrics_file:
+            await lyrics_file.close()
+        if ticket["status"] == "COMPLETED" and ticket.get("job_id"):
+            existing_job = database.get_job(ticket["job_id"])
+            if existing_job is not None:
+                return job_response(database, existing_job)
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if ticket["status"] == "WAITING"
+            else status.HTTP_410_GONE
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Upload ticket is {ticket['status'].lower()}.",
+        )
+
+    job_id = str(uuid4())
+    job_dir = settings.storage_dir / job_id
+    video_path = job_dir / "input.mp4"
+    lyrics_path = job_dir / "lyrics.txt"
+    original_name = safe_display_name(video.filename)
+    if original_name != ticket["video_name"]:
+        original_name = ticket["video_name"]
+    if Path(original_name).suffix.lower() != ".mp4":
+        await video.close()
+        if lyrics_file:
+            await lyrics_file.close()
+        database.cancel_upload_ticket(ticket_id)
+        refresh_upload_queue(settings, database)
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="第一版仅支持 .mp4 视频",
+        )
+
+    created = False
+    try:
+        saved = await save_mp4(
+            video,
+            video_path,
+            max_bytes=settings.max_video_bytes,
+        )
+        lyrics_source = await save_lyrics(
+            lyrics_text=lyrics_text,
+            lyrics_file=lyrics_file,
+            destination=lyrics_path,
+            max_bytes=settings.max_lyrics_bytes,
+        )
+        job = database.create_job(
+            job_id=job_id,
+            original_video_name=original_name,
+            video_size_bytes=saved.size_bytes,
+            video_sha256=saved.sha256,
+            video_path=saved.path,
+            client_key=ticket["client_key"],
+            lyrics_source=lyrics_source,
+            lyrics_path=lyrics_path if lyrics_source else None,
+            vocal_mode=vocal_mode,
+            client_submission_id=ticket.get("client_submission_id"),
+        )
+        created = True
+        if not database.complete_upload_ticket(ticket_id, job_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Upload ticket is no longer active.",
+            )
+        refresh_upload_queue(settings, database)
+        await enqueue_created_job(request, job_id)
+    except Exception:
+        if created:
+            database.delete_job(job_id)
+        database.cancel_upload_ticket(ticket_id)
+        refresh_upload_queue(settings, database)
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+    current_job = database.get_job(job_id) or job
+    return job_response(database, current_job)
+
+
 @router.post("", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 async def create_job(
     request: Request,
@@ -50,15 +657,7 @@ async def create_job(
     vocal_mode: str = Form(default="on"),
 ) -> JobResponse:
     settings, database = services(request)
-    peer_host = request.client.host if request.client else "unknown"
-    client_key = resolve_client_key(
-        peer_host=peer_host,
-        forwarded_for=(
-            request.headers.get("x-forwarded-for")
-            or request.headers.get("x-real-ip")
-        ),
-        trusted_proxies=settings.trusted_proxies,
-    )
+    client_key = client_key_from_request(request, settings)
     job_id = str(uuid4())
     job_dir = settings.storage_dir / job_id
     video_path = job_dir / "input.mp4"
@@ -74,54 +673,12 @@ async def create_job(
             detail="第一版仅支持 .mp4 视频",
         )
 
-    runner = getattr(request.app.state, "runner", None)
-    if (
-        runner is not None
-        and database.count_jobs(status="UPLOADED")
-        >= settings.max_pending_jobs
-    ):
-        await video.close()
-        if lyrics_file:
-            await lyrics_file.close()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Processing queue is full. Try again later.",
-            headers={"Retry-After": "60"},
-        )
-
-    reservation = None
-    reserve = getattr(runner, "reserve", None) if runner is not None else None
-    if reserve is not None:
-        try:
-            reservation = reserve()
-        except QueueCapacityError as exc:
-            await video.close()
-            if lyrics_file:
-                await lyrics_file.close()
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Processing queue is full. Try again later.",
-                headers={"Retry-After": "60"},
-            ) from exc
-    elif runner is not None and not getattr(runner, "can_accept", True):
-        await video.close()
-        if lyrics_file:
-            await lyrics_file.close()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Processing queue is full. Try again later.",
-            headers={"Retry-After": "60"},
-        )
-
     active_job_reservation = None
     try:
         active_job_reservation = request.app.state.active_job_limiter.reserve(
             client_key
         )
     except ActiveJobLimitError as exc:
-        if reservation is not None:
-            reservation.release()
-            reservation = None
         await video.close()
         if lyrics_file:
             await lyrics_file.close()
@@ -160,32 +717,41 @@ async def create_job(
         created = True
         active_job_reservation.commit()
         active_job_reservation = None
-        if reservation is not None:
-            await reservation.enqueue(job_id)
-            reservation = None
-        elif runner is not None:
-            await runner.enqueue(job_id)
-    except QueueCapacityError as exc:
-        if created:
-            database.delete_job(job_id)
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Processing queue is full. Try again later.",
-            headers={"Retry-After": "60"},
-        ) from exc
+        await enqueue_created_job(request, job_id)
     except Exception:
         if created:
             database.delete_job(job_id)
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
     finally:
-        if reservation is not None:
-            reservation.release()
         if active_job_reservation is not None:
             active_job_reservation.release()
     current_job = database.get_job(job_id) or job
     return job_response(database, current_job)
+
+
+@router.get(
+    "/by-submission/{client_submission_id}",
+    response_model=JobResponse,
+)
+def get_job_by_client_submission_id(
+    request: Request,
+    client_submission_id: str,
+) -> JobResponse:
+    normalized = normalized_client_submission_id(client_submission_id)
+    if normalized is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    _, database = services(request)
+    job = database.get_job_by_client_submission_id(normalized)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    return job_response(database, job)
 
 
 @router.get("/{job_id}", response_model=JobResponse)

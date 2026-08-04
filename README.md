@@ -164,6 +164,31 @@ docker compose up --build
 docker compose down
 ```
 
+### Docker Compose dev mode
+
+Use the dev compose file when changing code frequently. The backend mounts
+`backend/app` and runs `uvicorn --reload`; the frontend runs the dev server and
+proxies `/api` to the backend service.
+
+```powershell
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+After the first build, normal code changes do not need another build:
+
+```powershell
+docker compose -f docker-compose.dev.yml up -d
+```
+
+Rebuild only when Dockerfile, `backend/pyproject.toml`, or
+`frontend/package-lock.json` changes.
+
+### 上传前排队
+
+提交表单后，前端会先创建轻量的上传排队号，不会立刻上传大视频文件。轮到该排队号时，
+页面才会自动上传视频并创建生成任务。用户在等待上传名额时关闭网页，排队号会在
+`NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS` 后过期并释放名额。
+
 ### 不使用 Docker
 
 后端需要 Python 3.11 或更高版本：
@@ -312,7 +337,8 @@ NICOKARA_DEEPSEEK_API_KEY=
   `node /data/nicokara/current/frontend/server.js`，监听 `127.0.0.1:3000`。
 - Nginx 对外只开放 80/443，将 `/api/` 转发到 8000，其余请求转发到 3000。
 - Nginx 设置 `client_max_body_size 1024m`，并关闭 API 请求缓冲，避免大视频上传被默认限制。
-- 后端保持单进程，不要增加 Uvicorn worker 数量；视频处理队列和来源并发控制仍为单进程设计。
+- 后端保持单进程，不要增加 Uvicorn worker 数量；如需提高吞吐，调整
+  `NICOKARA_PROCESSING_WORKER_COUNT` 增加同一进程内的后台处理 worker。
 
 完整的 systemd unit、Nginx 配置、发布目录切换和一键部署脚本说明见
 [DEPLOYMENT_LOCAL_BUILD.md](./DEPLOYMENT_LOCAL_BUILD.md)。
@@ -339,12 +365,16 @@ curl -I http://SERVER_IP/
 | `NICOKARA_STORAGE_DIR` | `../storage/jobs` | 任务文件目录 |
 | `NICOKARA_MAX_VIDEO_BYTES` | `1073741824` | MP4 最大字节数 |
 | `NICOKARA_MAX_LYRICS_BYTES` | `1048576` | 歌词最大字节数 |
-| `NICOKARA_MAX_PENDING_JOBS` | `4` | 本地后台队列最大等待任务数 |
+| `NICOKARA_MAX_PENDING_JOBS` | `4` | 兼容旧版本的队列配置；当前上传会进入持久队列，不再因本地队列满而拒绝 |
 | `NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT` | `2` | 单个来源同时等待或处理的最大任务数 |
+| `NICOKARA_MAX_UPLOAD_SLOTS` | `1` | 同时允许真正上传大视频的排队名额数 |
+| `NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS` | `120` | 上传前排队号无轮询保活后的过期秒数 |
+| `NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS` | `3600` | 已轮到上传但长时间未完成后的过期秒数 |
+| `NICOKARA_PROCESSING_WORKER_COUNT` | `1` | 同一后端进程内的后台处理 worker 数 |
 | `NICOKARA_CLEANUP_ENABLED` | `true` | 是否自动清理过期终态任务 |
 | `NICOKARA_JOB_RETENTION_HOURS` | `24` | 成功或失败任务的保留小时数 |
 | `NICOKARA_CLEANUP_INTERVAL_SECONDS` | `3600` | 过期任务扫描间隔秒数 |
-| `NICOKARA_ALLOWED_ORIGINS` | `http://localhost:3000` | 允许的前端来源，逗号分隔 |
+| `NICOKARA_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000,http://[::1]:3000` | 允许的前端来源，逗号分隔 |
 | `NICOKARA_TRUSTED_PROXY_HOSTS` | `127.0.0.1,::1` | 可信反向代理地址或网段，逗号分隔 |
 | `NICOKARA_PROCESSING_ENABLED` | `true` | 是否自动执行本地转录任务 |
 | `NICOKARA_FFMPEG_PATH` | `ffmpeg` | FFmpeg 可执行文件路径 |

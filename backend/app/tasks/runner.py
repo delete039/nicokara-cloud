@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from typing import Any
+from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
 
 
 class QueueCapacityError(RuntimeError):
-    """Raised when the local processing queue is full."""
+    """Compatibility error for older bounded queue integrations."""
 
 
 class QueueReservation:
@@ -33,33 +33,39 @@ class QueueReservation:
 class LocalTaskRunner:
     def __init__(
         self,
-        pipeline: Any,
+        pipeline: Any | None = None,
         *,
+        pipeline_factory: Callable[[], Any] | None = None,
         max_pending_jobs: int = 4,
+        worker_count: int = 1,
     ) -> None:
-        self.pipeline = pipeline
-        self.max_pending_jobs = max_pending_jobs
-        self.queue: asyncio.Queue[str] = asyncio.Queue(
-            maxsize=max_pending_jobs
+        if pipeline is None and pipeline_factory is None:
+            raise ValueError("pipeline or pipeline_factory is required")
+        if worker_count <= 0:
+            raise ValueError("worker_count must be greater than zero")
+        if worker_count > 1 and pipeline_factory is None:
+            logger.warning(
+                "Multiple workers are sharing one pipeline instance; "
+                "prefer pipeline_factory for thread safety."
         )
+        self.pipeline = pipeline
+        self.pipeline_factory = pipeline_factory
+        self.max_pending_jobs = max_pending_jobs
+        self.worker_count = worker_count
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
         self._reserved_slots = 0
         self._capacity_available = asyncio.Event()
         self._capacity_available.set()
-        self._worker_task: asyncio.Task[None] | None = None
+        self._worker_tasks: list[asyncio.Task[None]] = []
 
     @property
     def can_accept(self) -> bool:
-        return self.queue.qsize() + self._reserved_slots < self.max_pending_jobs
+        return True
 
     def _update_capacity_event(self) -> None:
-        if self.can_accept:
-            self._capacity_available.set()
-        else:
-            self._capacity_available.clear()
+        self._capacity_available.set()
 
     def reserve(self) -> QueueReservation:
-        if not self.can_accept:
-            raise QueueCapacityError("The processing queue is full")
         self._reserved_slots += 1
         self._update_capacity_event()
         return QueueReservation(self)
@@ -72,25 +78,18 @@ class LocalTaskRunner:
 
     def _enqueue_reserved(self, job_id: str) -> None:
         self._release_reservation()
-        try:
-            self.queue.put_nowait(job_id)
-        except asyncio.QueueFull as exc:
-            raise RuntimeError("Reserved queue capacity was lost") from exc
+        self.queue.put_nowait(job_id)
         self._update_capacity_event()
 
     async def start(self) -> None:
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(self._worker())
+        if not self._worker_tasks:
+            self._worker_tasks = [
+                asyncio.create_task(self._worker(worker_index))
+                for worker_index in range(self.worker_count)
+            ]
 
     async def enqueue(self, job_id: str) -> None:
-        if not self.can_accept:
-            raise QueueCapacityError("The processing queue is full")
-        try:
-            self.queue.put_nowait(job_id)
-        except asyncio.QueueFull as exc:
-            raise QueueCapacityError(
-                "The processing queue is full"
-            ) from exc
+        self.queue.put_nowait(job_id)
         self._update_capacity_event()
 
     async def enqueue_wait(self, job_id: str) -> None:
@@ -124,19 +123,29 @@ class LocalTaskRunner:
 
     async def stop(self) -> None:
         await self.queue.join()
-        if self._worker_task is not None:
-            self._worker_task.cancel()
+        if self._worker_tasks:
+            for worker_task in self._worker_tasks:
+                worker_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self._worker_task
-            self._worker_task = None
+                await asyncio.gather(*self._worker_tasks)
+            self._worker_tasks = []
 
-    async def _worker(self) -> None:
+    async def _worker(self, worker_index: int) -> None:
+        pipeline = (
+            self.pipeline_factory()
+            if self.pipeline_factory is not None
+            else self.pipeline
+        )
         while True:
             job_id = await self.queue.get()
             self._update_capacity_event()
             try:
-                await asyncio.to_thread(self.pipeline.process, job_id)
+                await asyncio.to_thread(pipeline.process, job_id)
             except Exception:
-                logger.exception("Background processing failed for job %s", job_id)
+                logger.exception(
+                    "Background worker %s failed for job %s",
+                    worker_index,
+                    job_id,
+                )
             finally:
                 self.queue.task_done()

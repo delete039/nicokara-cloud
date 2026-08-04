@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jobs import router as jobs_router
+from app.api.jobs import upload_tickets_router
 from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
 from app.alignment.aligner import LyricTimelineAligner
@@ -39,6 +40,48 @@ def build_vocal_remover(settings: Settings):
     )
 
 
+def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipeline:
+    local_lyric_processor = LocalJapaneseLyricProcessor()
+    if settings.deepseek_api_key is not None:
+        lyric_processor = ResilientLyricProcessor(
+            primary=DeepSeekLyricProcessor(
+                client=DeepSeekClient(
+                    api_key=settings.deepseek_api_key.get_secret_value(),
+                    base_url=settings.deepseek_base_url,
+                    model=settings.deepseek_model,
+                    timeout_seconds=settings.deepseek_timeout_seconds,
+                )
+            ),
+            fallback=local_lyric_processor,
+        )
+    else:
+        lyric_processor = local_lyric_processor
+    return TranscriptionPipeline(
+        database=database,
+        extractor=FFmpegAudioExtractor(
+            command=(settings.ffmpeg_path,),
+            timeout_seconds=settings.ffmpeg_timeout_seconds,
+        ),
+        transcriber=FasterWhisperTranscriber(
+            model_name=settings.whisper_model,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+        ),
+        vocal_remover=build_vocal_remover(settings),
+        lyric_processor=lyric_processor,
+        aligner=LyricTimelineAligner(),
+        subtitle_generator=AssGenerator(),
+        video_renderer=FFmpegVideoRenderer(
+            command=(settings.ffmpeg_path,),
+            timeout_seconds=(
+                settings.video_render_timeout_seconds
+            ),
+            preset=settings.video_render_preset,
+            crf=settings.video_render_crf,
+        ),
+    )
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -59,6 +102,13 @@ def create_app(
                     database=database,
                     storage_dir=resolved_settings.storage_dir,
                     retention_hours=resolved_settings.job_retention_hours,
+                    upload_ticket_timeout_seconds=(
+                        resolved_settings.upload_ticket_timeout_seconds
+                    ),
+                    upload_ticket_upload_timeout_seconds=(
+                        resolved_settings.upload_ticket_upload_timeout_seconds
+                    ),
+                    max_upload_slots=resolved_settings.max_upload_slots,
                 ),
                 interval_seconds=(
                     resolved_settings.cleanup_interval_seconds
@@ -66,49 +116,24 @@ def create_app(
             )
         active_runner = runner
         if active_runner is None and resolved_settings.processing_enabled:
-            local_lyric_processor = LocalJapaneseLyricProcessor()
-            if resolved_settings.deepseek_api_key is not None:
-                lyric_processor = ResilientLyricProcessor(
-                    primary=DeepSeekLyricProcessor(
-                        client=DeepSeekClient(
-                            api_key=resolved_settings.deepseek_api_key.get_secret_value(),
-                            base_url=resolved_settings.deepseek_base_url,
-                            model=resolved_settings.deepseek_model,
-                            timeout_seconds=resolved_settings.deepseek_timeout_seconds,
-                        )
-                    ),
-                    fallback=local_lyric_processor,
-                )
-            else:
-                lyric_processor = local_lyric_processor
+            pipeline_factory = lambda: build_pipeline(
+                resolved_settings,
+                database,
+            )
+            pipeline = (
+                pipeline_factory()
+                if resolved_settings.processing_worker_count == 1
+                else None
+            )
             active_runner = LocalTaskRunner(
-                TranscriptionPipeline(
-                    database=database,
-                    extractor=FFmpegAudioExtractor(
-                        command=(resolved_settings.ffmpeg_path,),
-                        timeout_seconds=resolved_settings.ffmpeg_timeout_seconds,
-                    ),
-                    transcriber=FasterWhisperTranscriber(
-                        model_name=resolved_settings.whisper_model,
-                        device=resolved_settings.whisper_device,
-                        compute_type=resolved_settings.whisper_compute_type,
-                    ),
-                    vocal_remover=build_vocal_remover(
-                        resolved_settings
-                    ),
-                    lyric_processor=lyric_processor,
-                    aligner=LyricTimelineAligner(),
-                    subtitle_generator=AssGenerator(),
-                    video_renderer=FFmpegVideoRenderer(
-                        command=(resolved_settings.ffmpeg_path,),
-                        timeout_seconds=(
-                            resolved_settings.video_render_timeout_seconds
-                        ),
-                        preset=resolved_settings.video_render_preset,
-                        crf=resolved_settings.video_render_crf,
-                    ),
+                pipeline,
+                pipeline_factory=(
+                    pipeline_factory
+                    if resolved_settings.processing_worker_count > 1
+                    else None
                 ),
                 max_pending_jobs=resolved_settings.max_pending_jobs,
+                worker_count=resolved_settings.processing_worker_count,
             )
         app.state.settings = resolved_settings
         app.state.database = database
@@ -157,7 +182,7 @@ def create_app(
         allow_origins=resolved_settings.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["*"],
     )
 
     @app.middleware("http")
@@ -171,6 +196,10 @@ def create_app(
         )
         return response
     app.include_router(jobs_router, prefix=resolved_settings.api_prefix)
+    app.include_router(
+        upload_tickets_router,
+        prefix=resolved_settings.api_prefix,
+    )
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
     def health() -> HealthResponse:

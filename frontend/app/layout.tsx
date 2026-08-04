@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
 
 import { HOME_COPY } from "@/lib/ui-copy";
 
@@ -41,16 +40,6 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className="min-h-screen">
-        <header className="border-b bg-background/85 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
-            <Link href="/" className="focus-ring rounded-sm">
-              <span className="font-display text-lg font-bold tracking-[0.08em]">
-                ニコカラ
-              </span>
-              <span className="ml-2 text-xs text-muted-foreground">LOCAL</span>
-            </Link>
-          </div>
-        </header>
         {children}
       </body>
     </html>
