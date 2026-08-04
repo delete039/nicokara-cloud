@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
-import math
 from pathlib import Path
 from typing import Iterator
 
@@ -34,10 +33,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS upload_rate_limits (
-    client_key TEXT NOT NULL,
-    requested_at REAL NOT NULL
-);
 """
 
 
@@ -97,58 +92,6 @@ class Database:
                 ON jobs(client_key, status)
                 """
             )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_upload_rate_limits_key_time
-                ON upload_rate_limits(client_key, requested_at)
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_upload_rate_limits_time
-                ON upload_rate_limits(requested_at)
-                """
-            )
-
-    def consume_upload_limit(
-        self,
-        client_key: str,
-        *,
-        max_requests: int,
-        window_seconds: int,
-        now: float,
-    ) -> tuple[bool, int]:
-        cutoff = now - window_seconds
-        with self.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                "DELETE FROM upload_rate_limits WHERE requested_at <= ?",
-                (cutoff,),
-            )
-            rows = connection.execute(
-                """
-                SELECT requested_at
-                FROM upload_rate_limits
-                WHERE client_key = ?
-                ORDER BY requested_at ASC
-                """,
-                (client_key,),
-            ).fetchall()
-            if len(rows) >= max_requests:
-                retry_after = max(
-                    1,
-                    math.ceil(rows[0]["requested_at"] + window_seconds - now),
-                )
-                return False, retry_after
-            connection.execute(
-                """
-                INSERT INTO upload_rate_limits (client_key, requested_at)
-                VALUES (?, ?)
-                """,
-                (client_key, now),
-            )
-        return True, 0
-
     def create_job(
         self,
         *,

@@ -5,30 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.core.database import Database
-from app.core.rate_limit import UploadRateLimiter, resolve_client_key
+from app.core.rate_limit import resolve_client_key
 from app.main import create_app
-
-
-def test_rate_limit_survives_limiter_recreation(tmp_path: Path) -> None:
-    database = Database(tmp_path / "jobs.sqlite3")
-    database.initialize()
-
-    first = UploadRateLimiter(
-        database=database,
-        max_requests=1,
-        window_seconds=60,
-    ).check("198.51.100.8", now=100)
-    second = UploadRateLimiter(
-        database=database,
-        max_requests=1,
-        window_seconds=60,
-    ).check("198.51.100.8", now=101)
-
-    assert first.allowed
-    assert first.retry_after_seconds == 0
-    assert not second.allowed
-    assert second.retry_after_seconds == 59
 
 
 def test_trusted_proxy_chain_uses_rightmost_untrusted_address() -> None:
@@ -47,15 +25,12 @@ def test_untrusted_peer_cannot_spoof_forwarded_address() -> None:
     ) == "198.51.100.12"
 
 
-def test_api_rate_limit_survives_restart_and_separates_proxy_clients(
-    tmp_path: Path,
-) -> None:
+def test_api_does_not_limit_completed_uploads_per_hour(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
         storage_dir=tmp_path / "jobs",
         processing_enabled=False,
         cleanup_enabled=False,
-        max_uploads_per_hour=1,
         trusted_proxy_hosts="testclient",
     )
     upload = {
@@ -67,31 +42,24 @@ def test_api_rate_limit_survives_restart_and_separates_proxy_clients(
     }
 
     with TestClient(create_app(settings)) as client:
-        first = client.post(
-            "/api/v1/jobs",
-            headers={"X-Forwarded-For": "198.51.100.21"},
-            files=upload,
-            data={"lyrics_text": "歌詞"},
-        )
+        responses = []
+        for index in range(7):
+            response = client.post(
+                "/api/v1/jobs",
+                headers={"X-Forwarded-For": "198.51.100.20"},
+                files=upload,
+                data={"lyrics_text": f"歌词 {index}"},
+            )
+            responses.append(response)
+            if response.status_code == 201:
+                client.app.state.database.update_job_state(
+                    response.json()["id"],
+                    status="SUCCEEDED",
+                    stage="COMPLETED",
+                    progress=100,
+                )
 
-    with TestClient(create_app(settings)) as client:
-        repeated = client.post(
-            "/api/v1/jobs",
-            headers={"X-Forwarded-For": "198.51.100.21"},
-            files=upload,
-            data={"lyrics_text": "歌詞"},
-        )
-        other_user = client.post(
-            "/api/v1/jobs",
-            headers={"X-Forwarded-For": "198.51.100.22"},
-            files=upload,
-            data={"lyrics_text": "歌詞"},
-        )
-
-    assert first.status_code == 201
-    assert repeated.status_code == 429
-    assert 1 <= int(repeated.headers["retry-after"]) <= 3600
-    assert other_user.status_code == 201
+    assert [response.status_code for response in responses] == [201] * 7
 
 
 def test_api_prevents_one_client_from_occupying_the_whole_queue(
@@ -114,7 +82,6 @@ def test_api_prevents_one_client_from_occupying_the_whole_queue(
         storage_dir=tmp_path / "jobs",
         processing_enabled=False,
         cleanup_enabled=False,
-        max_uploads_per_hour=10,
         max_active_jobs_per_client=1,
         trusted_proxy_hosts="testclient",
     )

@@ -14,7 +14,6 @@ from app.alignment.aligner import LyricTimelineAligner
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
-from app.core.rate_limit import UploadRateLimiter
 from app.schemas.jobs import HealthResponse
 from app.lyrics.processor import (
     DeepSeekLyricProcessor,
@@ -114,11 +113,6 @@ def create_app(
         app.state.settings = resolved_settings
         app.state.database = database
         app.state.runner = active_runner
-        app.state.upload_limiter = UploadRateLimiter(
-            database=database,
-            max_requests=resolved_settings.max_uploads_per_hour,
-            window_seconds=3600,
-        )
         app.state.active_job_limiter = ActiveJobLimiter(
             database=database,
             max_active_jobs=resolved_settings.max_active_jobs_per_client,

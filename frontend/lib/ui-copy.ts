@@ -16,6 +16,12 @@ export const HOME_COPY = {
     },
   ],
   callToAction: "开始创建",
+  author: {
+    qq: "280475274",
+    bilibili: "esrgt",
+    xiaohongshu: "esr",
+    message: "项目已开源，欢迎关注项目更新进度，与错误反馈或修改建议",
+  },
   metadataDescription:
     "上传 MV 和日语歌词，自动生成带逐字高亮和假名注音的ニコカラ视频。",
 } as const;

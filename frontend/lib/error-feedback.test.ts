@@ -43,16 +43,19 @@ describe("httpErrorFeedback", () => {
     expect(feedback.technicalDetails).toContain("HTTP 状态码：413");
   });
 
-  it("shows the retry interval for rate limited uploads", () => {
+  it("explains the per-client active job limit", () => {
     const feedback = httpErrorFeedback(
       "upload",
       429,
-      "Upload rate limit exceeded. Try again later.",
-      3600,
+      "Too many active jobs for this client. Try again later.",
+      60,
     );
 
-    expect(feedback.title).toBe("上传次数过多");
-    expect(feedback.description).toContain("60 分钟");
+    expect(feedback.title).toBe("同时任务数已达上限");
+    expect(feedback.description).toContain("等待或处理");
+    expect(feedback.solutions.join(" ")).toContain("取消");
+    expect(JSON.stringify(feedback)).not.toContain("每小时");
+    expect(JSON.stringify(feedback)).not.toContain("频率限制");
     expect(feedback.retryable).toBe(true);
   });
 

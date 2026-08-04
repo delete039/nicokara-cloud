@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     max_video_bytes: int = 1024 * 1024 * 1024
     max_lyrics_bytes: int = 1024 * 1024
     max_pending_jobs: int = 4
-    max_uploads_per_hour: int = 6
     max_active_jobs_per_client: int = 2
     cleanup_enabled: bool = True
     job_retention_hours: int = 24
@@ -58,7 +57,6 @@ class Settings(BaseSettings):
         "max_video_bytes",
         "max_lyrics_bytes",
         "max_pending_jobs",
-        "max_uploads_per_hour",
         "max_active_jobs_per_client",
         "job_retention_hours",
         "cleanup_interval_seconds",

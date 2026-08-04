@@ -56,6 +56,16 @@ export default function Home() {
           >
             {HOME_COPY.callToAction} →
           </a>
+
+          <aside
+            aria-label="作者信息"
+            className="mt-8 border-t pt-5 text-xs leading-6 text-muted-foreground"
+          >
+            <p>qq：{HOME_COPY.author.qq}</p>
+            <p>bilibili：{HOME_COPY.author.bilibili}</p>
+            <p>小红书：{HOME_COPY.author.xiaohongshu}</p>
+            <p className="mt-2 max-w-md">{HOME_COPY.author.message}</p>
+          </aside>
         </div>
 
         <div

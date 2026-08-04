@@ -149,13 +149,13 @@ export function httpErrorFeedback(
   }
 
   if (status === 429) {
-    const delay = retryDelay(retryAfterSeconds);
     return {
-      title: "上传次数过多",
-      description: `服务器已触发访问频率限制，请在${delay}再次提交。`,
+      title: "同时任务数已达上限",
+      description:
+        "当前来源已有较多任务正在等待或处理。为避免单个用户占满队列，暂时不能创建更多任务。",
       solutions: [
-        `等待至少${delay}再上传，避免连续刷新或重复点击提交。`,
-        "如果多人共用同一网络出口，请错开上传时间。",
+        "等待现有任务完成，或在任务状态页取消不再需要的任务后重新提交。",
+        "如果多人共用同一网络出口，请确认是否已有其他任务正在生成。",
       ],
       technicalDetails,
       retryable: true,

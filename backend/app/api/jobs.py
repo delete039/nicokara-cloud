@@ -59,19 +59,6 @@ async def create_job(
         ),
         trusted_proxies=settings.trusted_proxies,
     )
-    limiter = request.app.state.upload_limiter
-    rate_limit = limiter.check(client_key)
-    if not rate_limit.allowed:
-        await video.close()
-        if lyrics_file:
-            await lyrics_file.close()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Upload rate limit exceeded. Try again later.",
-            headers={
-                "Retry-After": str(rate_limit.retry_after_seconds)
-            },
-        )
     job_id = str(uuid4())
     job_dir = settings.storage_dir / job_id
     video_path = job_dir / "input.mp4"
