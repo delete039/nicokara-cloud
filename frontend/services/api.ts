@@ -8,6 +8,11 @@ import {
 } from "@/lib/error-feedback";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+const UPLOAD_RECOVERY_TIMEOUT_MS = 120_000;
+const UPLOAD_RECOVERY_POLL_INTERVAL_MS = 3_000;
+const UNKNOWN_UPLOAD_RESULT_STATUSES = new Set([0, 524]);
+const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
+const UPLOAD_REQUEST_ATTEMPTS = 3;
 
 type CreateJobInput = {
   video: File;
@@ -19,6 +24,15 @@ type CreateJobInput = {
 type CreateUploadTicketInput = {
   videoName: string;
   videoSizeBytes: number;
+  clientSubmissionId?: string;
+};
+
+type UploadChunkSession = {
+  ticket_id: string;
+  status: "UPLOADING";
+  chunk_size_bytes: number;
+  total_chunks: number;
+  received_chunks: number;
 };
 
 export class ApiRequestError extends Error {
@@ -29,6 +43,19 @@ export class ApiRequestError extends Error {
     this.name = "ApiRequestError";
     this.feedback = feedback;
   }
+}
+
+function createClientSubmissionId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return randomUUID.call(globalThis.crypto);
+  }
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (marker) => {
+    const value = Math.floor(Math.random() * 16);
+    const nibble = marker === "x" ? value : (value & 0x3) | 0x8;
+    return nibble.toString(16);
+  });
 }
 
 function responseDetail(xhr: XMLHttpRequest): string | null {
@@ -88,9 +115,29 @@ function uploadTicketStateError(ticket: UploadTicket): ApiRequestError {
   });
 }
 
+function unknownUploadRecoveryError(
+  ticket: UploadTicket,
+  clientSubmissionId: string,
+): ApiRequestError {
+  return new ApiRequestError({
+    title: "上传结果仍在确认",
+    description:
+      "服务器可能已经收到视频并继续处理，但浏览器暂时还没有拿到任务结果。",
+    solutions: [
+      "稍后刷新当前页面，避免立即重复上传同一个视频。",
+      "如果仍然找不到结果，再重新提交一次。",
+    ],
+    technicalDetails: [
+      `上传排队号：${ticket.id}`,
+      `客户端提交 ID：${clientSubmissionId}`,
+    ],
+    retryable: true,
+  });
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
+    globalThis.setTimeout(resolve, ms);
   });
 }
 
@@ -123,12 +170,40 @@ export async function createUploadTicket(
       body: JSON.stringify({
         video_name: input.videoName,
         video_size_bytes: input.videoSizeBytes,
+        client_submission_id: input.clientSubmissionId,
       }),
     });
   } catch {
     throw connectionError("upload");
   }
   return checkedJson<UploadTicket>(response, "upload");
+}
+
+export async function getJobByClientSubmissionId(
+  clientSubmissionId: string,
+): Promise<Job> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE}/jobs/by-submission/${clientSubmissionId}`,
+      {
+        cache: "no-store",
+      },
+    );
+  } catch {
+    throw connectionError("job");
+  }
+  return checkedJson<Job>(response, "job");
+}
+
+async function getJobByClientSubmissionIdOrNull(
+  clientSubmissionId: string,
+): Promise<Job | null> {
+  try {
+    return await getJobByClientSubmissionId(clientSubmissionId);
+  } catch {
+    return null;
+  }
 }
 
 export async function getUploadTicket(
@@ -160,15 +235,111 @@ export async function cancelUploadTicket(
   return checkedJson<UploadTicket>(response, "upload");
 }
 
-export function createJob(
+async function startChunkedUpload(
+  ticketId: string,
+  input: CreateJobInput,
+): Promise<UploadChunkSession> {
+  const totalChunks = Math.max(
+    1,
+    Math.ceil(input.video.size / UPLOAD_CHUNK_SIZE_BYTES),
+  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE}/upload-tickets/${ticketId}/chunks/start`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          video_name: input.video.name,
+          video_size_bytes: input.video.size,
+          chunk_size_bytes: UPLOAD_CHUNK_SIZE_BYTES,
+          total_chunks: totalChunks,
+        }),
+      },
+    );
+  } catch {
+    throw connectionError("upload");
+  }
+  return checkedJson<UploadChunkSession>(response, "upload");
+}
+
+function uploadChunk(
+  ticketId: string,
+  chunkIndex: number,
+  chunk: Blob,
+  onChunkProgress: (loadedBytes: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const data = new FormData();
+    data.append("chunk", chunk, `chunk-${chunkIndex}.part`);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open(
+      "POST",
+      `${API_BASE}/upload-tickets/${ticketId}/chunks/part/${chunkIndex}`,
+    );
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onChunkProgress(event.loaded);
+      }
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(xhrRequestError(xhr));
+      }
+    });
+    xhr.addEventListener("error", () => {
+      reject(connectionError("upload"));
+    });
+    xhr.addEventListener("abort", () => {
+      reject(connectionError("upload"));
+    });
+    xhr.send(data);
+  });
+}
+
+function isRetryableUploadError(reason: unknown): boolean {
+  return reason instanceof ApiRequestError && reason.feedback.retryable;
+}
+
+async function uploadChunkWithRetry(
+  ticketId: string,
+  chunkIndex: number,
+  chunk: Blob,
+  onChunkProgress: (loadedBytes: number) => void,
+): Promise<void> {
+  for (let attempt = 1; attempt <= UPLOAD_REQUEST_ATTEMPTS; attempt += 1) {
+    try {
+      await uploadChunk(ticketId, chunkIndex, chunk, onChunkProgress);
+      return;
+    } catch (reason) {
+      if (
+        attempt >= UPLOAD_REQUEST_ATTEMPTS ||
+        !isRetryableUploadError(reason)
+      ) {
+        throw reason;
+      }
+      await wait(1000 * attempt);
+    }
+  }
+}
+
+export async function createJob(
   input: CreateJobInput,
   onProgress: (progress: number) => void,
   onQueueUpdate?: (ticket: UploadTicket) => void,
 ): Promise<Job> {
+  const clientSubmissionId = createClientSubmissionId();
+
   async function waitForUploadTurn(): Promise<UploadTicket> {
     let ticket = await createUploadTicket({
       videoName: input.video.name,
       videoSizeBytes: input.video.size,
+      clientSubmissionId,
     });
     onQueueUpdate?.(ticket);
     while (ticket.status === "WAITING") {
@@ -182,47 +353,110 @@ export function createJob(
     return ticket;
   }
 
-  return new Promise((resolve, reject) => {
-    waitForUploadTurn()
-      .then((ticket) => {
-        const data = new FormData();
-        data.append("video", input.video);
-        if (input.lyricsText?.trim()) {
-          data.append("lyrics_text", input.lyricsText.trim());
-        }
-        if (input.lyricsFile) {
-          data.append("lyrics_file", input.lyricsFile);
-        }
-        if (input.vocalMode) {
-          data.append("vocal_mode", input.vocalMode);
-        }
+  async function recoverJobAfterUnknownUploadResult(
+    ticket: UploadTicket,
+  ): Promise<Job> {
+    const deadline = Date.now() + UPLOAD_RECOVERY_TIMEOUT_MS;
+    while (Date.now() <= deadline) {
+      const recoveredJob = await getJobByClientSubmissionIdOrNull(
+        clientSubmissionId,
+      );
+      if (recoveredJob) {
+        return recoveredJob;
+      }
 
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${API_BASE}/upload-tickets/${ticket.id}/jobs`);
-        xhr.upload.addEventListener("progress", (event) => {
-          if (event.lengthComputable) {
-            onProgress(Math.round((event.loaded / event.total) * 100));
-          }
-        });
-        xhr.addEventListener("load", () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(JSON.parse(xhr.responseText) as Job);
-          } else {
-            reject(xhrRequestError(xhr));
-          }
-        });
-        xhr.addEventListener("error", () => {
-          reject(connectionError("upload"));
-        });
-        xhr.addEventListener("abort", () => {
-          reject(connectionError("upload"));
-        });
-        xhr.send(data);
-      })
-      .catch((reason: unknown) => {
-        reject(reason);
-      });
-  });
+      let refreshedTicket: UploadTicket | null = null;
+      try {
+        refreshedTicket = await getUploadTicket(ticket.id);
+        onQueueUpdate?.(refreshedTicket);
+      } catch {
+        refreshedTicket = null;
+      }
+
+      if (refreshedTicket?.job_id) {
+        return getJob(refreshedTicket.job_id);
+      }
+      if (
+        refreshedTicket &&
+        (refreshedTicket.status === "CANCELED" ||
+          refreshedTicket.status === "EXPIRED")
+      ) {
+        throw uploadTicketStateError(refreshedTicket);
+      }
+
+      await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS);
+    }
+
+    throw unknownUploadRecoveryError(ticket, clientSubmissionId);
+  }
+
+  async function completeChunkedUpload(ticket: UploadTicket): Promise<Job> {
+    const data = new FormData();
+    if (input.lyricsText?.trim()) {
+      data.append("lyrics_text", input.lyricsText.trim());
+    }
+    if (input.lyricsFile) {
+      data.append("lyrics_file", input.lyricsFile);
+    }
+    if (input.vocalMode) {
+      data.append("vocal_mode", input.vocalMode);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `${API_BASE}/upload-tickets/${ticket.id}/chunks/complete`,
+        {
+          method: "POST",
+          cache: "no-store",
+          body: data,
+        },
+      );
+    } catch {
+      return recoverJobAfterUnknownUploadResult(ticket);
+    }
+
+    if (response.ok) {
+      return (await response.json()) as Job;
+    }
+
+    const detail = await fetchResponseDetail(response);
+    if (
+      UNKNOWN_UPLOAD_RESULT_STATUSES.has(response.status) ||
+      (response.status === 409 && detail?.toLowerCase().includes("finalized"))
+    ) {
+      return recoverJobAfterUnknownUploadResult(ticket);
+    }
+
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "upload",
+        response.status,
+        detail,
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+
+  const ticket = await waitForUploadTurn();
+  const session = await startChunkedUpload(ticket.id, input);
+  const chunkSize = session.chunk_size_bytes;
+  for (let index = 0; index < session.total_chunks; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(input.video.size, start + chunkSize);
+    const chunk = input.video.slice(start, end);
+    await uploadChunkWithRetry(ticket.id, index, chunk, (loadedBytes) => {
+      const uploadedBytes = Math.min(input.video.size, start + loadedBytes);
+      onProgress(
+        Math.min(99, Math.round((uploadedBytes / input.video.size) * 100)),
+      );
+    });
+    onProgress(Math.min(99, Math.round((end / input.video.size) * 100)));
+  }
+
+  const job = await completeChunkedUpload(ticket);
+  onProgress(100);
+  return job;
 }
 
 export function createJobDirect(

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_path TEXT,
     error_code TEXT,
     error_message TEXT,
+    client_submission_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS upload_tickets (
     video_name TEXT NOT NULL,
     video_size_bytes INTEGER NOT NULL,
     job_id TEXT,
+    client_submission_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
@@ -89,9 +91,20 @@ class Database:
                 "timeline_path",
                 "ass_path",
                 "output_path",
+                "client_submission_id",
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
+            upload_ticket_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(upload_tickets)"
+                ).fetchall()
+            }
+            if "client_submission_id" not in upload_ticket_columns:
+                connection.execute(
+                    "ALTER TABLE upload_tickets ADD COLUMN client_submission_id TEXT"
+                )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_updated
@@ -102,6 +115,13 @@ class Database:
                 """
                 CREATE INDEX IF NOT EXISTS idx_jobs_client_status
                 ON jobs(client_key, status)
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_client_submission_id
+                ON jobs(client_submission_id)
+                WHERE client_submission_id IS NOT NULL
                 """
             )
             connection.execute(
@@ -129,6 +149,7 @@ class Database:
         lyrics_source: str | None,
         lyrics_path: Path | None,
         vocal_mode: str = "on",
+        client_submission_id: str | None = None,
     ) -> dict:
         timestamp = utc_now()
         with self.connect() as connection:
@@ -138,10 +159,10 @@ class Database:
                     id, status, stage, progress, original_video_name,
                     video_size_bytes, video_sha256, video_path,
                     client_key, lyrics_source, lyrics_path, vocal_mode,
-                    created_at, updated_at
+                    client_submission_id, created_at, updated_at
                 )
                 VALUES (?, 'UPLOADED', 'UPLOAD_COMPLETE', 100,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -153,6 +174,7 @@ class Database:
                     lyrics_source,
                     str(lyrics_path) if lyrics_path else None,
                     vocal_mode,
+                    client_submission_id,
                     timestamp,
                     timestamp,
                 ),
@@ -195,6 +217,7 @@ class Database:
         client_key: str,
         video_name: str,
         video_size_bytes: int,
+        client_submission_id: str | None = None,
     ) -> dict:
         timestamp = utc_now()
         with self.connect() as connection:
@@ -202,15 +225,16 @@ class Database:
                 """
                 INSERT INTO upload_tickets (
                     id, status, client_key, video_name, video_size_bytes,
-                    created_at, updated_at, last_seen_at
+                    client_submission_id, created_at, updated_at, last_seen_at
                 )
-                VALUES (?, 'WAITING', ?, ?, ?, ?, ?, ?)
+                VALUES (?, 'WAITING', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket_id,
                     client_key,
                     video_name,
                     video_size_bytes,
+                    client_submission_id,
                     timestamp,
                     timestamp,
                     timestamp,
@@ -238,6 +262,19 @@ class Database:
                 SET last_seen_at = ?, updated_at = ?
                 WHERE id = ?
                   AND status IN ('WAITING', 'READY')
+                """,
+                (timestamp, timestamp, ticket_id),
+            )
+
+    def touch_uploading_ticket(self, ticket_id: str) -> None:
+        timestamp = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE upload_tickets
+                SET last_seen_at = ?, updated_at = ?
+                WHERE id = ?
+                  AND status = 'UPLOADING'
                 """,
                 (timestamp, timestamp, ticket_id),
             )
@@ -418,6 +455,20 @@ class Database:
             row = connection.execute(
                 "SELECT * FROM jobs WHERE id = ?",
                 (job_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_job_by_client_submission_id(
+        self,
+        client_submission_id: str,
+    ) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE client_submission_id = ?
+                """,
+                (client_submission_id,),
             ).fetchone()
         return dict(row) if row else None
 

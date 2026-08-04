@@ -7,6 +7,7 @@ export type Job = {
   video_size_bytes: number;
   video_sha256: string;
   lyrics_source: "text" | "file" | null;
+  client_submission_id?: string | null;
   error_code: string | null;
   error_message: string | null;
   queue_position?: number | null;

@@ -48,6 +48,7 @@ def create_ticket(
     name: str,
     forwarded_for: str,
     size: int | None = None,
+    client_submission_id: str | None = None,
 ):
     return client.post(
         "/api/v1/upload-tickets",
@@ -55,6 +56,7 @@ def create_ticket(
         json={
             "video_name": name,
             "video_size_bytes": size or len(fake_mp4()),
+            "client_submission_id": client_submission_id,
         },
     )
 
@@ -70,6 +72,38 @@ def upload_for_ticket(
         f"/api/v1/upload-tickets/{ticket_id}/jobs",
         files={"video": (name, content or fake_mp4(), "video/mp4")},
         data={"lyrics_text": "lyrics"},
+    )
+
+
+def start_chunked_upload(
+    client: TestClient,
+    ticket_id: str,
+    *,
+    name: str,
+    size: int,
+    chunk_size: int,
+):
+    total_chunks = (size + chunk_size - 1) // chunk_size
+    return client.post(
+        f"/api/v1/upload-tickets/{ticket_id}/chunks/start",
+        json={
+            "video_name": name,
+            "video_size_bytes": size,
+            "chunk_size_bytes": chunk_size,
+            "total_chunks": total_chunks,
+        },
+    )
+
+
+def upload_chunk(
+    client: TestClient,
+    ticket_id: str,
+    index: int,
+    content: bytes,
+):
+    return client.post(
+        f"/api/v1/upload-tickets/{ticket_id}/chunks/part/{index}",
+        files={"chunk": (f"chunk-{index}.part", content, "application/octet-stream")},
     )
 
 
@@ -278,8 +312,182 @@ def test_completed_ticket_cannot_be_uploaded_again(tmp_path: Path) -> None:
         )
 
     assert uploaded.status_code == 201
-    assert duplicate.status_code == 410
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == uploaded.json()["id"]
     assert runner.job_ids == [uploaded.json()["id"]]
+
+
+def test_completed_upload_can_be_recovered_by_client_submission_id(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path, max_upload_slots=1)
+    runner = RecordingRunner()
+    client_submission_id = "11111111-1111-4111-8111-111111111111"
+
+    with TestClient(create_app(settings, runner=runner)) as client:
+        ticket = create_ticket(
+            client,
+            name="song.mp4",
+            forwarded_for="198.51.100.52",
+            client_submission_id=client_submission_id,
+        ).json()
+
+        uploaded = upload_for_ticket(
+            client,
+            ticket["id"],
+            name=ticket["video_name"],
+        )
+        recovered = client.get(
+            f"/api/v1/jobs/by-submission/{client_submission_id}"
+        )
+
+    assert uploaded.status_code == 201
+    assert recovered.status_code == 200
+    assert recovered.json()["id"] == uploaded.json()["id"]
+    assert recovered.json()["client_submission_id"] == client_submission_id
+    assert runner.job_ids == [uploaded.json()["id"]]
+
+
+def test_chunked_upload_creates_job_after_all_parts(
+    tmp_path: Path,
+) -> None:
+    content = fake_mp4(b"abcdefghijklmnopqrstuvwxyz")
+    chunk_size = 10
+    settings = build_settings(tmp_path, max_upload_slots=1)
+    runner = RecordingRunner()
+
+    with TestClient(create_app(settings, runner=runner)) as client:
+        ticket = create_ticket(
+            client,
+            name="song.mp4",
+            forwarded_for="198.51.100.54",
+            size=len(content),
+        ).json()
+
+        started = start_chunked_upload(
+            client,
+            ticket["id"],
+            name=ticket["video_name"],
+            size=len(content),
+            chunk_size=chunk_size,
+        )
+        chunk_responses = [
+            upload_chunk(
+                client,
+                ticket["id"],
+                index,
+                content[index * chunk_size : (index + 1) * chunk_size],
+            )
+            for index in range((len(content) + chunk_size - 1) // chunk_size)
+        ]
+        completed = client.post(
+            f"/api/v1/upload-tickets/{ticket['id']}/chunks/complete",
+            data={"lyrics_text": "lyrics"},
+        )
+
+    assert started.status_code == 200
+    assert started.json()["status"] == "UPLOADING"
+    assert [response.status_code for response in chunk_responses] == [200] * len(
+        chunk_responses
+    )
+    assert completed.status_code == 201
+    job_id = completed.json()["id"]
+    assert (tmp_path / "jobs" / job_id / "input.mp4").read_bytes() == content
+    assert not (tmp_path / "jobs" / "_uploads" / ticket["id"]).exists()
+    assert runner.job_ids == [job_id]
+
+
+def test_chunked_upload_complete_requires_all_parts(
+    tmp_path: Path,
+) -> None:
+    content = fake_mp4(b"abcdefghijklmnopqrstuvwxyz")
+    chunk_size = 10
+    settings = build_settings(tmp_path, max_upload_slots=1)
+
+    with TestClient(create_app(settings)) as client:
+        ticket = create_ticket(
+            client,
+            name="song.mp4",
+            forwarded_for="198.51.100.55",
+            size=len(content),
+        ).json()
+
+        started = start_chunked_upload(
+            client,
+            ticket["id"],
+            name=ticket["video_name"],
+            size=len(content),
+            chunk_size=chunk_size,
+        )
+        uploaded = upload_chunk(client, ticket["id"], 0, content[:chunk_size])
+        completed = client.post(
+            f"/api/v1/upload-tickets/{ticket['id']}/chunks/complete",
+            data={"lyrics_text": "lyrics"},
+        )
+        refreshed = client.get(f"/api/v1/upload-tickets/{ticket['id']}")
+
+    assert started.status_code == 200
+    assert uploaded.status_code == 200
+    assert completed.status_code == 409
+    assert refreshed.json()["status"] == "UPLOADING"
+
+
+def test_chunked_upload_complete_is_locked_while_finalizing(
+    tmp_path: Path,
+) -> None:
+    content = fake_mp4(b"abcdefghijklmnopqrstuvwxyz")
+    chunk_size = 10
+    settings = build_settings(tmp_path, max_upload_slots=1)
+
+    with TestClient(create_app(settings)) as client:
+        ticket = create_ticket(
+            client,
+            name="song.mp4",
+            forwarded_for="198.51.100.56",
+            size=len(content),
+        ).json()
+
+        started = start_chunked_upload(
+            client,
+            ticket["id"],
+            name=ticket["video_name"],
+            size=len(content),
+            chunk_size=chunk_size,
+        )
+        for index in range((len(content) + chunk_size - 1) // chunk_size):
+            upload_chunk(
+                client,
+                ticket["id"],
+                index,
+                content[index * chunk_size : (index + 1) * chunk_size],
+            )
+        lock_path = tmp_path / "jobs" / "_uploads" / ticket["id"] / "complete.lock"
+        lock_path.write_text("", encoding="utf-8")
+        completed = client.post(
+            f"/api/v1/upload-tickets/{ticket['id']}/chunks/complete",
+            data={"lyrics_text": "lyrics"},
+        )
+        refreshed = client.get(f"/api/v1/upload-tickets/{ticket['id']}")
+
+    assert started.status_code == 200
+    assert completed.status_code == 409
+    assert refreshed.json()["status"] == "UPLOADING"
+
+
+def test_invalid_client_submission_id_is_rejected(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path, max_upload_slots=1)
+
+    with TestClient(create_app(settings)) as client:
+        ticket = create_ticket(
+            client,
+            name="song.mp4",
+            forwarded_for="198.51.100.53",
+            client_submission_id="not-a-uuid",
+        )
+        recovered = client.get("/api/v1/jobs/by-submission/not-a-uuid")
+
+    assert ticket.status_code == 400
+    assert recovered.status_code == 400
 
 
 def test_ready_upload_ticket_can_only_be_claimed_once_under_concurrency(

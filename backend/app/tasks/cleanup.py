@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 
 from app.core.database import Database
+from app.services.chunked_uploads import remove_chunked_upload
 
 
 class JobCleanupService:
@@ -31,7 +32,7 @@ class JobCleanupService:
 
     def run_once(self, *, now: datetime | None = None) -> list[str]:
         current = now or datetime.now(UTC)
-        self.database.expire_stale_upload_tickets(
+        expired_ticket_ids = self.database.expire_stale_upload_tickets(
             waiting_cutoff=(
                 current
                 - timedelta(seconds=self.upload_ticket_timeout_seconds)
@@ -43,6 +44,8 @@ class JobCleanupService:
                 )
             ).isoformat(),
         )
+        for ticket_id in expired_ticket_ids:
+            remove_chunked_upload(self.storage_dir, ticket_id)
         self.database.activate_upload_tickets(
             max_active_uploads=self.max_upload_slots,
         )
