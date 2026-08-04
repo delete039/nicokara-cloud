@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import json
 
@@ -115,6 +116,106 @@ def test_successful_upload_is_enqueued_for_processing(tmp_path: Path) -> None:
         assert runner.job_ids == [response.json()["id"]]
 
     assert runner.stopped
+
+
+def test_upload_ticket_delays_video_upload_until_a_slot_is_ready(
+    tmp_path: Path,
+) -> None:
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.job_ids: list[str] = []
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def enqueue(self, job_id: str) -> None:
+            self.job_ids.append(job_id)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        max_upload_slots=1,
+    )
+    runner = RecordingRunner()
+    with TestClient(create_app(settings, runner=runner)) as client:
+        first_ticket = client.post(
+            "/api/v1/upload-tickets",
+            json={"video_name": "first.mp4", "video_size_bytes": 32},
+        )
+        second_ticket = client.post(
+            "/api/v1/upload-tickets",
+            json={"video_name": "second.mp4", "video_size_bytes": 32},
+        )
+
+        assert first_ticket.status_code == 201
+        assert first_ticket.json()["status"] == "READY"
+        assert second_ticket.status_code == 201
+        assert second_ticket.json()["status"] == "WAITING"
+        assert second_ticket.json()["queue_position"] == 1
+
+        early_upload = client.post(
+            f"/api/v1/upload-tickets/{second_ticket.json()['id']}/jobs",
+            files={"video": ("second.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "まだ"},
+        )
+        assert early_upload.status_code == 409
+
+        uploaded = client.post(
+            f"/api/v1/upload-tickets/{first_ticket.json()['id']}/jobs",
+            files={"video": ("first.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君の知らない物語"},
+        )
+        refreshed_second = client.get(
+            f"/api/v1/upload-tickets/{second_ticket.json()['id']}"
+        )
+
+    assert uploaded.status_code == 201
+    assert runner.job_ids == [uploaded.json()["id"]]
+    assert refreshed_second.status_code == 200
+    assert refreshed_second.json()["status"] == "READY"
+
+
+def test_stale_upload_ticket_expires_and_releases_upload_slot(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        max_upload_slots=1,
+        upload_ticket_timeout_seconds=1,
+    )
+    with TestClient(create_app(settings)) as client:
+        first_ticket = client.post(
+            "/api/v1/upload-tickets",
+            json={"video_name": "first.mp4", "video_size_bytes": 32},
+        )
+        second_ticket = client.post(
+            "/api/v1/upload-tickets",
+            json={"video_name": "second.mp4", "video_size_bytes": 32},
+        )
+        old = (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
+        with client.app.state.database.connect() as connection:
+            connection.execute(
+                "UPDATE upload_tickets SET last_seen_at = ? WHERE id = ?",
+                (old, first_ticket.json()["id"]),
+            )
+
+        refreshed_second = client.get(
+            f"/api/v1/upload-tickets/{second_ticket.json()['id']}"
+        )
+        refreshed_first = client.get(
+            f"/api/v1/upload-tickets/{first_ticket.json()['id']}"
+        )
+
+    assert first_ticket.json()["status"] == "READY"
+    assert second_ticket.json()["status"] == "WAITING"
+    assert refreshed_second.json()["status"] == "READY"
+    assert refreshed_first.json()["status"] == "EXPIRED"
 
 
 def test_completed_transcript_can_be_downloaded(tmp_path: Path) -> None:

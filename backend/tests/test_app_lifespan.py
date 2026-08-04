@@ -49,6 +49,22 @@ def test_app_builds_local_runner_when_processing_is_enabled(tmp_path: Path) -> N
         )
 
 
+def test_app_uses_configured_processing_worker_count(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        processing_worker_count=2,
+    )
+    app = create_app(settings)
+
+    with TestClient(app):
+        assert isinstance(app.state.runner, LocalTaskRunner)
+        assert app.state.runner.worker_count == 2
+
+
 def test_app_prefers_deepseek_when_api_key_is_configured(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -103,3 +119,31 @@ def test_app_can_fall_back_to_stft_vocal_removal(
             app.state.runner.pipeline.vocal_remover,
             VocalRemover,
         )
+
+
+def test_cors_preflight_allows_common_local_frontend_origins(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        for origin in (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ):
+            response = client.options(
+                "/api/v1/jobs",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+
+            assert response.status_code == 200
+            assert response.headers["access-control-allow-origin"] == origin

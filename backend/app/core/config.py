@@ -7,6 +7,15 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_ALLOWED_ORIGINS = ",".join(
+    (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://[::1]:3000",
+    )
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -22,10 +31,14 @@ class Settings(BaseSettings):
     max_lyrics_bytes: int = 1024 * 1024
     max_pending_jobs: int = 4
     max_active_jobs_per_client: int = 2
+    max_upload_slots: int = 1
+    upload_ticket_timeout_seconds: int = 120
+    upload_ticket_upload_timeout_seconds: int = 3600
+    processing_worker_count: int = 1
     cleanup_enabled: bool = True
     job_retention_hours: int = 24
     cleanup_interval_seconds: int = 3600
-    allowed_origins: str = "http://localhost:3000"
+    allowed_origins: str = DEFAULT_ALLOWED_ORIGINS
     trusted_proxy_hosts: str = "127.0.0.1,::1"
     processing_enabled: bool = True
     ffmpeg_path: str = "ffmpeg"
@@ -58,6 +71,10 @@ class Settings(BaseSettings):
         "max_lyrics_bytes",
         "max_pending_jobs",
         "max_active_jobs_per_client",
+        "max_upload_slots",
+        "upload_ticket_timeout_seconds",
+        "upload_ticket_upload_timeout_seconds",
+        "processing_worker_count",
         "job_retention_hours",
         "cleanup_interval_seconds",
         "video_render_timeout_seconds",

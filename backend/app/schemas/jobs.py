@@ -25,6 +25,23 @@ class JobResponse(BaseModel):
     updated_at: datetime
 
 
+class UploadTicketCreate(BaseModel):
+    video_name: str
+    video_size_bytes: int
+
+
+class UploadTicketResponse(BaseModel):
+    id: str
+    status: str
+    video_name: str
+    video_size_bytes: int
+    job_id: str | None = None
+    queue_position: int | None = None
+    queue_size: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class HealthResponse(BaseModel):
     status: str
 
