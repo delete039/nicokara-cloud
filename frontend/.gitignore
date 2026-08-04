@@ -1,0 +1,8 @@
+/node_modules
+/.next/
+/.vinext/
+/dist/
+/.wrangler/
+/.npm-cache/
+.env*
+npm-debug.log*

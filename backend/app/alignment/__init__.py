@@ -1,0 +1,2 @@
+"""Lyric-to-audio alignment."""
+

@@ -1,0 +1,32 @@
+[project]
+name = "nicokara-backend"
+version = "0.1.0"
+description = "Local-first API for ニコカラ自动生成器"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.10,<3",
+  "pykakasi>=2.3,<3",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+ai = [
+  "audio-separator[cpu]>=0.44.5,<0.45",
+  "faster-whisper>=1.2,<2",
+  "scipy>=1.14,<2",
+]
+dev = [
+  "httpx2>=2,<3",
+  "pytest>=8.4,<9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["data*", "tests*"]

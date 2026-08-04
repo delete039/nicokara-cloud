@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: oklch(95.8% 0.008 230);
+  --color-foreground: oklch(24% 0.018 260);
+  --color-card: oklch(99% 0.003 240);
+  --color-card-foreground: oklch(24% 0.018 260);
+  --color-primary: oklch(64% 0.18 356);
+  --color-primary-foreground: oklch(99% 0 0);
+  --color-secondary: oklch(78% 0.09 220);
+  --color-secondary-foreground: oklch(30% 0.035 257);
+  --color-muted: oklch(91% 0.012 240);
+  --color-muted-foreground: oklch(50% 0.02 257);
+  --color-accent: oklch(92% 0.05 345);
+  --color-accent-foreground: oklch(24% 0.018 260);
+  --color-border: oklch(84% 0.015 240);
+  --color-ring: oklch(64% 0.18 356);
+  --color-destructive: oklch(56% 0.22 27);
+  --font-sans: "Noto Sans JP", "Yu Gothic UI", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+  --font-display: "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+}
+
+@utility focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+}

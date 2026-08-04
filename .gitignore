@@ -1,0 +1,37 @@
+.env
+.gh-config/
+.DS_Store
+.idea/
+.cursor/
+.codegraph/
+.pytest_cache/
+.pytest-tmp-*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+outputs/
+work/
+
+frontend/.next/
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/.npm-cache/
+frontend/.openai/
+frontend/.wrangler/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Large local AI models are distributed separately from the source repository.
+models/
+
+# Generated deployment bundles stay local; keep release scripts tracked.
+release/*.tar.gz
+release/SHA256SUMS
+*.zip
+
+backend/data/
+storage/jobs/
+!storage/jobs/.gitkeep
+.env.local
