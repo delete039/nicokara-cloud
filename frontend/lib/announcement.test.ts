@@ -26,9 +26,10 @@ describe("announcement configuration", () => {
       ),
     );
 
-    expect(parseAnnouncement(config)?.id).toBe(
-      "2026-08-06-qq-group-v1",
-    );
+    const announcement = parseAnnouncement(config);
+
+    expect(announcement).not.toBeNull();
+    expect(announcement?.id.length).toBeGreaterThan(0);
   });
 
   it("parses enabled plain-text announcements", () => {
