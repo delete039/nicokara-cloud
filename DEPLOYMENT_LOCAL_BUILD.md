@@ -180,6 +180,18 @@ sudo ln -sfn "$RELEASE_DIR" /data/nicokara/current
 
 ## 6. 后端环境变量
 
+创建 worker 配置 `/data/nicokara/shared/workers.toml`：
+
+```toml
+[processing]
+worker_count = 4
+reload_interval_seconds = 1.0
+```
+
+运行时修改 `worker_count` 会在 1 秒内生效，无需重启 systemd 服务。全站公告配置位于
+`/data/nicokara/shared/announcement.json`；修改 JSON 后刷新页面即可生效，设置
+`enabled` 为 `false` 可关闭公告。
+
 创建 `/data/nicokara/shared/nicokara.env`：
 
 ```ini
@@ -189,7 +201,7 @@ NICOKARA_ALLOWED_ORIGINS=http://SERVER_IP
 NICOKARA_TRUSTED_PROXY_HOSTS=127.0.0.1,::1
 NICOKARA_MAX_PENDING_JOBS=4
 NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
-NICOKARA_PROCESSING_WORKER_COUNT=1
+NICOKARA_WORKER_CONFIG_PATH=/data/nicokara/shared/workers.toml
 NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 NICOKARA_PROCESSING_ENABLED=true
 NICOKARA_FFMPEG_PATH=ffmpeg
@@ -274,7 +286,7 @@ sudo systemctl status nicokara-backend nicokara-frontend --no-pager
 ```
 
 后端保持单进程，不要增加 Uvicorn worker 数量。需要提高吞吐时，先调整
-`NICOKARA_PROCESSING_WORKER_COUNT` 增加同一进程内的后台处理 worker；多实例部署前
+`/data/nicokara/shared/workers.toml` 中的 `processing.worker_count`；多实例部署前
 需要迁移到共享任务队列。上传成功的任务会先写入 SQLite 持久队列，后台 worker 按
 提交顺序自动处理。
 

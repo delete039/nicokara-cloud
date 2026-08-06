@@ -100,6 +100,35 @@ python3 -m venv "$RELEASE_DIR/backend/.venv"
 
 ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
+WORKER_CONFIG="$SHARED_DIR/workers.toml"
+if [[ ! -f "$WORKER_CONFIG" ]]; then
+  cat >"$WORKER_CONFIG" <<EOF
+[processing]
+worker_count = 4
+reload_interval_seconds = 1.0
+EOF
+fi
+
+ANNOUNCEMENT_CONFIG="$SHARED_DIR/announcement.json"
+if [[ ! -f "$ANNOUNCEMENT_CONFIG" ]]; then
+  if [[ -f "$RELEASE_DIR/frontend/public/announcement.json" ]]; then
+    cp "$RELEASE_DIR/frontend/public/announcement.json" "$ANNOUNCEMENT_CONFIG"
+  else
+    cat >"$ANNOUNCEMENT_CONFIG" <<EOF
+{
+  "id": "2026-08-06-qq-group-v1",
+  "enabled": true,
+  "title": "加入 QQ 交流群",
+  "content": ["欢迎加入ニコカラ自动生成器 QQ 交流群：1101583605。"],
+  "buttonLabel": "我知道了"
+}
+EOF
+  fi
+fi
+mkdir -p "$RELEASE_DIR/frontend/public"
+ln -sfn "$ANNOUNCEMENT_CONFIG" \
+  "$RELEASE_DIR/frontend/public/announcement.json"
+
 cat >"$SHARED_DIR/nicokara.env" <<EOF
 NICOKARA_DATA_DIR=$SHARED_DIR/data
 NICOKARA_STORAGE_DIR=$SHARED_DIR/storage/jobs
@@ -110,7 +139,7 @@ NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
 NICOKARA_MAX_UPLOAD_SLOTS=1
 NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS=120
 NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS=3600
-NICOKARA_PROCESSING_WORKER_COUNT=1
+NICOKARA_WORKER_CONFIG_PATH=$WORKER_CONFIG
 NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 NICOKARA_PROCESSING_ENABLED=true
 NICOKARA_FFMPEG_PATH=ffmpeg

@@ -93,6 +93,81 @@ def test_runner_can_process_jobs_with_multiple_workers() -> None:
     assert asyncio.run(scenario()) == 2
 
 
+def test_runner_hot_resizes_workers_without_restart() -> None:
+    runner_module = importlib.import_module("app.tasks.runner")
+
+    class Pipeline:
+        def process(self, job_id: str) -> None:
+            pass
+
+    async def scenario() -> None:
+        runner = runner_module.LocalTaskRunner(
+            Pipeline(),
+            pipeline_factory=Pipeline,
+            worker_count=1,
+        )
+        await runner.start()
+        assert runner.active_worker_count == 1
+
+        await runner.resize_workers(4)
+        await asyncio.sleep(0)
+        assert runner.worker_count == 4
+        assert runner.active_worker_count == 4
+        assert runner.snapshot()["alive_workers"] == 4
+
+        await runner.resize_workers(1)
+        await asyncio.sleep(0.6)
+        assert runner.worker_count == 1
+        assert runner.active_worker_count == 1
+        assert runner.snapshot()["alive_workers"] == 1
+        await runner.stop()
+
+    asyncio.run(scenario())
+
+
+def test_runner_finishes_active_job_when_hot_shrinking() -> None:
+    runner_module = importlib.import_module("app.tasks.runner")
+
+    class SharedState:
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+            self.started_count = 0
+            self.both_started = threading.Event()
+            self.release = threading.Event()
+            self.completed_count = 0
+
+    class BlockingPipeline:
+        def __init__(self, shared: SharedState) -> None:
+            self.shared = shared
+
+        def process(self, job_id: str) -> None:
+            with self.shared.lock:
+                self.shared.started_count += 1
+                if self.shared.started_count == 2:
+                    self.shared.both_started.set()
+            self.shared.release.wait(2)
+            with self.shared.lock:
+                self.shared.completed_count += 1
+
+    async def scenario() -> int:
+        shared = SharedState()
+        runner = runner_module.LocalTaskRunner(
+            pipeline_factory=lambda: BlockingPipeline(shared),
+            worker_count=2,
+        )
+        await runner.start()
+        await runner.enqueue("active-on-worker-zero")
+        await runner.enqueue("active-on-worker-one")
+        assert await asyncio.to_thread(shared.both_started.wait, 2)
+
+        await runner.resize_workers(1)
+        shared.release.set()
+        await runner.stop()
+        return shared.completed_count
+
+    assert asyncio.run(scenario()) == 2
+
+
 def test_runner_accepts_jobs_into_an_unbounded_fifo_queue() -> None:
     runner_module = importlib.import_module("app.tasks.runner")
 

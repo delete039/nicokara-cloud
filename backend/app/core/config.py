@@ -14,6 +14,9 @@ DEFAULT_ALLOWED_ORIGINS = ",".join(
         "http://[::1]:3000",
     )
 )
+DEFAULT_WORKER_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "workers.toml"
+)
 
 
 class Settings(BaseSettings):
@@ -35,7 +38,7 @@ class Settings(BaseSettings):
     max_upload_slots: int = 1
     upload_ticket_timeout_seconds: int = 120
     upload_ticket_upload_timeout_seconds: int = 3600
-    processing_worker_count: int = 1
+    worker_config_path: Path = Field(default=DEFAULT_WORKER_CONFIG_PATH)
     worker_heartbeat_interval_seconds: float = 5
     cleanup_enabled: bool = True
     job_retention_hours: int = 24
@@ -78,7 +81,6 @@ class Settings(BaseSettings):
         "max_upload_slots",
         "upload_ticket_timeout_seconds",
         "upload_ticket_upload_timeout_seconds",
-        "processing_worker_count",
         "job_retention_hours",
         "cleanup_interval_seconds",
         "video_render_timeout_seconds",

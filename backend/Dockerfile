@@ -20,6 +20,7 @@ RUN mkdir -p app \
         torch==2.12.1 torchvision==0.27.1 \
         --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir ".[ai]"
+COPY config ./config
 COPY app ./app
 
 EXPOSE 8000

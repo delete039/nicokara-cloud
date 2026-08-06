@@ -1,0 +1,3 @@
+[processing]
+worker_count = 4
+reload_interval_seconds = 1.0

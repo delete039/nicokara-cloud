@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.core.config import Settings
 from app.main import create_app
@@ -52,17 +54,59 @@ def test_app_builds_local_runner_when_processing_is_enabled(tmp_path: Path) -> N
 def test_app_uses_configured_processing_worker_count(
     tmp_path: Path,
 ) -> None:
+    worker_config_path = tmp_path / "workers.toml"
+    worker_config_path.write_text(
+        "[processing]\n"
+        "worker_count = 2\n"
+        "reload_interval_seconds = 0.05\n",
+        encoding="utf-8",
+    )
     settings = Settings(
         data_dir=tmp_path / "data",
         storage_dir=tmp_path / "jobs",
         processing_enabled=True,
-        processing_worker_count=2,
+        worker_config_path=worker_config_path,
     )
     app = create_app(settings)
 
     with TestClient(app):
         assert isinstance(app.state.runner, LocalTaskRunner)
         assert app.state.runner.worker_count == 2
+
+
+def test_app_hot_reloads_processing_worker_count(tmp_path: Path) -> None:
+    worker_config_path = tmp_path / "workers.toml"
+    worker_config_path.write_text(
+        "[processing]\n"
+        "worker_count = 1\n"
+        "reload_interval_seconds = 0.05\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        worker_config_path=worker_config_path,
+    )
+    app = create_app(settings)
+
+    with TestClient(app):
+        worker_config_path.write_text(
+            "[processing]\n"
+            "worker_count = 4\n"
+            "reload_interval_seconds = 0.05\n",
+            encoding="utf-8",
+        )
+        deadline = time.monotonic() + 2
+        while app.state.runner.worker_count != 4:
+            if time.monotonic() >= deadline:
+                pytest.fail("worker count was not hot reloaded")
+            time.sleep(0.02)
+
+        snapshot = app.state.runner.snapshot()
+        assert app.state.runner.active_worker_count == 4
+        assert snapshot["worker_count"] == 4
+        assert snapshot["alive_workers"] == 4
 
 
 def test_app_prefers_deepseek_when_api_key_is_configured(tmp_path: Path) -> None:

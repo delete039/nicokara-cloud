@@ -51,7 +51,7 @@ class LocalTaskRunner:
             logger.warning(
                 "Multiple workers are sharing one pipeline instance; "
                 "prefer pipeline_factory for thread safety."
-        )
+            )
         self.pipeline = pipeline
         self.pipeline_factory = pipeline_factory
         self.max_pending_jobs = max_pending_jobs
@@ -61,7 +61,8 @@ class LocalTaskRunner:
         self._reserved_slots = 0
         self._capacity_available = asyncio.Event()
         self._capacity_available.set()
-        self._worker_tasks: list[asyncio.Task[None]] = []
+        self._worker_tasks: dict[int, asyncio.Task[None]] = {}
+        self._started = False
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._last_heartbeat_at: datetime | None = None
         self._active_jobs: dict[int, tuple[str, datetime]] = {}
@@ -90,17 +91,50 @@ class LocalTaskRunner:
         self._update_capacity_event()
 
     async def start(self) -> None:
-        if not self._worker_tasks:
-            self._last_heartbeat_at = datetime.now(UTC)
-            self._worker_tasks = [
-                asyncio.create_task(self._worker(worker_index))
-                for worker_index in range(self.worker_count)
-            ]
-            self._heartbeat_task = asyncio.create_task(self._heartbeat())
+        if self._started:
+            return
+        self._started = True
+        self._last_heartbeat_at = datetime.now(UTC)
+        self._ensure_workers()
+        self._heartbeat_task = asyncio.create_task(self._heartbeat())
+
+    async def resize_workers(self, worker_count: int) -> None:
+        if worker_count <= 0:
+            raise ValueError("worker_count must be greater than zero")
+        previous_count = self.worker_count
+        if worker_count == previous_count:
+            return
+        if worker_count > 1 and self.pipeline_factory is None:
+            logger.warning(
+                "Multiple workers are sharing one pipeline instance; "
+                "prefer pipeline_factory for thread safety."
+            )
+        self.worker_count = worker_count
+        if self._started:
+            self._ensure_workers()
+        logger.info(
+            "Background worker count changed from %s to %s",
+            previous_count,
+            worker_count,
+        )
+
+    @property
+    def active_worker_count(self) -> int:
+        return sum(
+            not task.done() for task in self._worker_tasks.values()
+        )
+
+    def _ensure_workers(self) -> None:
+        for worker_index in range(self.worker_count):
+            task = self._worker_tasks.get(worker_index)
+            if task is None or task.done():
+                self._worker_tasks[worker_index] = asyncio.create_task(
+                    self._worker(worker_index)
+                )
 
     def snapshot(self) -> dict[str, Any]:
         now = datetime.now(UTC)
-        alive_workers = sum(not task.done() for task in self._worker_tasks)
+        alive_workers = self.active_worker_count
         heartbeat_age = (
             (now - self._last_heartbeat_at).total_seconds()
             if self._last_heartbeat_at is not None
@@ -169,17 +203,19 @@ class LocalTaskRunner:
 
     async def stop(self) -> None:
         await self.queue.join()
+        self._started = False
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._heartbeat_task
             self._heartbeat_task = None
         if self._worker_tasks:
-            for worker_task in self._worker_tasks:
+            worker_tasks = list(self._worker_tasks.values())
+            for worker_task in worker_tasks:
                 worker_task.cancel()
             with suppress(asyncio.CancelledError):
-                await asyncio.gather(*self._worker_tasks)
-            self._worker_tasks = []
+                await asyncio.gather(*worker_tasks)
+            self._worker_tasks = {}
 
     async def _heartbeat(self) -> None:
         while True:
@@ -187,13 +223,20 @@ class LocalTaskRunner:
             await asyncio.sleep(self.heartbeat_interval_seconds)
 
     async def _worker(self, worker_index: int) -> None:
-        pipeline = (
-            self.pipeline_factory()
-            if self.pipeline_factory is not None
-            else self.pipeline
-        )
-        while True:
-            job_id = await self.queue.get()
+        if worker_index == 0 and self.pipeline is not None:
+            pipeline = self.pipeline
+        elif self.pipeline_factory is not None:
+            pipeline = self.pipeline_factory()
+        else:
+            pipeline = self.pipeline
+        while self._started and worker_index < self.worker_count:
+            try:
+                job_id = await asyncio.wait_for(
+                    self.queue.get(),
+                    timeout=0.5,
+                )
+            except TimeoutError:
+                continue
             self._update_capacity_event()
             self._active_jobs[worker_index] = (job_id, datetime.now(UTC))
             try:

@@ -17,6 +17,10 @@ from app.alignment.aligner import LyricTimelineAligner
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
+from app.core.worker_config import (
+    WorkerConfigReloader,
+    load_worker_config,
+)
 from app.schemas.jobs import HealthResponse
 from app.lyrics.processor import (
     DeepSeekLyricProcessor,
@@ -117,32 +121,36 @@ def create_app(
                 ),
             )
         active_runner = runner
+        worker_config_reloader = None
         if active_runner is None and resolved_settings.processing_enabled:
+            worker_config = load_worker_config(
+                resolved_settings.worker_config_path
+            )
             pipeline_factory = lambda: build_pipeline(
                 resolved_settings,
                 database,
             )
-            pipeline = (
-                pipeline_factory()
-                if resolved_settings.processing_worker_count == 1
-                else None
-            )
+            pipeline = pipeline_factory()
             active_runner = LocalTaskRunner(
                 pipeline,
-                pipeline_factory=(
-                    pipeline_factory
-                    if resolved_settings.processing_worker_count > 1
-                    else None
-                ),
+                pipeline_factory=pipeline_factory,
                 max_pending_jobs=resolved_settings.max_pending_jobs,
-                worker_count=resolved_settings.processing_worker_count,
+                worker_count=worker_config.worker_count,
                 heartbeat_interval_seconds=(
                     resolved_settings.worker_heartbeat_interval_seconds
+                ),
+            )
+            worker_config_reloader = WorkerConfigReloader(
+                path=resolved_settings.worker_config_path,
+                runner=active_runner,
+                reload_interval_seconds=(
+                    worker_config.reload_interval_seconds
                 ),
             )
         app.state.settings = resolved_settings
         app.state.database = database
         app.state.runner = active_runner
+        app.state.worker_config_reloader = worker_config_reloader
         app.state.active_job_limiter = ActiveJobLimiter(
             database=database,
             max_active_jobs=resolved_settings.max_active_jobs_per_client,
@@ -151,6 +159,8 @@ def create_app(
             await cleanup_runner.start()
         if active_runner is not None:
             await active_runner.start()
+            if worker_config_reloader is not None:
+                await worker_config_reloader.start()
             pending_job_ids = database.list_job_ids(status="UPLOADED")
             recovery_task = None
             enqueue_wait = getattr(active_runner, "enqueue_wait", None)
@@ -168,6 +178,8 @@ def create_app(
         try:
             yield
         finally:
+            if worker_config_reloader is not None:
+                await worker_config_reloader.stop()
             if active_runner is not None and recovery_task is not None:
                 recovery_task.cancel()
                 with suppress(asyncio.CancelledError):
