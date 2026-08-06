@@ -1,547 +1,254 @@
 # ニコカラ自动生成器 Cloud
 
-面向没有字幕制作和视频剪辑经验的用户，提供简单、快速的ニコカラ视频生成服务。
+## 项目简介
 
-只需上传原始 MV 和歌词文本，系统即可自动完成歌词时间轴匹配、汉字假名注音、Karaoke 逐字变色字幕生成及视频渲染。无需学习字幕打轴、ASS 特效或视频剪辑，即可在 KTV 等使用场景中快速生成并播放ニコカラ视频。
+ニコカラ自动生成器 Cloud 面向没有字幕制作和视频剪辑经验的用户。用户只需提供原始 MV 和逐行歌词，系统即可完成音频处理、日语歌声识别、歌词时间轴对齐、汉字假名注音、Karaoke 逐字变色字幕以及视频导出。
 
-## 项目定位
+### 项目定位
 
-云端轻量版以“开箱即用”为核心：
+本项目以“浏览器完成、尽量少上传、无需学习专业软件”为目标：
 
-- 无需安装专业软件
-- 无需掌握字幕打轴
-- 无需学习视频剪辑
-- 通过浏览器完成上传、生成和下载
-- 尽可能减少参数设置和操作步骤
+- 无需掌握字幕打轴、ASS 特效或视频剪辑。
+- 支持 `ON VOCAL` 原人声和 `OFF VOCAL` 伴奏两种输出。
+- 对符合条件的素材，优先在浏览器提取音频，只将音频和歌词发送到后端。
+- 使用 Kirakara 逻辑预览、检查注音、调整时间轴和渲染双行ニコカラ字幕。
+- 浏览器具备本地导出能力时直接在本机生成视频；能力不足时自动改用云端渲染。
+- 提供上传排队、处理排队、任务取消、异常恢复和管理员监控，适合多人访问。
 
-适合希望快速制作ニコカラ视频的普通用户，以及临时需要在 KTV 现场生成歌曲视频的使用场景。
+当前版本仍处于 Alpha 阶段。建议先使用短视频验证浏览器兼容性和生成效果，再处理正式素材。
 
-## 当前运行状态
+## 更新日志
 
-当前代码已完成 Phase 1-8，具备完整的视频生成闭环，并已用于 Linux 服务器部署。生产环境采用 Nginx、systemd 和 `/data/nicokara` 发布目录，前端与后端仅监听服务器本机端口，由 Nginx 统一对外提供服务。
+### v0.3.0-alpha.2 - 2026-08-06
 
-> GitHub 仓库中的代码不会自动同步到正在运行的服务器。修改代码后仍需重新构建、打包、上传并切换服务器版本，具体步骤见 [本地构建与无 Docker 部署指南](./DEPLOYMENT_LOCAL_BUILD.md)。
+- 浏览器预览、本地导出和云端渲染统一采用 Kirakara 双行交替字幕逻辑。
+- 增加可视化时间轴调整、整体偏移、逐词注音检查和字幕样式设置。
+- 增加 WebCodecs 本地 MP4 导出；支持时只显示本地导出，不支持时只显示云端渲染。
+- `OFF VOCAL` 支持下载云端 UVR 生成的伴奏，并在浏览器导出时替换原音轨。
 
-## 当前能力
+### v0.3.0-alpha.1 - 2026-08-06
 
-| 模块 | 状态 | 能力 |
-|---|---|---|
-| 素材上传 | 已完成 | MP4 校验、1 GB 限制、歌词粘贴或 UTF-8 TXT 上传、上传进度 |
-| 人声模式 | 已完成 | `ON VOCAL` 保留原人声；`OFF VOCAL` 使用 MDX 生成人声分离后的伴奏 |
-| 歌声识别 | 已完成 | FFmpeg 音频提取、faster-whisper 日语识别和词级时间戳 |
-| 歌词处理 | 已完成 | DeepSeek 可选处理、pykakasi 本地降级、Ruby 注音和 Mora 拆分 |
-| 时间轴与字幕 | 已完成 | 歌词对齐、漏词插值、ASS v4+、逐字高亮和 Ruby 注音 |
-| 视频合成 | 已完成 | FFmpeg/libass 烧录、H.264 MP4、在线播放和下载 |
-| 前端反馈 | 已完成 | 中文进度、服务器错误分类、详细原因、解决方案和技术信息 |
-| 运行保护 | 已完成 | 原子队列容量、来源并发上限、实时排队位置、任务取消、重启恢复和自动清理 |
-| 后台监控 | 已完成 | 管理员认证、上传/处理队列、worker 心跳、资源指标、队列操作和审计记录 |
-| 浏览器音频优先 | Alpha 可用 | 电脑与手机能力检测、300 MB 规则、纯音频上传、Kirakara Canvas 预览、WebCodecs 本地 MP4 导出和 OFF VOCAL 伴奏替换 |
-| 部署 | 已完成 | Docker Compose；Linux 下的 Nginx + systemd + `/data/nicokara` 发布结构 |
+- 增加电脑和手机浏览器能力检测，以及 `LOCAL`、`AUDIO_ONLY`、`REMOTE_VIDEO` 自动选路。
+- 对 300 MB 以内素材优先在浏览器提取音频，避免上传完整视频。
+- 增加浏览器音频任务接口、模型清单与缓存接口、完全本地任务状态机。
+- 增加 Kirakara Canvas 预览和本地媒体会话恢复能力。
 
-## 当前能力详情
+### v0.2.0 - 2026-08-05
 
-- Next.js + React + TypeScript + Tailwind CSS 前端
-- FastAPI 后端
-- SQLite 任务元数据
-- MP4 内容检查、流式写入、大小限制和 SHA-256
-- 粘贴歌词或 UTF-8 TXT 歌词上传
-- `ON VOCAL` 保留原人声，`OFF VOCAL` 使用 MDX 模型生成伴奏
-- 每个任务独立的本地存储目录
-- 上传进度、中文任务阶段和结果页面
-- 面向服务器部署的错误反馈，覆盖上传、网络、HTTP 状态和处理阶段失败
-- 错误卡片提供解决方案、重试入口、任务 ID 和必要的技术信息
-- FFmpeg 提取 16 kHz 单声道 PCM 分析音频
-- faster-whisper 日语识别、分段和词级时间戳
-- 单任务后台队列、原子容量预留、来源并发上限、实时排队位置和任务取消，避免单个用户占满队列
-- `transcript.json` 下载接口
-- DeepSeek JSON 歌词格式化、分句和读音处理
-- pykakasi 本地平假名降级处理
-- Ruby 所需的 `surface`/`reading` token
-- `lyrics_processed.json` 下载接口
-- 日语读音规范化与 Mora（拍）拆分
-- 歌词 Mora 与 Whisper 词级时间戳对齐
-- ASR 漏词区间自动插值、匹配置信度和警告
-- `timeline.json` 下载接口
-- ASS v4+ 字幕生成
-- 逐字符 `\kf` Karaoke 平滑变色标签
-- 汉字上方 Ruby 平假名注音
-- ニコカラ风高亮色、未唱色、描边和阴影样式
-- 可配置画布、字体、字号和字幕基线
-- 用户歌词 ASS 控制字符转义
-- `lyrics.ass` 下载接口
-- FFmpeg/libass 字幕烧录
-- H.264、`yuv420p`、faststart MP4 输出
-- `ON VOCAL` 使用原 MP4 音轨，`OFF VOCAL` 使用分离后的伴奏音轨
-- 支持 HTTP Range 的结果视频预览
-- `final_karaoke.mp4` 下载接口
-- Docker 内置 Noto CJK 日文字体
-- Docker Compose 本地运行环境
-- 受管理员令牌保护的 `/admin` 监控页面和队列健康探针
+- 增加受管理员令牌保护的 `/admin` 监控页面。
+- 展示上传队列、处理队列、worker 心跳、系统资源和失败任务。
+- 支持管理员取消任务、重新入队和操作审计。
 
-## 当前开发重点
+### v0.1.1 - 2026-08-04
 
-上传与处理队列监控、worker 心跳和管理员控制已经完成。下一阶段主要优化方向包括：
+- 增加大文件上传排队、排队位置和退出排队。
+- 视频改为 8 MiB 分片上传，单片失败最多重试 3 次。
+- 增加任务幂等查询，减少 Cloudflare 524 或网络中断造成的重复提交。
 
-- 在 Android Chrome 与 iPhone Safari 上验证音轨兼容率、峰值内存和耗时
-- 接入云端 UVR + FA-Kara/MMS_FA 高精度对齐，并复用现有 Mora 时间轴契约
-- 量化并基准测试 UVR 与日语 CTC 浏览器模型
-- 在真实多人上传场景中持续压测并调整队列及同时任务参数
-- 增加任务历史、用户隔离和存储配额
-- 优化大文件上传和异常恢复能力
-- 控制服务器资源占用，避免任务互相影响
+### v0.1.0
 
-## 处理流程
+- 完成视频与歌词上传、歌声识别、歌词处理、时间轴对齐、ASS 字幕和视频渲染的基础闭环。
+- 支持 `ON VOCAL`、`OFF VOCAL`、任务状态查询和结果下载。
 
-上传任务会依次经过以下阶段：
+完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
+## 项目基本架构
+
+### 处理流程
 
 ```text
-上传完成
--> 提取音频
--> 分离人声（仅 OFF VOCAL）
--> 识别歌声
--> 处理歌词与假名
--> 对齐歌词时间轴
--> 生成 ASS 字幕
--> 合成最终视频
--> 在线预览或下载
+用户选择 MP4 和逐行歌词
+        |
+        v
+浏览器检测设备、素材和编码能力
+        |
+        +-- 浏览器优先路径：本地提取音频 -> 上传音频和歌词
+        |
+        `-- 兼容回退路径：分片上传完整视频和歌词
+                              |
+                              v
+                 FastAPI 后端任务队列
+                              |
+          UVR 人声分离 / 歌声识别 / 歌词处理
+                 / 时间轴对齐 / Ruby 注音
+                              |
+                              v
+                  Kirakara 字幕时间轴
+                              |
+          +-------------------+-------------------+
+          |                                       |
+          v                                       v
+浏览器预览与本地导出                    云端 FFmpeg 渲染后下载
 ```
 
-成功任务会在独立任务目录中生成：
+### 技术组成
+
+| 模块 | 技术与职责 |
+|---|---|
+| 前端 | React、TypeScript、vinext、Tailwind CSS；负责上传、排队、进度、预览和本地导出 |
+| 浏览器媒体 | Mediabunny、Canvas、WebCodecs；负责本地音频提取、Kirakara 预览和 MP4 导出 |
+| 后端 | FastAPI、SQLite；负责任务、队列、上传票据、管理监控和产物接口 |
+| 音频与识别 | FFmpeg、audio-separator/UVR、faster-whisper、pykakasi |
+| 字幕与视频 | Mora 时间轴、Ruby 注音、Kirakara 双行布局、FFmpeg/libass |
+| 数据 | `storage/jobs/{job_id}` 保存每个任务的输入、时间轴、字幕和结果 |
+
+### 目录结构
 
 ```text
-storage/jobs/{job_id}/
-|-- input.mp4
-|-- lyrics.txt
-|-- audio.wav
-|-- audio_instrumental.wav      # 仅 OFF VOCAL
-|-- transcript.json
-|-- lyrics_processed.json
-|-- timeline.json
-|-- lyrics.ass
-`-- final_karaoke.mp4
+nicokara-cloud/
+|-- frontend/                 前端页面、浏览器媒体处理和测试
+|-- backend/                  FastAPI、任务流程、字幕处理和测试
+|-- storage/jobs/             本地任务文件，不提交到 Git
+|-- release/                  服务器部署与恢复脚本
+|-- docker-compose.yml        本地完整运行配置
+|-- docker-compose.dev.yml    修改代码时使用的开发配置
+|-- .env.example              可选环境变量示例
+`-- CHANGELOG.md              完整更新日志
 ```
 
-## 技术架构
+本地默认访问关系：
 
 ```text
-浏览器
-|-- /       -> Nginx -> Next.js 前端 127.0.0.1:3000
-`-- /api/   -> Nginx -> FastAPI 后端 127.0.0.1:8000
-                           |-- SQLite
-                           |-- storage/jobs
-                           `-- Whisper/MDX 本地模型
+浏览器 -> http://localhost:3000 -> 前端
+浏览器 -> http://localhost:8000 -> FastAPI
+前端 /api 请求 -> FastAPI -> SQLite + storage/jobs + 本地模型缓存
 ```
 
-- 前端：Next.js、React、TypeScript、Tailwind CSS
-- 后端：FastAPI、SQLite
-- 音视频：FFmpeg、libass、MDX-Net
-- 识别与歌词：faster-whisper、DeepSeek（可选）、pykakasi（本地降级）
-- 部署：Docker Compose，或 Linux + Nginx + systemd
+## 本地部署 0 基础教程
 
-## 项目目录
+以下步骤以 Windows 10/11 为例。推荐使用 Docker Desktop，不需要单独安装 Python、Node.js 或 FFmpeg。
 
-```text
-frontend/       Next.js 前端
-backend/        FastAPI 后端与测试
-release/        Linux 发布、部署和恢复脚本
-storage/jobs/   本地任务文件，不提交到 Git
-DEPLOYMENT_LOCAL_BUILD.md  构建、发布和无 Docker 部署指南
+### 第 1 步：确认电脑条件
+
+- 64 位 Windows 10/11。
+- 至少 8 GB 内存，推荐 16 GB。
+- 至少预留 20 GB 磁盘空间，用于 Docker 镜像、Python 依赖和模型缓存。
+- 在 BIOS/UEFI 中启用 CPU 虚拟化。任务管理器的“性能 -> CPU”页面应显示“虚拟化：已启用”。
+
+### 第 2 步：安装 Git
+
+1. 打开 [Git for Windows 官方下载页](https://git-scm.com/install/windows)。
+2. 下载并安装，安装过程保持默认选项即可。
+3. 安装完成后重新打开 PowerShell，执行：
+
+```powershell
+git --version
 ```
 
-## 本地运行
+能看到版本号说明安装成功。
 
-### Docker Compose
+### 第 3 步：安装 Docker Desktop
 
-需要 Docker Desktop 和至少 2 GB 可用内存：
+1. 打开 [Docker Desktop Windows 安装说明](https://docs.docker.com/desktop/setup/install/windows-install/)。
+2. 下载并安装 Docker Desktop，安装时使用 WSL 2 后端。
+3. 如果安装程序提示缺少 WSL，以管理员身份打开 PowerShell并执行：
+
+```powershell
+wsl --install
+wsl --update
+```
+
+4. 按提示重启电脑，然后启动 Docker Desktop。
+5. 等待 Docker Desktop 显示 Engine running，再执行：
+
+```powershell
+docker --version
+docker compose version
+```
+
+两条命令都能显示版本号，说明 Docker 已经可用。
+
+### 第 4 步：下载项目
+
+在希望保存项目的位置打开 PowerShell。例如保存到 `D:\study`：
+
+```powershell
+cd D:\study
+git clone https://github.com/delete039/nicokara-cloud.git
+cd nicokara-cloud
+```
+
+如果已经下载过项目，进入项目目录后更新即可：
+
+```powershell
+cd D:\study\nicokara-cloud
+git pull
+```
+
+### 第 5 步：启动项目
+
+确认 Docker Desktop 正在运行，然后在项目根目录执行：
 
 ```powershell
 docker compose up --build
 ```
 
-启动后访问：
+首次启动需要下载基础镜像、Python 依赖和前端依赖，通常会明显慢于后续启动。只要终端仍在持续输出下载或构建信息，就不要关闭窗口。
 
-- 前端：http://localhost:3000
-- API 文档：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/health
+看到前后端均已启动后，打开浏览器访问：
 
-停止服务：
+- 项目首页：<http://localhost:3000>
+- 后端接口文档：<http://localhost:8000/docs>
+- 后端健康检查：<http://localhost:8000/health>
+
+### 第 6 步：完成第一次测试
+
+1. 准备一个较短的 MP4 视频，建议首次测试控制在 1 分钟以内。
+2. 准备 UTF-8 编码的 TXT 歌词，每句歌词单独成行。
+3. 打开首页，选择视频、歌词和 `ON VOCAL`。
+4. 提交后观察上传及处理进度。
+5. 任务完成后检查注音、时间轴和字幕预览，再尝试导出。
+
+首次执行歌声识别或 `OFF VOCAL` 时可能继续下载模型，因此第一次任务会比较慢。
+
+### 第 7 步：停止和再次启动
+
+在运行日志窗口按 `Ctrl + C` 停止服务，然后执行：
 
 ```powershell
 docker compose down
 ```
 
-### Docker Compose dev mode
-
-Use the dev compose file when changing code frequently. The backend mounts
-`backend/app` and runs `uvicorn --reload`; the frontend runs the dev server and
-proxies `/api` to the backend service.
+下次启动通常不需要重新构建：
 
 ```powershell
-docker compose -f docker-compose.dev.yml up -d --build
+docker compose up
 ```
 
-After the first build, normal code changes do not need another build:
+修改了 `Dockerfile`、`backend/pyproject.toml` 或 `frontend/package-lock.json` 后，再执行：
 
 ```powershell
-docker compose -f docker-compose.dev.yml up -d
+docker compose up --build
 ```
 
-Rebuild only when Dockerfile, `backend/pyproject.toml`, or
-`frontend/package-lock.json` changes.
+### 第 8 步：常见问题
 
-### 上传前排队
+| 现象 | 处理方法 |
+|---|---|
+| `docker` 不是可识别的命令 | 启动 Docker Desktop，并重新打开 PowerShell |
+| 提示 WSL 或虚拟化不可用 | 执行 `wsl --update`，并确认 BIOS/UEFI 已启用虚拟化 |
+| 端口 3000 或 8000 被占用 | 关闭占用端口的旧程序，或先执行 `docker compose down` |
+| 构建期间下载很慢 | 保持网络连接并重试 `docker compose up --build`；Docker 会复用已经完成的缓存 |
+| 页面打不开 | 执行 `docker compose ps`，确认 `frontend` 和 `backend` 状态正常 |
+| 后端显示不健康 | 执行 `docker compose logs --tail 100 backend` 查看最后 100 行日志 |
+| 第一次任务长时间停留在模型阶段 | 首次任务可能正在下载 Whisper 或 UVR 模型，查看后端日志确认下载仍在继续 |
 
-提交表单后，前端会先创建轻量的上传排队号，不会立刻上传大视频文件。轮到该排队号时，
-页面才会自动上传视频并创建生成任务。用户在等待上传名额时关闭网页，排队号会在
-`NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS` 后过期并释放名额。
-
-### 不使用 Docker
-
-后端需要 Python 3.11 或更高版本：
+查看全部服务日志：
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[ai,dev]"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+docker compose logs -f
 ```
 
-另开终端启动前端。Node.js 要求 `>=22.13.0`，推荐 Node.js 24：
+只查看后端日志：
 
 ```powershell
-cd frontend
-npm.cmd install
-npm.cmd run dev -- --host 127.0.0.1 --port 3000
+docker compose logs -f backend
 ```
 
-然后访问 http://127.0.0.1:3000。开发服务器会自动将 `/api/` 请求代理到
-`http://127.0.0.1:8000`，因此不需要单独配置 CORS。后端使用其他端口时，先设置
-`NICOKARA_DEV_API_ORIGIN`：
+彻底停止容器但保留任务文件和模型缓存：
 
 ```powershell
-$env:NICOKARA_DEV_API_ORIGIN = "http://127.0.0.1:9000"
+docker compose down
 ```
 
-本地直接运行时还需安装 FFmpeg，并保证 `ffmpeg` 可从 `PATH` 调用。首次转录会下载 faster-whisper 模型。
-
-## 服务器部署与更新
-
-推荐生产结构：
-
-```text
-/data/nicokara/
-|-- releases/          每次发布一个独立版本目录
-|-- current -> releases/{release-id}
-`-- shared/
-    |-- data/          SQLite 数据
-    |-- storage/jobs/  上传和生成结果
-    |-- models/        Whisper 与 MDX 模型
-    `-- nicokara.env   生产环境配置
-```
-
-更新已经运行的服务器时：
-
-1. 在本地拉取或确认需要发布的提交。
-2. 使用相对 API 地址 `NEXT_PUBLIC_API_URL=/api/v1` 构建 Linux 前端产物。
-3. 按部署指南生成应用发布包并计算 SHA-256。
-4. 将发布包上传到服务器 `/data/`。
-5. 解压到新的 `/data/nicokara/releases/{release-id}/`。
-6. 安装后端依赖，切换 `/data/nicokara/current` 软链接。
-7. 重启前后端服务，并检查健康接口、首页和完整生成流程。
-
-模型、SQLite、上传文件和任务结果位于 `shared/`，发布新版本时不应覆盖。完整命令和回滚方法见 [DEPLOYMENT_LOCAL_BUILD.md](./DEPLOYMENT_LOCAL_BUILD.md)。
-
-应用包、Whisper 模型包和 MDX 模型包分开生成。后续更新应用时不需要重复上传模型。
-完整打包命令和 SHA-256 校验流程见
-[本地构建与无 Docker 部署指南](./DEPLOYMENT_LOCAL_BUILD.md)。
-
-## 无 Docker 生产部署
-
-推荐使用 Ubuntu 24.04、Nginx 和 systemd，部署到 `/data/nicokara`：
-
-```text
-浏览器
-├── /        → Nginx → 前端 127.0.0.1:3000
-└── /api/    → Nginx → 后端 127.0.0.1:8000
-                         ├── SQLite
-                         ├── storage/jobs
-                         └── Whisper/MDX 本地模型
-```
-
-### 1. 安装服务器依赖
-
-```bash
-sudo apt update
-sudo apt install -y \
-  build-essential \
-  curl \
-  ffmpeg \
-  fonts-noto-cjk \
-  nginx \
-  python3 \
-  python3-venv
-```
-
-另外安装 Node.js 24，并确认版本：
-
-```bash
-node --version
-python3 --version
-ffmpeg -version
-```
-
-### 2. 准备持久化目录
-
-```bash
-sudo mkdir -p \
-  /data/nicokara/releases \
-  /data/nicokara/shared/data \
-  /data/nicokara/shared/storage/jobs \
-  /data/nicokara/shared/models
-```
-
-每次发布解压到新的 `releases/{发布编号}/`，并让
-`/data/nicokara/current` 指向当前版本。SQLite、任务文件和模型放在
-`shared/`，发布新版本时不会被覆盖。
-
-### 3. 安装后端生产依赖
-
-```bash
-cd "/data/nicokara/current/backend"
-python3 -m venv ".venv"
-".venv/bin/python" -m pip install --upgrade pip
-".venv/bin/python" -m pip install -e ".[ai]"
-```
-
-创建 `/data/nicokara/shared/nicokara.env`：
-
-```ini
-NICOKARA_DATA_DIR=/data/nicokara/shared/data
-NICOKARA_STORAGE_DIR=/data/nicokara/shared/storage/jobs
-NICOKARA_ALLOWED_ORIGINS=http://SERVER_IP
-NICOKARA_TRUSTED_PROXY_HOSTS=127.0.0.1,::1
-NICOKARA_MAX_PENDING_JOBS=4
-NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
-NICOKARA_PROCESSING_ENABLED=true
-NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
-NICOKARA_FFMPEG_PATH=ffmpeg
-NICOKARA_WHISPER_MODEL=/data/nicokara/shared/models/faster-whisper-small
-NICOKARA_WHISPER_DEVICE=cpu
-NICOKARA_WHISPER_COMPUTE_TYPE=int8
-NICOKARA_VOCAL_REMOVAL_BACKEND=mdx
-NICOKARA_VOCAL_REMOVAL_MODEL=UVR_MDXNET_KARA_2.onnx
-NICOKARA_VOCAL_REMOVAL_MODEL_DIR=/data/nicokara/shared/models/audio-separator
-NICOKARA_DEEPSEEK_API_KEY=
-NICOKARA_ADMIN_TOKEN=请替换为随机管理员令牌
-```
-
-使用域名或 HTTPS 时，将 `NICOKARA_ALLOWED_ORIGINS` 改为浏览器实际访问地址。
-
-### 4. 配置进程和反向代理
-
-- 后端 systemd 运行
-  `/data/nicokara/current/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`。
-- 前端 systemd 运行
-  `node /data/nicokara/current/frontend/server.js`，监听 `127.0.0.1:3000`。
-- Nginx 对外只开放 80/443，将 `/api/` 转发到 8000，其余请求转发到 3000。
-- Nginx 设置 `client_max_body_size 1024m`，并关闭 API 请求缓冲，避免大视频上传被默认限制。
-- 后端保持单进程，不要增加 Uvicorn worker 数量；如需提高吞吐，调整
-  `NICOKARA_PROCESSING_WORKER_COUNT` 增加同一进程内的后台处理 worker。
-
-完整的 systemd unit、Nginx 配置、发布目录切换和一键部署脚本说明见
-[DEPLOYMENT_LOCAL_BUILD.md](./DEPLOYMENT_LOCAL_BUILD.md)。
-
-### 5. 启动和验收
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now nicokara-backend nicokara-frontend nginx
-
-curl -fsS http://127.0.0.1:8000/health
-curl -I http://127.0.0.1:3000/
-curl -I http://SERVER_IP/
-```
-
-最后通过网页上传一个短 MP4 和歌词，完整验证上传、日语识别、歌词对齐、字幕生成、视频烧录、预览和下载。
-
-## 关键配置
-
-后端环境变量使用 `NICOKARA_` 前缀：
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `NICOKARA_STORAGE_DIR` | `../storage/jobs` | 任务文件目录 |
-| `NICOKARA_MAX_VIDEO_BYTES` | `1073741824` | MP4 最大字节数 |
-| `NICOKARA_MAX_LYRICS_BYTES` | `1048576` | 歌词最大字节数 |
-| `NICOKARA_MAX_PENDING_JOBS` | `4` | 兼容旧版本的队列配置；当前上传会进入持久队列，不再因本地队列满而拒绝 |
-| `NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT` | `2` | 单个来源同时等待或处理的最大任务数 |
-| `NICOKARA_MAX_UPLOAD_SLOTS` | `1` | 同时允许真正上传大视频的排队名额数 |
-| `NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS` | `120` | 上传前排队号无轮询保活后的过期秒数 |
-| `NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS` | `3600` | 已轮到上传但长时间未完成后的过期秒数 |
-| `NICOKARA_PROCESSING_WORKER_COUNT` | `1` | 同一后端进程内的后台处理 worker 数 |
-| `NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS` | `5` | worker 心跳刷新间隔秒数 |
-| `NICOKARA_CLEANUP_ENABLED` | `true` | 是否自动清理过期终态任务 |
-| `NICOKARA_JOB_RETENTION_HOURS` | `24` | 成功或失败任务的保留小时数 |
-| `NICOKARA_CLEANUP_INTERVAL_SECONDS` | `3600` | 过期任务扫描间隔秒数 |
-| `NICOKARA_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000,http://[::1]:3000` | 允许的前端来源，逗号分隔 |
-| `NICOKARA_TRUSTED_PROXY_HOSTS` | `127.0.0.1,::1` | 可信反向代理地址或网段，逗号分隔 |
-| `NICOKARA_PROCESSING_ENABLED` | `true` | 是否自动执行本地转录任务 |
-| `NICOKARA_FFMPEG_PATH` | `ffmpeg` | FFmpeg 可执行文件路径 |
-| `NICOKARA_FFMPEG_TIMEOUT_SECONDS` | `900` | 音频提取超时秒数 |
-| `NICOKARA_VIDEO_RENDER_TIMEOUT_SECONDS` | `7200` | 最终视频渲染超时秒数 |
-| `NICOKARA_VIDEO_RENDER_PRESET` | `veryfast` | x264 编码速度预设 |
-| `NICOKARA_VIDEO_RENDER_CRF` | `20` | x264 画质参数，越低画质越高 |
-| `NICOKARA_WHISPER_MODEL` | `small` | faster-whisper 模型名称或本地路径 |
-| `NICOKARA_WHISPER_DEVICE` | `cpu` | `cpu` 或 `cuda` |
-| `NICOKARA_VOCAL_REMOVAL_BACKEND` | `mdx` | 人声分离后端 |
-| `NICOKARA_DEEPSEEK_API_KEY` | 空 | DeepSeek Key；为空时使用本地歌词处理 |
-| `NICOKARA_ADMIN_TOKEN` | 空 | 管理员监控令牌；为空时禁用管理接口 |
-
-密钥只应保存在本地 `.env` 或服务器 `/data/nicokara/shared/nicokara.env` 中，不要提交到 Git 仓库。
-
-## 管理员监控
-
-生产环境先生成随机令牌并写入 `/data/nicokara/shared/nicokara.env`：
-
-```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
-```
-
-设置 `NICOKARA_ADMIN_TOKEN=<生成结果>` 后重启 `nicokara-backend`，然后访问
-`https://你的域名/admin`。Token 只保存在当前浏览器标签页的 `sessionStorage`。
-
-队列健康检查同样需要管理员令牌：
-
-```bash
-curl -fsS \
-  -H "Authorization: Bearer $NICOKARA_ADMIN_TOKEN" \
-  http://127.0.0.1:8000/api/v1/admin/queue-health
-```
-
-监控接口不会返回来源 `client_key`、API Key、素材路径或管理员令牌。
-
-## 测试
-
-当前测试基线为后端 128 项、前端 20 个测试文件共 69 项；前端覆盖 API 错误解析、服务器错误反馈、
-本地 API 代理、任务阶段、排队信息、任务取消、管理员监控、轮询退避和界面文案。后端测试需要先安装
-`.[ai,dev]` 依赖。
-
-```powershell
-cd backend
-python -m pytest
-
-cd ..\frontend
-npm.cmd run lint
-npm.cmd test
-npm.cmd run build
-```
-
-## 当前边界
-
-- 队列和来源并发控制目前是单进程实现；多后端实例需要引入 Redis/Celery 等共享服务。
-- 当前前端要求用户提供歌词，无歌词模式尚未接入前端流程。
-- 当前没有用户账号和任务权限隔离，公开部署前应限制访问范围并启用 HTTPS。
-- 后端应保持单进程，避免 SQLite、内存队列和来源并发状态不一致。
-- 原始 FFmpeg、模型路径及外部 API 错误只应写入服务器日志，不直接返回给用户。
-
-## 实现细节
-
-歌词文本和歌词文件只能选择一种。前端在当前“有歌词模式”下要求至少提供一种歌词；后端保留歌词可选能力，方便未来接入无歌词模式。
-
-上传后任务会依次经过：
-
-```text
-UPLOADED / UPLOAD_COMPLETE
-→ PROCESSING / EXTRACTING_AUDIO
-→ PROCESSING / REMOVING_VOCALS       # 仅 OFF VOCAL
-→ PROCESSING / TRANSCRIBING
-→ PROCESSING / PROCESSING_LYRICS
-→ PROCESSING / ALIGNING
-→ PROCESSING / GENERATING_SUBTITLE
-→ PROCESSING / RENDERING_VIDEO
-→ COMPLETED / VIDEO_RENDERING_COMPLETE
-```
-
-失败状态为 `FAILED`。错误码会区分人声分离、音频提取、Whisper 转录、歌词处理、
-时间轴对齐、字幕生成、视频合成和服务重启中断。后端只返回可公开的阶段信息，前端再
-根据错误类型展示原因、解决方案、是否可重试、HTTP 状态码和任务 ID。
-
-前端不会直接显示 `REMOVING_VOCALS`、`RENDERING_VIDEO` 等内部代码，而是显示
-“分离人声”“识别歌声”“处理歌词”“对齐时间”“生成字幕”“合成视频”等用户可读进度。
-
-成功任务会生成：
-
-```text
-storage/jobs/{job_id}/
-├── input.mp4
-├── lyrics.txt
-├── audio.wav
-├── audio_instrumental.wav      # 仅 OFF VOCAL
-├── transcript.json
-├── lyrics_processed.json
-├── timeline.json
-├── lyrics.ass
-└── final_karaoke.mp4
-```
-
-转录结果接口：
-
-```text
-GET /api/v1/jobs/{job_id}/transcript
-GET /api/v1/jobs/{job_id}/lyrics
-GET /api/v1/jobs/{job_id}/timeline
-GET /api/v1/jobs/{job_id}/subtitle
-GET /api/v1/jobs/{job_id}/result
-GET /api/v1/jobs/{job_id}/download
-```
-
-`timeline.json` 按歌词行、Ruby token 和 Mora 三层保存 `start_ms`、`end_ms`、匹配状态与置信度。Whisper 漏掉的 Mora 会在前后时间锚点之间插值，并在文档中写入 `partial_alignment` 警告。
-
-`lyrics.ass` 使用 UTF-8 BOM 保存。主歌词采用 `Karaoke` 样式与逐字符 `\kf` 标签；含汉字 token 的读音通过独立 `Ruby` 图层定位在歌词上方。默认画布为 1920×1080，字体为 `Noto Sans CJK JP`。
-
-`/result` 以内联 `video/mp4` 响应支持浏览器 Range 请求，用于结果页预览；`/download` 以附件方式下载 `final_karaoke.mp4`。
-
-## DeepSeek 与本地降级
-
-不配置 API Key 时，歌词不会离开本机，系统使用 pykakasi 生成读音。辞典式读音无法可靠判断所有歌词上下文和多音字，因此结果包含 `local_reading_may_be_inaccurate` 警告。
-
-如需使用 DeepSeek，可在根目录创建 `.env`：
-
-```text
-DEEPSEEK_API_KEY=
-```
-
-使用 DeepSeek 时只有歌词文本会发送到 API，音频和视频仍在本地处理。如果 DeepSeek 请求失败或返回的 token 无法还原歌词，系统会自动回退到本地处理，并在结果中记录 `deepseek_fallback` 警告。
-
-## Phase 8 运行保护
-
-- SQLite 使用 WAL、5 秒 busy timeout 和任务状态索引，降低上传、轮询和后台处理之间的锁竞争。
-- 服务启动时，意外中断的 `PROCESSING` 任务会标记为 `FAILED / SERVICE_RESTARTED`；全部尚未开始的 `UPLOADED` 任务会按原顺序逐步恢复入队，不受内存队列瞬时容量影响。
-- 默认每小时自动扫描一次，并删除超过 24 小时的成功或失败任务目录及数据库记录。处理中任务不会被删除。
-- 本地队列默认最多等待 4 个任务；上传写盘前会原子预留队列容量，队列满时返回 `503` 和 `Retry-After`。
-- 默认每个来源最多同时拥有 2 个等待或处理中的任务，避免单个用户占满整个队列。
-- 已完成的任务不计入次数限制；同一来源可以继续创建新任务，不设置每小时上传次数上限。
-- Nginx 转发地址只在请求来自可信代理时使用，并从代理链右侧识别真实来源，防止伪造请求头绕过来源并发控制。
-- 任务接口返回排队位置和等待总数；等待任务可立即退出队列，处理中的任务可取消后续生成步骤；前端在排队、后台标签页或连续请求失败时自动降低轮询频率。
-- 下载接口会验证数据库中的文件路径必须位于对应任务目录，防止读取任务目录外的文件。
-- 对外任务错误只返回阶段化提示，原始 FFmpeg、模型路径和 API 错误仅写入服务日志。
-- 前端将公开错误转换为服务器场景的详细反馈，并为常见 413、429、502、503、504、
-  任务过期和各处理阶段失败提供对应解决方案。
-- API 响应包含 `nosniff`、禁止 iframe、严格 Referrer Policy 和 Permissions Policy。
-- Docker Compose 启用自动重启、init、禁止提权与 10 MB × 3 日志轮转。
-
-## 当前边界与后续工作
-
-- 当前视频处理队列和来源并发控制是单进程实现。部署多个后端实例前，需要将任务队列及并发预留迁移到
-  Redis/Celery 等共享服务。
-- 当前前端要求用户提供歌词；后端保留歌词可选能力，但无歌词模式尚未接入前端流程。
-- 当前没有用户账号和任务权限隔离，不适合直接作为允许任意用户上传文件的公共服务。
-- 公开部署应启用 HTTPS、限制访问范围，并更换任何已经暴露过的 API Key。
-- 本地代码修改不会自动同步到服务器；每次发布仍需重新构建前端、打包发布目录、上传并
-  切换 `/data/nicokara/current`，完整步骤见 [DEPLOYMENT_LOCAL_BUILD.md](./DEPLOYMENT_LOCAL_BUILD.md)。
-
-## 进一步文档
-
-- [云端浏览器本地处理设计](./MOBILE_BROWSER_PROCESSING.md)
-
-- [本地构建与无 Docker 部署指南](./DEPLOYMENT_LOCAL_BUILD.md)
+不要随意添加 `-v`。`docker compose down -v` 会删除 Docker 数据卷中的数据库和模型缓存，下次需要重新下载和初始化。
