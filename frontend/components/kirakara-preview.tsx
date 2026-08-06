@@ -3,6 +3,7 @@
 import { Film, FolderOpen, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
@@ -11,7 +12,6 @@ import {
   kirakaraSupportMessage,
   type KirakaraCapabilities,
 } from "@/lib/kirakara-capabilities";
-import { drawKirakaraFrame } from "@/lib/kirakara-canvas";
 import {
   DEFAULT_KIRAKARA_STYLE,
   loadKirakaraStyle,
@@ -21,6 +21,7 @@ import {
 import {
   activeKirakaraFrame,
   toKirakaraTimeline,
+  type KirakaraFrame,
   type KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
 import { getLocalVideo, rememberLocalVideo } from "@/lib/local-media-session";
@@ -39,11 +40,11 @@ export function KirakaraPreview({
   onCloudRenderQueued?: (job: Job) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrame = useRef<number | null>(null);
   const [video, setVideo] = useState<File | null>(() => getLocalVideo(jobId));
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<KirakaraTimeline | null>(null);
+  const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
   const [capabilities, setCapabilities] =
@@ -97,24 +98,19 @@ export function KirakaraPreview({
     };
   }, [video]);
 
-  const drawFrame = useCallback(() => {
+  const updateFrame = useCallback(() => {
     const videoElement = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!videoElement || !canvas) return;
-    const width = videoElement.videoWidth || 1280;
-    const height = videoElement.videoHeight || 720;
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    drawKirakaraFrame(
-      context,
+    if (!videoElement) return;
+    setFrame(
       timeline
         ? activeKirakaraFrame(timeline, videoElement.currentTime * 1000)
         : null,
-      { style },
     );
-  }, [style, timeline]);
+  }, [timeline]);
+
+  useEffect(() => {
+    updateFrame();
+  }, [updateFrame]);
 
   function updateStyle(nextStyle: KirakaraStyle) {
     setStyle(nextStyle);
@@ -131,13 +127,13 @@ export function KirakaraPreview({
   const startDrawing = useCallback(() => {
     stopDrawing();
     const tick = () => {
-      drawFrame();
+      updateFrame();
       if (!videoRef.current?.paused) {
         animationFrame.current = requestAnimationFrame(tick);
       }
     };
     tick();
-  }, [drawFrame, stopDrawing]);
+  }, [stopDrawing, updateFrame]);
 
   useEffect(() => stopDrawing, [stopDrawing]);
 
@@ -156,7 +152,7 @@ export function KirakaraPreview({
     const element = videoRef.current;
     if (!element) return;
     element.currentTime = milliseconds / 1000;
-    drawFrame();
+    updateFrame();
   }
 
   return (
@@ -198,23 +194,17 @@ export function KirakaraPreview({
                 playsInline
                 preload="metadata"
                 className="size-full object-contain"
-                onLoadedMetadata={drawFrame}
-                onTimeUpdate={drawFrame}
-                onSeeked={drawFrame}
+                onLoadedMetadata={updateFrame}
+                onTimeUpdate={updateFrame}
+                onSeeked={updateFrame}
                 onPlay={startDrawing}
                 onPause={() => {
                   stopDrawing();
-                  drawFrame();
+                  updateFrame();
                 }}
               />
             )}
-            <canvas
-              ref={canvasRef}
-              width={1280}
-              height={720}
-              className="pointer-events-none absolute inset-0 size-full object-contain"
-              aria-hidden="true"
-            />
+            <KirakaraDomFrame frame={frame} style={style} />
             {!timeline && !timelineError && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">
                 <LoaderCircle className="size-4 animate-spin" />

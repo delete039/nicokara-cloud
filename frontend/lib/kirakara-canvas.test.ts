@@ -67,8 +67,13 @@ describe("drawKirakaraFrame", () => {
 
     drawKirakaraFrame(canvas, frame);
 
-    expect(canvas.fillText).toHaveBeenCalledWith("今日", 148, 430);
-    expect(canvas.fillText).toHaveBeenCalledWith("歌", 1052, 563);
+    expect(canvas.fillText).toHaveBeenCalledWith("今", 148.5, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("日", 197.5, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("歌", 1040.5, expect.any(Number));
+    const upperCall = canvas.fillText.mock.calls.find(([text]) => text === "今");
+    const lowerCall = canvas.fillText.mock.calls.find(([text]) => text === "歌");
+    expect(upperCall?.[2]).toBeCloseTo(492.72, 2);
+    expect(lowerCall?.[2]).toBeCloseTo(625.72, 2);
     expect(canvas.fillRect).not.toHaveBeenCalled();
   });
 
@@ -77,11 +82,15 @@ describe("drawKirakaraFrame", () => {
 
     drawKirakaraFrame(canvas, frame);
 
-    expect(canvas.fillText).toHaveBeenCalledWith("きょう", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("き", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("ょ", 173, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("う", 218, expect.any(Number));
+    const rubyCall = canvas.fillText.mock.calls.find(([text]) => text === "き");
+    expect(rubyCall?.[2]).toBeCloseTo(421.58, 2);
     expect(
       canvas.fillText.mock.calls.filter(([text]) => text === "も"),
-    ).toHaveLength(1);
-    expect(canvas.rect).toHaveBeenCalledWith(148, expect.any(Number), 40, expect.any(Number));
+    ).toHaveLength(2);
+    expect(canvas.rect).toHaveBeenCalled();
   });
 
   it("can overlay lyrics without clearing an already-drawn video frame", () => {
@@ -91,6 +100,52 @@ describe("drawKirakaraFrame", () => {
 
     expect(canvas.clearRect).not.toHaveBeenCalled();
     expect(canvas.fillText).toHaveBeenCalled();
+  });
+
+  it("clips every base character independently instead of wiping a whole token", () => {
+    const canvas = context();
+    const characterFrame = {
+      lines: [
+        {
+          slot: "upper" as const,
+          text: "東京",
+          units: [
+            {
+              text: "東京",
+              progress: 0.625,
+              characters: [
+                { text: "東", progress: 1 },
+                { text: "京", progress: 0.25 },
+              ],
+              ruby: [],
+            },
+          ],
+        },
+      ],
+    } as unknown as KirakaraFrame;
+
+    drawKirakaraFrame(canvas, characterFrame);
+
+    expect(canvas.rect).toHaveBeenCalledTimes(2);
+    expect(canvas.rect.mock.calls[0][0]).toBe(64);
+    expect(canvas.rect.mock.calls[1][0]).toBe(113);
+    expect(canvas.rect.mock.calls[0][0]).not.toBe(canvas.rect.mock.calls[1][0]);
+  });
+
+  it("uses Kirakara's expanded Canvas stroke width", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [
+        {
+          slot: "upper",
+          text: "歌",
+          units: [{ text: "歌", progress: 0, ruby: [] }],
+        },
+      ],
+    });
+
+    expect(canvas.lineWidth).toBeCloseTo(11, 5);
   });
 
   it("measures the kanji base with the main font before centering ruby", () => {
@@ -116,7 +171,7 @@ describe("drawKirakaraFrame", () => {
       ],
     });
 
-    expect(canvas.fillText).toHaveBeenCalledWith("きょう", 153, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("き", 152.5, expect.any(Number));
   });
 
   it("isolates ruby that is wider than its kanji and shifts following text", () => {
@@ -143,8 +198,8 @@ describe("drawKirakaraFrame", () => {
       ],
     });
 
-    expect(canvas.fillText).toHaveBeenCalledWith("火", 138, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("ほのお", 128, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("山", 188, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("火", 143, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("ほ", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("山", 207, expect.any(Number));
   });
 });

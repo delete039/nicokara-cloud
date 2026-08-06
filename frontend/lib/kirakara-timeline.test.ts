@@ -131,4 +131,36 @@ describe("activeKirakaraFrame", () => {
     expect(upper?.units[0].progress).toBeCloseTo(0.625);
     expect(upper?.units[1].progress).toBe(0);
   });
+
+  it("maps mora timing to one independent progress value per base character", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("東京", "とうきょう", 1000, 1400, [
+          {
+            surface: "東京",
+            reading: "とうきょう",
+            start_ms: 1000,
+            end_ms: 1400,
+            confidence: 1,
+            moras: [
+              { reading: "とう", start_ms: 1000, end_ms: 1200, matched: true, confidence: 1 },
+              { reading: "きょう", start_ms: 1200, end_ms: 1400, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const frame = activeKirakaraFrame(toKirakaraTimeline(source), 1250);
+    const unit = frame?.lines[0].units[0] as
+      | { characters?: Array<{ text: string; progress: number }> }
+      | undefined;
+
+    expect(unit?.characters).toEqual([
+      { text: "東", progress: 1 },
+      { text: "京", progress: 0.25 },
+    ]);
+  });
 });

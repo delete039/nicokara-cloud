@@ -33,7 +33,7 @@
 - 增加电脑和手机浏览器能力检测，以及 `LOCAL`、`AUDIO_ONLY`、`REMOTE_VIDEO` 自动选路。
 - 对 300 MB 以内素材优先在浏览器提取音频，避免上传完整视频。
 - 增加浏览器音频任务接口、模型清单与缓存接口、完全本地任务状态机。
-- 增加 Kirakara Canvas 预览和本地媒体会话恢复能力。
+- 增加 Kirakara DOM 实时预览和本地媒体会话恢复能力。
 
 ### v0.2.0 - 2026-08-05
 
@@ -88,7 +88,7 @@
 | 模块 | 技术与职责 |
 |---|---|
 | 前端 | React、TypeScript、vinext、Tailwind CSS；负责上传、排队、进度、预览和本地导出 |
-| 浏览器媒体 | Mediabunny、Canvas、WebCodecs；负责本地音频提取、Kirakara 预览和 MP4 导出 |
+| 浏览器媒体 | Mediabunny、DOM、Canvas、WebCodecs；负责本地音频提取、Kirakara DOM 预览和 Canvas MP4 导出 |
 | 后端 | FastAPI、SQLite；负责任务、队列、上传票据、管理监控和产物接口 |
 | 音频与识别 | FFmpeg、audio-separator/UVR、faster-whisper、pykakasi |
 | 字幕与视频 | Mora 时间轴、Ruby 注音、Kirakara 双行布局、FFmpeg/libass |
@@ -107,6 +107,8 @@ nicokara-cloud/
 |-- .env.example              可选环境变量示例
 `-- CHANGELOG.md              完整更新日志
 ```
+
+Kirakara 渲染逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 本地默认访问关系：
 

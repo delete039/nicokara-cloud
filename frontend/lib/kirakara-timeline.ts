@@ -70,7 +70,13 @@ export type KirakaraTimeline = {
 export type KirakaraFrameUnit = {
   text: string;
   progress: number;
+  characters?: KirakaraFrameCharacter[];
   ruby: KirakaraRuby[];
+};
+
+export type KirakaraFrameCharacter = {
+  text: string;
+  progress: number;
 };
 
 export type KirakaraFrameLine = {
@@ -196,27 +202,56 @@ function displayEnd(lines: KirakaraLine[], index: number): number {
   return lines[index].endMs + EXIT_HOLD_MS;
 }
 
-function unitProgress(unit: KirakaraRenderUnit, playbackMs: number): number {
-  if (playbackMs <= unit.startMs) return 0;
-  if (playbackMs >= unit.endMs) return 1;
+function clampProgress(progress: number): number {
+  return Math.min(1, Math.max(0, progress));
+}
+
+function unitSequencePosition(unit: KirakaraRenderUnit, playbackMs: number): {
+  position: number;
+  segmentCount: number;
+} {
   if (unit.moras.length === 0) {
     const duration = unit.endMs - unit.startMs;
-    return duration > 0 ? (playbackMs - unit.startMs) / duration : 0;
+    const position = duration > 0
+      ? clampProgress((playbackMs - unit.startMs) / duration)
+      : playbackMs >= unit.endMs ? 1 : 0;
+    return { position, segmentCount: 1 };
   }
 
-  let progress = 0;
-  for (const mora of unit.moras) {
-    if (playbackMs >= mora.endMs) {
-      progress += 1;
-      continue;
+  for (let index = 0; index < unit.moras.length; index += 1) {
+    const mora = unit.moras[index];
+    const startMs = Math.max(unit.startMs, mora.startMs);
+    const endMs = Math.min(unit.endMs, Math.max(startMs, mora.endMs));
+    if (playbackMs <= startMs) {
+      return { position: index, segmentCount: unit.moras.length };
     }
-    if (playbackMs > mora.startMs) {
-      const duration = mora.endMs - mora.startMs;
-      progress += duration > 0 ? (playbackMs - mora.startMs) / duration : 0;
+    if (playbackMs < endMs) {
+      const duration = endMs - startMs;
+      return {
+        position: index + (duration > 0 ? (playbackMs - startMs) / duration : 1),
+        segmentCount: unit.moras.length,
+      };
     }
-    break;
   }
-  return Math.min(1, Math.max(0, progress / unit.moras.length));
+
+  return { position: unit.moras.length, segmentCount: unit.moras.length };
+}
+
+function unitFrame(unit: KirakaraRenderUnit, playbackMs: number): KirakaraFrameUnit {
+  const characters = [...unit.text];
+  const { position, segmentCount } = unitSequencePosition(unit, playbackMs);
+  const progress = clampProgress(position / segmentCount);
+  const characterPosition = progress * characters.length;
+
+  return {
+    text: unit.text,
+    ruby: unit.ruby ?? kanjiRuby(unit.text, unit.reading),
+    progress,
+    characters: characters.map((text, index) => ({
+      text,
+      progress: clampProgress(characterPosition - index),
+    })),
+  };
 }
 
 export function activeKirakaraFrame(
@@ -234,11 +269,7 @@ export function activeKirakaraFrame(
       return {
         slot: index % 2 === 0 ? "upper" : "lower",
         text: line.text,
-        units: line.units.map((unit) => ({
-          text: unit.text,
-          ruby: unit.ruby ?? kanjiRuby(unit.text, unit.reading),
-          progress: unitProgress(unit, playbackMs),
-        })),
+        units: line.units.map((unit) => unitFrame(unit, playbackMs)),
       };
     })
     .filter((line): line is KirakaraFrameLine => line !== null)

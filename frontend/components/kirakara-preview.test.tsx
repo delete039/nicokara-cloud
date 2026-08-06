@@ -39,4 +39,21 @@ describe("KirakaraPreview", () => {
 
     expect(html.match(/Kirakara 引擎/g)).toHaveLength(1);
   });
+
+  it("uses a DOM lyric overlay for realtime preview instead of canvas", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-dom-preview", new File(["video"], "song.mp4"));
+
+    const html = renderToStaticMarkup(
+      <preview.KirakaraPreview
+        jobId="job-dom-preview"
+        expectedVideoName="song.mp4"
+      />,
+    );
+
+    expect(html).toContain('data-kirakara-dom-preview="true"');
+    expect(html).not.toContain("<canvas");
+  });
 });
