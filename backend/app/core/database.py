@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterator
 
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -45,6 +49,16 @@ CREATE TABLE IF NOT EXISTS upload_tickets (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL
 );
 
 """
@@ -134,6 +148,12 @@ class Database:
                 """
                 CREATE INDEX IF NOT EXISTS idx_upload_tickets_client_status
                 ON upload_tickets(client_key, status)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_admin_audit_created
+                ON admin_audit_events(created_at DESC)
                 """
             )
 
@@ -543,6 +563,19 @@ class Database:
                 if current["status"] == "CANCELED":
                     raise JobCanceledError(f"Job was canceled: {job_id}")
                 raise RuntimeError(f"Job state was not updated: {job_id}")
+        logger.info(
+            json.dumps(
+                {
+                    "event": "job_state_changed",
+                    "job_id": job_id,
+                    "status": status,
+                    "stage": stage,
+                    "progress": progress,
+                    "error_code": error_code,
+                },
+                ensure_ascii=True,
+            )
+        )
 
     def cancel_job(self, job_id: str) -> bool:
         with self.connect() as connection:
@@ -580,6 +613,123 @@ class Database:
                 (status,),
             ).fetchone()
         return int(row[0])
+
+    def count_jobs_by_status(self) -> dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status"
+            ).fetchall()
+        return {row["status"]: int(row["count"]) for row in rows}
+
+    def count_upload_tickets_by_status(self) -> dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM upload_tickets
+                GROUP BY status
+                """
+            ).fetchall()
+        return {row["status"]: int(row["count"]) for row in rows}
+
+    def list_active_upload_tickets(self, *, limit: int = 200) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, status, video_name, video_size_bytes, job_id,
+                       created_at, updated_at, last_seen_at
+                FROM upload_tickets
+                WHERE status IN ('WAITING', 'READY', 'UPLOADING')
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_monitored_jobs(self, *, limit: int = 200) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, status, stage, progress, original_video_name,
+                       video_size_bytes, error_code, error_message,
+                       created_at, updated_at
+                FROM jobs
+                WHERE status IN ('UPLOADED', 'PROCESSING', 'FAILED')
+                ORDER BY
+                    CASE status
+                        WHEN 'PROCESSING' THEN 0
+                        WHEN 'UPLOADED' THEN 1
+                        ELSE 2
+                    END,
+                    created_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def requeue_job(self, job_id: str) -> dict | None:
+        timestamp = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'UPLOADED',
+                    stage = 'REQUEUED_BY_ADMIN',
+                    progress = 0,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status IN ('FAILED', 'CANCELED')
+                """,
+                (timestamp, job_id),
+            )
+        if cursor.rowcount != 1:
+            return None
+        return self.get_job(job_id)
+
+    def record_admin_audit(
+        self,
+        *,
+        action: str,
+        target_type: str,
+        target_id: str,
+        outcome: str,
+        details: str | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO admin_audit_events (
+                    action, target_type, target_id, outcome, details, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    action,
+                    target_type,
+                    target_id,
+                    outcome,
+                    details,
+                    utc_now(),
+                ),
+            )
+
+    def list_admin_audit_events(self, *, limit: int = 50) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, action, target_type, target_id, outcome,
+                       details, created_at
+                FROM admin_audit_events
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def queue_metrics(self, job_id: str) -> tuple[int | None, int | None]:
         with self.connect() as connection:

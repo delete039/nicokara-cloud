@@ -190,6 +190,7 @@ NICOKARA_TRUSTED_PROXY_HOSTS=127.0.0.1,::1
 NICOKARA_MAX_PENDING_JOBS=4
 NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
 NICOKARA_PROCESSING_WORKER_COUNT=1
+NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 NICOKARA_PROCESSING_ENABLED=true
 NICOKARA_FFMPEG_PATH=ffmpeg
 NICOKARA_WHISPER_MODEL=/data/nicokara/shared/models/faster-whisper-small
@@ -199,6 +200,7 @@ NICOKARA_VOCAL_REMOVAL_BACKEND=mdx
 NICOKARA_VOCAL_REMOVAL_MODEL=UVR_MDXNET_KARA_2.onnx
 NICOKARA_VOCAL_REMOVAL_MODEL_DIR=/data/nicokara/shared/models/audio-separator
 NICOKARA_DEEPSEEK_API_KEY=
+NICOKARA_ADMIN_TOKEN=请替换为随机管理员令牌
 ```
 
 有域名和 HTTPS 时，必须把 `NICOKARA_ALLOWED_ORIGINS` 改为真实地址，例如
@@ -207,6 +209,15 @@ NICOKARA_DEEPSEEK_API_KEY=
 `NICOKARA_TRUSTED_PROXY_HOSTS` 只填写实际反向代理地址或网段。默认部署中 Nginx
 与后端位于同一台服务器，因此使用 `127.0.0.1,::1`。不要填写 `0.0.0.0/0`，否则客户端
 可以伪造转发地址绕过按来源限流。
+
+使用以下命令生成管理员令牌，将输出写入 `NICOKARA_ADMIN_TOKEN`，不要提交到 Git：
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+设置后重启后端，通过 `https://你的域名/admin` 进入监控页面。队列健康探针为
+`/api/v1/admin/queue-health`，请求必须携带 `Authorization: Bearer <令牌>`。
 
 ## 7. systemd
 

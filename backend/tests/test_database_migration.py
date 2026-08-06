@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -43,3 +45,42 @@ def test_initialize_adds_phase3_columns_to_phase2_database(tmp_path: Path) -> No
     assert "timeline_path" in columns
     assert "ass_path" in columns
     assert "output_path" in columns
+
+
+def test_job_state_changes_emit_structured_log_events(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "job-1"
+    job_dir.mkdir()
+    video_path = job_dir / "input.mp4"
+    video_path.write_bytes(b"video")
+    database.create_job(
+        job_id="job-1",
+        original_video_name="song.mp4",
+        video_size_bytes=5,
+        video_sha256="sha",
+        video_path=video_path,
+        lyrics_source="text",
+        lyrics_path=None,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.core.database"):
+        database.update_job_state(
+            "job-1",
+            status="PROCESSING",
+            stage="TRANSCRIBING",
+            progress=40,
+        )
+
+    event = json.loads(caplog.records[-1].message)
+    assert event == {
+        "event": "job_state_changed",
+        "job_id": "job-1",
+        "status": "PROCESSING",
+        "stage": "TRANSCRIBING",
+        "progress": 40,
+        "error_code": None,
+    }

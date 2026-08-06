@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import importlib
 import threading
 
@@ -167,3 +168,50 @@ def test_runner_cancels_a_queued_job_and_releases_capacity() -> None:
         runner.queue.task_done()
 
     asyncio.run(scenario())
+
+
+def test_runner_snapshot_reports_heartbeat_and_active_jobs() -> None:
+    runner_module = importlib.import_module("app.tasks.runner")
+
+    class BlockingPipeline:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def process(self, job_id: str) -> None:
+            self.started.set()
+            self.release.wait(2)
+
+    async def scenario() -> tuple[dict, dict]:
+        pipeline = BlockingPipeline()
+        runner = runner_module.LocalTaskRunner(
+            pipeline,
+            heartbeat_interval_seconds=0.01,
+        )
+        await runner.start()
+        started_snapshot = runner.snapshot()
+        await runner.enqueue("job-1")
+        assert await asyncio.to_thread(pipeline.started.wait, 1)
+        await asyncio.sleep(0.03)
+        busy_snapshot = runner.snapshot()
+        pipeline.release.set()
+        await runner.stop()
+        return started_snapshot, busy_snapshot
+
+    started_snapshot, busy_snapshot = asyncio.run(scenario())
+
+    assert started_snapshot["healthy"] is True
+    assert started_snapshot["worker_count"] == 1
+    assert started_snapshot["alive_workers"] == 1
+    assert started_snapshot["active_jobs"] == []
+    assert datetime.fromisoformat(started_snapshot["last_heartbeat_at"])
+
+    assert busy_snapshot["healthy"] is True
+    assert busy_snapshot["active_jobs"] == [
+        {
+            "worker_index": 0,
+            "job_id": "job-1",
+            "started_at": busy_snapshot["active_jobs"][0]["started_at"],
+        }
+    ]
+    assert busy_snapshot["queued_in_memory"] == 0

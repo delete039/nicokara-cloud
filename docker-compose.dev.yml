@@ -29,6 +29,7 @@ services:
       NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS: ${NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS:-120}
       NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS: ${NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS:-3600}
       NICOKARA_PROCESSING_WORKER_COUNT: ${NICOKARA_PROCESSING_WORKER_COUNT:-1}
+      NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS:-5}
       NICOKARA_CLEANUP_ENABLED: ${NICOKARA_CLEANUP_ENABLED:-true}
       NICOKARA_JOB_RETENTION_HOURS: ${NICOKARA_JOB_RETENTION_HOURS:-24}
       NICOKARA_CLEANUP_INTERVAL_SECONDS: ${NICOKARA_CLEANUP_INTERVAL_SECONDS:-3600}
@@ -45,6 +46,7 @@ services:
       NICOKARA_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       NICOKARA_DEEPSEEK_BASE_URL: https://api.deepseek.com
       NICOKARA_DEEPSEEK_MODEL: deepseek-v4-flash
+      NICOKARA_ADMIN_TOKEN: ${NICOKARA_ADMIN_TOKEN:-}
     volumes:
       - ./backend/app:/app/backend/app
       - ./backend/tests:/app/backend/tests
@@ -76,14 +78,19 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
-    image: node:24-alpine
+    image: node:24-bookworm-slim
     working_dir: /app
     command:
       - sh
       - -c
       - |
-        if [ ! -d node_modules/.bin ]; then npm ci; fi
-        npx next dev -H 0.0.0.0 -p 3000
+        LOCK_HASH="$$(sha256sum package-lock.json | cut -d ' ' -f 1)"
+        MARKER="node_modules/.nicokara-bookworm-$${LOCK_HASH}"
+        if [ ! -f "$${MARKER}" ]; then
+          npm ci
+          touch "$${MARKER}"
+        fi
+        exec npm run dev -- --hostname 0.0.0.0 --port 3000
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
       NICOKARA_DEV_API_ORIGIN: http://backend:8000

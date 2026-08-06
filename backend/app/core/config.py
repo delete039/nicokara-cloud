@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     upload_ticket_timeout_seconds: int = 120
     upload_ticket_upload_timeout_seconds: int = 3600
     processing_worker_count: int = 1
+    worker_heartbeat_interval_seconds: float = 5
     cleanup_enabled: bool = True
     job_retention_hours: int = 24
     cleanup_interval_seconds: int = 3600
@@ -58,10 +59,11 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_timeout_seconds: float = 60
+    admin_token: SecretStr | None = None
 
-    @field_validator("deepseek_api_key", mode="before")
+    @field_validator("deepseek_api_key", "admin_token", mode="before")
     @classmethod
-    def empty_deepseek_key_is_disabled(cls, value):
+    def empty_secret_is_disabled(cls, value):
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -81,6 +83,13 @@ class Settings(BaseSettings):
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("worker_heartbeat_interval_seconds")
+    @classmethod
+    def positive_heartbeat_interval(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("must be greater than zero")
         return value

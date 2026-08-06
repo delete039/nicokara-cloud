@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jobs import router as jobs_router
 from app.api.jobs import upload_tickets_router
+from app.api.admin import router as admin_router
 from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
 from app.alignment.aligner import LyricTimelineAligner
@@ -134,6 +135,9 @@ def create_app(
                 ),
                 max_pending_jobs=resolved_settings.max_pending_jobs,
                 worker_count=resolved_settings.processing_worker_count,
+                heartbeat_interval_seconds=(
+                    resolved_settings.worker_heartbeat_interval_seconds
+                ),
             )
         app.state.settings = resolved_settings
         app.state.database = database
@@ -174,7 +178,7 @@ def create_app(
 
     app = FastAPI(
         title=resolved_settings.app_name,
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -200,6 +204,7 @@ def create_app(
         upload_tickets_router,
         prefix=resolved_settings.api_prefix,
     )
+    app.include_router(admin_router, prefix=resolved_settings.api_prefix)
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
     def health() -> HealthResponse:

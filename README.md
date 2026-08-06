@@ -34,6 +34,7 @@
 | 视频合成 | 已完成 | FFmpeg/libass 烧录、H.264 MP4、在线播放和下载 |
 | 前端反馈 | 已完成 | 中文进度、服务器错误分类、详细原因、解决方案和技术信息 |
 | 运行保护 | 已完成 | 原子队列容量、来源并发上限、实时排队位置、任务取消、重启恢复和自动清理 |
+| 后台监控 | 已完成 | 管理员认证、上传/处理队列、worker 心跳、资源指标、队列操作和审计记录 |
 | 部署 | 已完成 | Docker Compose；Linux 下的 Nginx + systemd + `/data/nicokara` 发布结构 |
 
 ## 当前能力详情
@@ -74,10 +75,11 @@
 - `final_karaoke.mp4` 下载接口
 - Docker 内置 Noto CJK 日文字体
 - Docker Compose 本地运行环境
+- 受管理员令牌保护的 `/admin` 监控页面和队列健康探针
 
 ## 当前开发重点
 
-来源并发控制、顺序处理、排队位置和任务取消已经完成。下一阶段主要优化方向包括：
+上传与处理队列监控、worker 心跳和管理员控制已经完成。下一阶段主要优化方向包括：
 
 - 在真实多人上传场景中持续压测并调整队列及同时任务参数
 - 增加任务历史、用户隔离和存储配额
@@ -317,6 +319,7 @@ NICOKARA_TRUSTED_PROXY_HOSTS=127.0.0.1,::1
 NICOKARA_MAX_PENDING_JOBS=4
 NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
 NICOKARA_PROCESSING_ENABLED=true
+NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 NICOKARA_FFMPEG_PATH=ffmpeg
 NICOKARA_WHISPER_MODEL=/data/nicokara/shared/models/faster-whisper-small
 NICOKARA_WHISPER_DEVICE=cpu
@@ -325,6 +328,7 @@ NICOKARA_VOCAL_REMOVAL_BACKEND=mdx
 NICOKARA_VOCAL_REMOVAL_MODEL=UVR_MDXNET_KARA_2.onnx
 NICOKARA_VOCAL_REMOVAL_MODEL_DIR=/data/nicokara/shared/models/audio-separator
 NICOKARA_DEEPSEEK_API_KEY=
+NICOKARA_ADMIN_TOKEN=请替换为随机管理员令牌
 ```
 
 使用域名或 HTTPS 时，将 `NICOKARA_ALLOWED_ORIGINS` 改为浏览器实际访问地址。
@@ -371,6 +375,7 @@ curl -I http://SERVER_IP/
 | `NICOKARA_UPLOAD_TICKET_TIMEOUT_SECONDS` | `120` | 上传前排队号无轮询保活后的过期秒数 |
 | `NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS` | `3600` | 已轮到上传但长时间未完成后的过期秒数 |
 | `NICOKARA_PROCESSING_WORKER_COUNT` | `1` | 同一后端进程内的后台处理 worker 数 |
+| `NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS` | `5` | worker 心跳刷新间隔秒数 |
 | `NICOKARA_CLEANUP_ENABLED` | `true` | 是否自动清理过期终态任务 |
 | `NICOKARA_JOB_RETENTION_HOURS` | `24` | 成功或失败任务的保留小时数 |
 | `NICOKARA_CLEANUP_INTERVAL_SECONDS` | `3600` | 过期任务扫描间隔秒数 |
@@ -386,13 +391,35 @@ curl -I http://SERVER_IP/
 | `NICOKARA_WHISPER_DEVICE` | `cpu` | `cpu` 或 `cuda` |
 | `NICOKARA_VOCAL_REMOVAL_BACKEND` | `mdx` | 人声分离后端 |
 | `NICOKARA_DEEPSEEK_API_KEY` | 空 | DeepSeek Key；为空时使用本地歌词处理 |
+| `NICOKARA_ADMIN_TOKEN` | 空 | 管理员监控令牌；为空时禁用管理接口 |
 
 密钥只应保存在本地 `.env` 或服务器 `/data/nicokara/shared/nicokara.env` 中，不要提交到 Git 仓库。
 
+## 管理员监控
+
+生产环境先生成随机令牌并写入 `/data/nicokara/shared/nicokara.env`：
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+设置 `NICOKARA_ADMIN_TOKEN=<生成结果>` 后重启 `nicokara-backend`，然后访问
+`https://你的域名/admin`。Token 只保存在当前浏览器标签页的 `sessionStorage`。
+
+队列健康检查同样需要管理员令牌：
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $NICOKARA_ADMIN_TOKEN" \
+  http://127.0.0.1:8000/api/v1/admin/queue-health
+```
+
+监控接口不会返回来源 `client_key`、API Key、素材路径或管理员令牌。
+
 ## 测试
 
-当前测试基线为后端 100 项、前端 8 个测试文件共 34 项；前端覆盖 API 错误解析、服务器错误反馈、
-本地 API 代理、任务阶段、排队信息、任务取消、轮询退避和界面文案。后端测试需要先安装
+当前测试基线为后端 125 项、前端 12 个测试文件共 42 项；前端覆盖 API 错误解析、服务器错误反馈、
+本地 API 代理、任务阶段、排队信息、任务取消、管理员监控、轮询退避和界面文案。后端测试需要先安装
 `.[ai,dev]` 依赖。
 
 ```powershell
