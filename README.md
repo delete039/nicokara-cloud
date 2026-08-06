@@ -35,6 +35,7 @@
 | 前端反馈 | 已完成 | 中文进度、服务器错误分类、详细原因、解决方案和技术信息 |
 | 运行保护 | 已完成 | 原子队列容量、来源并发上限、实时排队位置、任务取消、重启恢复和自动清理 |
 | 后台监控 | 已完成 | 管理员认证、上传/处理队列、worker 心跳、资源指标、队列操作和审计记录 |
+| 浏览器音频优先 | Alpha 可用 | 电脑与手机能力检测、300 MB 规则、纯音频上传、Kirakara Canvas 预览、WebCodecs 本地 MP4 导出和 OFF VOCAL 伴奏替换 |
 | 部署 | 已完成 | Docker Compose；Linux 下的 Nginx + systemd + `/data/nicokara` 发布结构 |
 
 ## 当前能力详情
@@ -81,6 +82,9 @@
 
 上传与处理队列监控、worker 心跳和管理员控制已经完成。下一阶段主要优化方向包括：
 
+- 在 Android Chrome 与 iPhone Safari 上验证音轨兼容率、峰值内存和耗时
+- 接入云端 UVR + FA-Kara/MMS_FA 高精度对齐，并复用现有 Mora 时间轴契约
+- 量化并基准测试 UVR 与日语 CTC 浏览器模型
 - 在真实多人上传场景中持续压测并调整队列及同时任务参数
 - 增加任务历史、用户隔离和存储配额
 - 优化大文件上传和异常恢复能力
@@ -418,7 +422,7 @@ curl -fsS \
 
 ## 测试
 
-当前测试基线为后端 125 项、前端 12 个测试文件共 42 项；前端覆盖 API 错误解析、服务器错误反馈、
+当前测试基线为后端 128 项、前端 20 个测试文件共 69 项；前端覆盖 API 错误解析、服务器错误反馈、
 本地 API 代理、任务阶段、排队信息、任务取消、管理员监控、轮询退避和界面文案。后端测试需要先安装
 `.[ai,dev]` 依赖。
 
@@ -537,5 +541,7 @@ DEEPSEEK_API_KEY=
   切换 `/data/nicokara/current`，完整步骤见 [DEPLOYMENT_LOCAL_BUILD.md](./DEPLOYMENT_LOCAL_BUILD.md)。
 
 ## 进一步文档
+
+- [云端浏览器本地处理设计](./MOBILE_BROWSER_PROCESSING.md)
 
 - [本地构建与无 Docker 部署指南](./DEPLOYMENT_LOCAL_BUILD.md)

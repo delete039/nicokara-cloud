@@ -147,6 +147,8 @@ server {
     server_name $SERVER_NAME;
 
     client_max_body_size 1024m;
+    add_header Cross-Origin-Opener-Policy same-origin always;
+    add_header Cross-Origin-Embedder-Policy require-corp always;
 
     location /api/ {
         proxy_pass http://127.0.0.1:8000;

@@ -629,6 +629,135 @@ def test_pipeline_renders_final_video_after_subtitle(tmp_path: Path) -> None:
     assert job["output_path"] == str(output_path)
 
 
+def test_audio_only_pipeline_stops_after_subtitle_generation(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "audio-job"
+    job_dir.mkdir(parents=True)
+    source_audio = job_dir / "input_audio.wav"
+    source_audio.write_bytes(b"source-audio")
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("物語\n", encoding="utf-8")
+    job_id = "42adf1aa-717f-4ed8-8ec8-3b7d8d153989"
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.mp4",
+        video_size_bytes=100 * 1024 * 1024,
+        video_sha256="audio-sha",
+        video_path=source_audio,
+        lyrics_source="text",
+        lyrics_path=lyrics_path,
+        input_mode="AUDIO_ONLY",
+        source_upload_size_bytes=len(b"source-audio"),
+        source_upload_sha256="audio-sha",
+    )
+
+    class FakeLyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(provider="local", source_text=text)
+
+    class FakeAligner:
+        def align(
+            self,
+            lyrics: LyricDocument,
+            transcript: TranscriptDocument,
+        ) -> LyricTimeline:
+            return LyricTimeline(confidence=1.0)
+
+    class FakeSubtitleGenerator:
+        def generate(self, timeline: LyricTimeline) -> str:
+            return "[Script Info]\nScriptType: v4.00+\n"
+
+    class UnexpectedVideoRenderer:
+        def render(self, *args, **kwargs) -> None:
+            pytest.fail("audio-only jobs must not render video on the server")
+
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        lyric_processor=FakeLyricProcessor(),
+        aligner=FakeAligner(),
+        subtitle_generator=FakeSubtitleGenerator(),
+        video_renderer=UnexpectedVideoRenderer(),
+    )
+
+    pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "SUBTITLE_GENERATED"
+    assert job["stage"] == "SUBTITLE_GENERATION_COMPLETE"
+    assert job["ass_path"] == str(job_dir / "lyrics.ass")
+    assert job["output_path"] is None
+
+
+def test_cloud_render_queue_skips_recognition_and_only_renders_video(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "cloud-render"
+    job_dir.mkdir(parents=True)
+    video_path = job_dir / "input.mp4"
+    video_path.write_bytes(b"video")
+    timeline_path = job_dir / "timeline.json"
+    timeline_path.write_text('{"confidence":1,"lines":[],"warnings":[]}', encoding="utf-8")
+    ass_path = job_dir / "lyrics.ass"
+    ass_path.write_text("[Script Info]\n", encoding="utf-8")
+    job_id = "52adf1aa-717f-4ed8-8ec8-3b7d8d153989"
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.mp4",
+        video_size_bytes=100,
+        video_sha256="video-sha",
+        video_path=video_path,
+        lyrics_source="text",
+        lyrics_path=None,
+        input_mode="AUDIO_ONLY",
+    )
+    database.update_job_state(
+        job_id,
+        status="UPLOADED",
+        stage="CLOUD_RENDER_QUEUED",
+        progress=0,
+        timeline_path=timeline_path,
+        ass_path=ass_path,
+    )
+
+    class UnexpectedProcessor:
+        def __getattr__(self, name):
+            pytest.fail(f"cloud render must not call recognition step: {name}")
+
+    class RecordingRenderer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def render(self, input_path, subtitle_path, output_path, **kwargs) -> None:
+            self.calls.append((input_path, subtitle_path, kwargs))
+            output_path.write_bytes(b"rendered")
+
+    renderer = RecordingRenderer()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=UnexpectedProcessor(),
+        transcriber=UnexpectedProcessor(),
+        video_renderer=renderer,
+    )
+
+    pipeline.process(job_id)
+
+    assert renderer.calls == [(video_path, ass_path, {"vocal_mode": "on", "instrumental_audio_path": None})]
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "COMPLETED"
+    assert job["stage"] == "VIDEO_RENDERING_COMPLETE"
+
+
 def test_pipeline_records_video_rendering_failure(tmp_path: Path) -> None:
     pipeline_module = importlib.import_module("app.tasks.pipeline")
     database = Database(tmp_path / "jobs.sqlite3")

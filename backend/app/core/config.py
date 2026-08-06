@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("data"))
     storage_dir: Path = Field(default=Path("../storage/jobs"))
     max_video_bytes: int = 1024 * 1024 * 1024
+    max_audio_bytes: int = 256 * 1024 * 1024
     max_lyrics_bytes: int = 1024 * 1024
     max_pending_jobs: int = 4
     max_active_jobs_per_client: int = 2
@@ -70,6 +71,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "max_video_bytes",
+        "max_audio_bytes",
         "max_lyrics_bytes",
         "max_pending_jobs",
         "max_active_jobs_per_client",

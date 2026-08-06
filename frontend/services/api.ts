@@ -1,5 +1,7 @@
 import type { Job } from "@/types/job";
 import type { UploadTicket } from "@/types/upload-ticket";
+import type { CloudLyricTimeline } from "@/lib/kirakara-timeline";
+import type { TimelineReviewPayload } from "@/lib/kirakara-review";
 import {
   httpErrorFeedback,
   networkErrorFeedback,
@@ -14,8 +16,17 @@ const UNKNOWN_UPLOAD_RESULT_STATUSES = new Set([0, 524]);
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 const UPLOAD_REQUEST_ATTEMPTS = 3;
 
-type CreateJobInput = {
+export type CreateJobInput = {
   video: File;
+  lyricsText?: string;
+  lyricsFile?: File;
+  vocalMode?: string;
+};
+
+export type CreateAudioOnlyJobInput = {
+  audio: File;
+  originalVideoName: string;
+  originalVideoSizeBytes: number;
   lyricsText?: string;
   lyricsFile?: File;
   vocalMode?: string;
@@ -500,6 +511,70 @@ export function createJobDirect(
   });
 }
 
+export function createAudioOnlyJob(
+  input: CreateAudioOnlyJobInput,
+  onProgress: (progress: number) => void,
+  signal?: AbortSignal,
+): Promise<Job> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("音频上传已取消", "AbortError"));
+      return;
+    }
+    const data = new FormData();
+    data.append("audio", input.audio);
+    data.append("original_video_name", input.originalVideoName);
+    data.append(
+      "original_video_size_bytes",
+      String(input.originalVideoSizeBytes),
+    );
+    data.append("client_submission_id", createClientSubmissionId());
+    if (input.lyricsText?.trim()) {
+      data.append("lyrics_text", input.lyricsText.trim());
+    }
+    if (input.lyricsFile) {
+      data.append("lyrics_file", input.lyricsFile);
+    }
+    if (input.vocalMode) {
+      data.append("vocal_mode", input.vocalMode);
+    }
+
+    const xhr = new XMLHttpRequest();
+    const cleanup = () => {
+      signal?.removeEventListener("abort", abortUpload);
+    };
+    const abortUpload = () => xhr.abort();
+    xhr.open("POST", `${API_BASE}/browser/audio-jobs`);
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText) as Job);
+      } else {
+        reject(xhrRequestError(xhr));
+      }
+    });
+    xhr.addEventListener("error", () => {
+      cleanup();
+      reject(connectionError("upload"));
+    });
+    xhr.addEventListener("abort", () => {
+      cleanup();
+      reject(
+        signal?.aborted
+          ? new DOMException("音频上传已取消", "AbortError")
+          : connectionError("upload"),
+      );
+    });
+    signal?.addEventListener("abort", abortUpload, { once: true });
+    xhr.send(data);
+  });
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   let response: Response;
   try {
@@ -520,6 +595,83 @@ export async function getJob(jobId: string): Promise<Job> {
     );
   }
   return (await response.json()) as Job;
+}
+
+export async function getTimeline(jobId: string): Promise<CloudLyricTimeline> {
+  let response: Response;
+  try {
+    response = await fetch(timelineUrl(jobId), { cache: "no-store" });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return (await response.json()) as CloudLyricTimeline;
+}
+
+export async function getInstrumentalAudio(jobId: string): Promise<File> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/instrumental`, {
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  const blob = await response.blob();
+  return new File([blob], "instrumental.wav", {
+    type: blob.type || "audio/wav",
+  });
+}
+
+export function submitCloudRender(
+  jobId: string,
+  video: File,
+  review: TimelineReviewPayload,
+  onProgress: (progress: number) => void,
+): Promise<Job> {
+  return new Promise((resolve, reject) => {
+    const data = new FormData();
+    data.append("video", video);
+    data.append("timeline_review", JSON.stringify(review));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/browser/jobs/${jobId}/cloud-render`);
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round(event.loaded / event.total * 100));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
+        resolve(JSON.parse(xhr.responseText) as Job);
+      } else {
+        reject(xhrRequestError(xhr));
+      }
+    });
+    xhr.addEventListener("error", () => reject(connectionError("upload")));
+    xhr.addEventListener("abort", () => reject(connectionError("upload")));
+    xhr.send(data);
+  });
 }
 
 export async function cancelJob(jobId: string): Promise<Job> {

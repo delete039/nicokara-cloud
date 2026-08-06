@@ -6,8 +6,6 @@ import {
   Clock3,
   CircleX,
   Download,
-  FileVideo,
-  Hash,
   LoaderCircle,
   UsersRound,
 } from "lucide-react";
@@ -15,6 +13,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
+import { JobMetadata } from "@/components/job-metadata";
+import { KirakaraPreview } from "@/components/kirakara-preview";
 import {
   jobFailureFeedback,
   networkErrorFeedback,
@@ -40,10 +40,6 @@ import {
   transcriptUrl,
 } from "@/services/api";
 import type { Job } from "@/types/job";
-
-function formatBytes(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
 
 export function JobStatus({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<Job | null>(null);
@@ -129,7 +125,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
     );
   }
 
-  const presentation = jobPresentation(job.status, job.stage);
+  const presentation = jobPresentation(job.status, job.stage, job.input_mode);
   const queueLabel = queueStatusLabel(job.queue_position, job.queue_size);
   const cancelLabel = cancelJobLabel(job.status);
   const StatusIcon =
@@ -260,33 +256,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           <span>{job.progress}%</span>
         </div>
 
-        <dl className="mt-8 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-xl bg-muted/65 p-4">
-            <dt className="flex items-center gap-2 text-xs text-muted-foreground">
-              <FileVideo className="size-4" />
-              {JOB_COPY.submittedVideo}
-            </dt>
-            <dd className="mt-2 truncate text-sm font-medium">
-              {job.original_video_name}
-            </dd>
-            <dd className="mt-1 text-xs text-muted-foreground">
-              {formatBytes(job.video_size_bytes)}
-            </dd>
-          </div>
-          <div className="rounded-xl bg-muted/65 p-4">
-            <dt className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Hash className="size-4" />
-              {JOB_COPY.taskId}
-            </dt>
-            <dd className="mt-2 break-all font-mono text-xs">{job.id}</dd>
-            <dd className="mt-1 text-xs text-muted-foreground">
-              {JOB_COPY.lyricsSource}：
-              {job.lyrics_source === "file"
-                ? JOB_COPY.textFileLyrics
-                : JOB_COPY.pastedLyrics}
-            </dd>
-          </div>
-        </dl>
+        <JobMetadata job={job} />
 
         {job.status === "CANCELED" && (
           <p className="mt-6 flex items-start gap-2 text-sm leading-6 text-muted-foreground">
@@ -383,6 +353,21 @@ export function JobStatus({ jobId }: { jobId: string }) {
             </a>
           </section>
         )}
+
+        {job.input_mode === "AUDIO_ONLY" &&
+          (job.status === "ALIGNED" ||
+            job.status === "SUBTITLE_GENERATED" ||
+            job.status === "COMPLETED") && (
+            <KirakaraPreview
+              jobId={job.id}
+              expectedVideoName={job.original_video_name}
+              vocalMode={job.vocal_mode ?? "on"}
+              onCloudRenderQueued={(queuedJob) => {
+                setJob(queuedJob);
+                setRefreshKey((value) => value + 1);
+              }}
+            />
+          )}
       </div>
 
       <Link

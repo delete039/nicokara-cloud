@@ -10,17 +10,33 @@ import {
   Upload,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
 
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
+import { MobileRouteStatus } from "@/components/mobile-route-status";
+import { MobileSubmissionProgress } from "@/components/mobile-submission-progress";
 import {
   networkErrorFeedback,
   validationErrorFeedback,
   type ErrorFeedback,
 } from "@/lib/error-feedback";
 import { UPLOAD_COPY } from "@/lib/ui-copy";
-import { ApiRequestError, createJob } from "@/services/api";
+import {
+  detectMobileCapabilities,
+  selectMobileProcessingRoute,
+  type MobileProcessingRoute,
+} from "@/lib/mobile-processing";
+import {
+  submitMobileJob,
+  type MobileSubmissionState,
+} from "@/lib/mobile-submission";
+import { rememberLocalVideo } from "@/lib/local-media-session";
+import {
+  ApiRequestError,
+  createAudioOnlyJob,
+  createJob,
+} from "@/services/api";
 import type { UploadTicket } from "@/types/upload-ticket";
 
 const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
@@ -35,6 +51,7 @@ export function UploadForm() {
   const videoInput = useRef<HTMLInputElement>(null);
   const lyricsInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
+  const mobileAbortController = useRef<AbortController | null>(null);
   const [video, setVideo] = useState<File | null>(null);
   const [lyricsText, setLyricsText] = useState("");
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
@@ -44,9 +61,36 @@ export function UploadForm() {
   const [uploadTicket, setUploadTicket] = useState<UploadTicket | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<ErrorFeedback | null>(null);
+  const [mobileRoute, setMobileRoute] =
+    useState<MobileProcessingRoute | null>(null);
+  const [mobileSubmission, setMobileSubmission] =
+    useState<MobileSubmissionState | null>(null);
+
+  useEffect(() => {
+    if (!video) return;
+    let active = true;
+    detectMobileCapabilities()
+      .then((capabilities) => {
+        if (active) {
+          setMobileRoute(
+            selectMobileProcessingRoute({
+              videoSizeBytes: video.size,
+              capabilities,
+            }),
+          );
+        }
+      })
+      .catch(() => {
+        if (active) setMobileRoute("REMOTE_VIDEO");
+      });
+    return () => {
+      active = false;
+    };
+  }, [video]);
 
   function selectVideo(nextVideo: File | null) {
     setVideo(nextVideo);
+    setMobileRoute(null);
     setError(null);
   }
 
@@ -116,26 +160,63 @@ export function UploadForm() {
     setUploading(true);
     setProgress(0);
     setUploadTicket(null);
+    setMobileSubmission(null);
+    const useAudioOnly = mobileRoute === "AUDIO_ONLY";
+    const abortController = useAudioOnly ? new AbortController() : null;
+    mobileAbortController.current = abortController;
     try {
-      const job = await createJob(
-        {
-          video,
-          lyricsText,
-          lyricsFile: lyricsFile ?? undefined,
-          vocalMode,
-        },
-        setProgress,
-        setUploadTicket,
-      );
+      const submissionInput = {
+        video,
+        lyricsText,
+        lyricsFile: lyricsFile ?? undefined,
+        vocalMode,
+      };
+      const job = useAudioOnly
+        ? await submitMobileJob(
+            { ...submissionInput, route: "AUDIO_ONLY" },
+            {
+              extractAudio: async (selectedVideo, options) => {
+                const { extractAudioTrack } = await import(
+                  "@/lib/browser-audio-extractor"
+                );
+                return extractAudioTrack(selectedVideo, options);
+              },
+              uploadAudio: createAudioOnlyJob,
+              uploadVideo: createJob,
+            },
+            (state) => {
+              setMobileSubmission(state);
+              setProgress(state.progress);
+              if (state.stage === "FALLBACK_VIDEO") {
+                setMobileRoute("REMOTE_VIDEO");
+              }
+            },
+            {
+              signal: abortController?.signal,
+              onQueueUpdate: setUploadTicket,
+            },
+          )
+        : await createJob(submissionInput, setProgress, setUploadTicket);
+      mobileAbortController.current = null;
+      if (job.input_mode === "AUDIO_ONLY") {
+        rememberLocalVideo(job.id, video);
+      }
       router.push(`/jobs/${job.id}`);
     } catch (reason) {
+      const canceled =
+        reason instanceof DOMException && reason.name === "AbortError";
       setError(
-        reason instanceof ApiRequestError
-          ? reason.feedback
-          : networkErrorFeedback("upload"),
+        canceled
+          ? null
+          : reason instanceof ApiRequestError
+            ? reason.feedback
+            : networkErrorFeedback("upload"),
       );
       setUploading(false);
       setUploadTicket(null);
+      setMobileSubmission(null);
+      setProgress(0);
+      mobileAbortController.current = null;
     }
   }
 
@@ -196,6 +277,7 @@ export function UploadForm() {
             </div>
           )}
         </button>
+        {video && mobileRoute && <MobileRouteStatus route={mobileRoute} />}
       </section>
 
       <section aria-labelledby="lyrics-heading">
@@ -291,43 +373,53 @@ export function UploadForm() {
       {error && <ErrorFeedbackPanel feedback={error} />}
 
       {uploading && (
-        <div aria-live="polite">
-          {uploadTicket?.status === "WAITING" ? (
-            <>
-              <div className="mb-2 flex justify-between gap-4 text-sm">
-                <span>正在等待上传名额</span>
-                {uploadTicket.queue_position && uploadTicket.queue_size && (
-                  <span className="font-medium">
-                    第 {uploadTicket.queue_position} 位 / 共{" "}
-                    {uploadTicket.queue_size} 位
-                  </span>
-                )}
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                当前不会上传视频文件；轮到你时页面会自动开始上传。关闭页面后排队号会自动过期。
-              </p>
-            </>
+        <>
+          {mobileSubmission && uploadTicket?.status !== "WAITING" ? (
+            <MobileSubmissionProgress
+              state={mobileSubmission}
+              onCancel={() => mobileAbortController.current?.abort()}
+            />
           ) : (
-            <>
-              <div className="mb-2 flex justify-between text-sm">
-                <span>{UPLOAD_COPY.uploadProgressTitle}</span>
-                <span className="font-medium">{progress}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-[width]"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {UPLOAD_COPY.uploadProgressDescription}
-              </p>
-            </>
+            <div aria-live="polite">
+              {uploadTicket?.status === "WAITING" ? (
+                <>
+                  <div className="mb-2 flex justify-between gap-4 text-sm">
+                    <span>正在等待上传名额</span>
+                    {uploadTicket.queue_position &&
+                      uploadTicket.queue_size && (
+                        <span className="font-medium">
+                          第 {uploadTicket.queue_position} 位 / 共{" "}
+                          {uploadTicket.queue_size} 位
+                        </span>
+                      )}
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    当前不会上传视频文件；轮到你时页面会自动开始上传。关闭页面后排队号会自动过期。
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mb-2 flex justify-between text-sm">
+                    <span>{UPLOAD_COPY.uploadProgressTitle}</span>
+                    <span className="font-medium">{progress}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width]"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {UPLOAD_COPY.uploadProgressDescription}
+                  </p>
+                </>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
 
       <button

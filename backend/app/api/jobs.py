@@ -960,6 +960,45 @@ def get_subtitle(request: Request, job_id: str) -> FileResponse:
     )
 
 
+@router.get("/{job_id}/instrumental", response_class=FileResponse)
+def get_instrumental_audio(request: Request, job_id: str) -> FileResponse:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    if job.get("vocal_mode", "on") != "off":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ON VOCAL 任务不生成云端伴奏",
+        )
+    instrumental_path = settings.storage_dir / job_id / "audio_instrumental.wav"
+    if not instrumental_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="伴奏音频尚未生成",
+        )
+    instrumental_path = validated_job_file(
+        settings,
+        job_id,
+        str(instrumental_path),
+    )
+    return FileResponse(
+        instrumental_path,
+        media_type="audio/wav",
+        filename="instrumental.wav",
+    )
+
+
 @router.get("/{job_id}/result", response_class=FileResponse)
 def get_result_video(request: Request, job_id: str) -> FileResponse:
     output_path = result_video_path(request, job_id)

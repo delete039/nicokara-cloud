@@ -78,11 +78,50 @@ class TranscriptionPipeline:
         transcript_path = job_dir / "transcript.json"
         lyrics_processed_path = job_dir / "lyrics_processed.json"
         timeline_path = job_dir / "timeline.json"
-        ass_path = job_dir / "lyrics.ass"
+        ass_path = (
+            Path(job["ass_path"])
+            if job.get("ass_path")
+            else job_dir / "lyrics.ass"
+        )
         output_path = job_dir / "final_karaoke.mp4"
 
         stage = "EXTRACTING_AUDIO"
         try:
+            if job.get("stage") == "CLOUD_RENDER_QUEUED":
+                stage = "RENDERING_VIDEO"
+                if self.video_renderer is None or not ass_path.is_file():
+                    raise RuntimeError("Kirakara cloud renderer is unavailable")
+                self.database.update_job_state(
+                    job_id,
+                    status="PROCESSING",
+                    stage=stage,
+                    progress=98,
+                    timeline_path=timeline_path if timeline_path.exists() else None,
+                    ass_path=ass_path,
+                )
+                vocal_mode = job.get("vocal_mode", "on")
+                self.video_renderer.render(
+                    video_path,
+                    ass_path,
+                    output_path,
+                    vocal_mode=vocal_mode,
+                    instrumental_audio_path=(
+                        instrumental_path
+                        if vocal_mode == "off" and instrumental_path.exists()
+                        else None
+                    ),
+                )
+                self.database.update_job_state(
+                    job_id,
+                    status="COMPLETED",
+                    stage="VIDEO_RENDERING_COMPLETE",
+                    progress=100,
+                    timeline_path=timeline_path if timeline_path.exists() else None,
+                    ass_path=ass_path,
+                    output_path=output_path,
+                )
+                return
+
             self.database.update_job_state(
                 job_id,
                 status="PROCESSING",
@@ -182,7 +221,10 @@ class TranscriptionPipeline:
                             ass_content,
                             encoding="utf-8-sig",
                         )
-                        if self.video_renderer is not None:
+                        if (
+                            self.video_renderer is not None
+                            and job.get("input_mode", "VIDEO") != "AUDIO_ONLY"
+                        ):
                             stage = "RENDERING_VIDEO"
                             self.database.update_job_state(
                                 job_id,

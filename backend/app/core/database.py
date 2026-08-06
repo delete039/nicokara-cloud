@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     error_code TEXT,
     error_message TEXT,
     client_submission_id TEXT,
+    input_mode TEXT NOT NULL DEFAULT 'VIDEO',
+    source_upload_size_bytes INTEGER,
+    source_upload_sha256 TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -106,9 +109,21 @@ class Database:
                 "ass_path",
                 "output_path",
                 "client_submission_id",
+                "input_mode",
+                "source_upload_size_bytes",
+                "source_upload_sha256",
             ):
                 if name not in columns:
-                    connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
+                    definition = (
+                        "TEXT NOT NULL DEFAULT 'VIDEO'"
+                        if name == "input_mode"
+                        else "INTEGER"
+                        if name == "source_upload_size_bytes"
+                        else "TEXT"
+                    )
+                    connection.execute(
+                        f"ALTER TABLE jobs ADD COLUMN {name} {definition}"
+                    )
             upload_ticket_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -170,6 +185,9 @@ class Database:
         lyrics_path: Path | None,
         vocal_mode: str = "on",
         client_submission_id: str | None = None,
+        input_mode: str = "VIDEO",
+        source_upload_size_bytes: int | None = None,
+        source_upload_sha256: str | None = None,
     ) -> dict:
         timestamp = utc_now()
         with self.connect() as connection:
@@ -179,10 +197,12 @@ class Database:
                     id, status, stage, progress, original_video_name,
                     video_size_bytes, video_sha256, video_path,
                     client_key, lyrics_source, lyrics_path, vocal_mode,
-                    client_submission_id, created_at, updated_at
+                    client_submission_id, input_mode,
+                    source_upload_size_bytes, source_upload_sha256,
+                    created_at, updated_at
                 )
                 VALUES (?, 'UPLOADED', 'UPLOAD_COMPLETE', 100,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -195,6 +215,9 @@ class Database:
                     str(lyrics_path) if lyrics_path else None,
                     vocal_mode,
                     client_submission_id,
+                    input_mode,
+                    source_upload_size_bytes or video_size_bytes,
+                    source_upload_sha256 or video_sha256,
                     timestamp,
                     timestamp,
                 ),
@@ -576,6 +599,48 @@ class Database:
                 ensure_ascii=True,
             )
         )
+
+    def queue_cloud_render(
+        self,
+        job_id: str,
+        *,
+        video_path: Path,
+        video_size_bytes: int,
+        video_sha256: str,
+        timeline_path: Path,
+        ass_path: Path,
+    ) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'UPLOADED',
+                    stage = 'CLOUD_RENDER_QUEUED',
+                    progress = 0,
+                    video_path = ?,
+                    video_size_bytes = ?,
+                    video_sha256 = ?,
+                    timeline_path = ?,
+                    ass_path = ?,
+                    output_path = NULL,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND input_mode = 'AUDIO_ONLY'
+                  AND status IN ('ALIGNED', 'SUBTITLE_GENERATED')
+                """,
+                (
+                    str(video_path),
+                    video_size_bytes,
+                    video_sha256,
+                    str(timeline_path),
+                    str(ass_path),
+                    utc_now(),
+                    job_id,
+                ),
+            )
+        return cursor.rowcount == 1
 
     def cancel_job(self, job_id: str) -> bool:
         with self.connect() as connection:

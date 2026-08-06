@@ -108,7 +108,7 @@ describe("jobPresentation", () => {
       tone: "success",
     });
     expect(jobPresentation("FAILED", "GENERATING_SUBTITLE")).toMatchObject({
-      title: "ASS 字幕生成失败",
+      title: "Kirakara 字幕生成失败",
       terminal: true,
       tone: "error",
     });
@@ -137,6 +137,41 @@ describe("jobPresentation", () => {
       progressLabel: "已取消",
       terminal: true,
       tone: "canceled",
+    });
+  });
+
+  it("explains that audio-only jobs finish with subtitles while video stays local", async () => {
+    const { jobPresentation } = await import("./job-presentation");
+    expect(
+      jobPresentation(
+        "SUBTITLE_GENERATED",
+        "SUBTITLE_GENERATION_COMPLETE",
+        "AUDIO_ONLY",
+      ),
+    ).toMatchObject({
+      title: "字幕已生成，视频仍在本机",
+      description: expect.stringContaining("重新选择原视频"),
+      terminal: true,
+      tone: "success",
+    });
+    expect(
+      jobPresentation(
+        "SUBTITLE_GENERATED",
+        "SUBTITLE_GENERATION_COMPLETE",
+        "AUDIO_ONLY",
+      ).description,
+    ).toContain("导出");
+  });
+
+  it("identifies a reviewed Kirakara video waiting for cloud rendering", async () => {
+    const { jobPresentation } = await import("./job-presentation");
+    expect(
+      jobPresentation("UPLOADED", "CLOUD_RENDER_QUEUED", "AUDIO_ONLY"),
+    ).toMatchObject({
+      title: "Kirakara 视频正在排队",
+      progressLabel: "等待云端渲染",
+      terminal: false,
+      tone: "pending",
     });
   });
 

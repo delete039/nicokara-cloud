@@ -22,6 +22,24 @@ def looks_like_mp4(header: bytes) -> bool:
     return len(header) >= 12 and header[4:8] == b"ftyp"
 
 
+def looks_like_audio(header: bytes, suffix: str) -> bool:
+    if suffix == ".wav":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WAVE"
+    if suffix == ".mp3":
+        return header.startswith(b"ID3") or (
+            len(header) >= 2 and header[0] == 0xFF and header[1] & 0xE0 == 0xE0
+        )
+    if suffix in {".m4a", ".mp4"}:
+        return looks_like_mp4(header)
+    if suffix == ".aac":
+        return len(header) >= 2 and header[0] == 0xFF and header[1] & 0xF0 == 0xF0
+    if suffix == ".flac":
+        return header.startswith(b"fLaC")
+    if suffix == ".ogg":
+        return header.startswith(b"OggS")
+    return False
+
+
 async def save_mp4(
     upload: UploadFile,
     destination: Path,
@@ -56,6 +74,50 @@ async def save_mp4(
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="文件内容不是有效的 MP4 容器",
+            )
+        return SavedUpload(destination, total, digest.hexdigest())
+    except Exception:
+        shutil.rmtree(destination.parent, ignore_errors=True)
+        raise
+    finally:
+        await upload.close()
+
+
+async def save_audio(
+    upload: UploadFile,
+    destination: Path,
+    *,
+    max_bytes: int,
+) -> SavedUpload:
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    digest = hashlib.sha256()
+    total = 0
+    header = bytearray()
+    suffix = destination.suffix.lower()
+
+    try:
+        with destination.open("wb") as output:
+            while chunk := await upload.read(CHUNK_SIZE):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="音频文件超过大小限制",
+                    )
+                if len(header) < 32:
+                    header.extend(chunk[: 32 - len(header)])
+                digest.update(chunk)
+                output.write(chunk)
+
+        if total == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="音频文件为空",
+            )
+        if not looks_like_audio(bytes(header), suffix):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="文件内容不是受支持的音频格式",
             )
         return SavedUpload(destination, total, digest.hexdigest())
     except Exception:

@@ -165,6 +165,117 @@ describe("createJob", () => {
   });
 });
 
+describe("createAudioOnlyJob", () => {
+  it("uploads audio and original video metadata without sending the video", async () => {
+    const audioOnlyJob = {
+      id: "job-audio-1",
+      status: "UPLOADED",
+      stage: "UPLOAD_COMPLETE",
+      progress: 100,
+      original_video_name: "song.mp4",
+      video_size_bytes: 120 * 1024 * 1024,
+      video_sha256: "audio-sha",
+      input_mode: "AUDIO_ONLY",
+      source_upload_size_bytes: 5,
+      source_upload_sha256: "audio-sha",
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:00:00Z",
+    };
+    class FakeXMLHttpRequest {
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn((method: string, url: string) => {
+        expect(method).toBe("POST");
+        expect(url).toBe("/api/v1/browser/audio-jobs");
+      });
+      readonly getResponseHeader = vi.fn(() => null);
+      readonly send = vi.fn((body: FormData) => {
+        expect(body.get("audio")).toBeInstanceOf(File);
+        expect(body.get("original_video_name")).toBe("song.mp4");
+        expect(body.get("original_video_size_bytes")).toBe(
+          String(120 * 1024 * 1024),
+        );
+        expect(body.has("video")).toBe(false);
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      status = 201;
+      responseText = JSON.stringify(audioOnlyJob);
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const api = await import("./api");
+
+    expect(api.createAudioOnlyJob).toBeTypeOf("function");
+    if (typeof api.createAudioOnlyJob !== "function") return;
+    await expect(
+      api.createAudioOnlyJob(
+        {
+          audio: new File(["audio"], "song.wav", { type: "audio/wav" }),
+          originalVideoName: "song.mp4",
+          originalVideoSizeBytes: 120 * 1024 * 1024,
+          lyricsText: "lyrics",
+        },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ input_mode: "AUDIO_ONLY" });
+  });
+
+  it("aborts the audio upload when its signal is canceled", async () => {
+    const controller = new AbortController();
+    class FakeXMLHttpRequest {
+      static instance: FakeXMLHttpRequest;
+
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly send = vi.fn();
+      readonly abort = vi.fn(() => {
+        this.listeners.abort?.forEach((listener) => listener());
+      });
+      readonly getResponseHeader = vi.fn(() => null);
+      status = 0;
+      responseText = "";
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      constructor() {
+        FakeXMLHttpRequest.instance = this;
+      }
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const api = await import("./api");
+
+    const request = api.createAudioOnlyJob(
+      {
+        audio: new File(["audio"], "song.m4a", { type: "audio/mp4" }),
+        originalVideoName: "song.mp4",
+        originalVideoSizeBytes: 1024,
+        lyricsText: "lyrics",
+      },
+      vi.fn(),
+      controller.signal,
+    );
+    controller.abort();
+
+    const xhr = FakeXMLHttpRequest.instance;
+    expect(xhr.abort).toHaveBeenCalledOnce();
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
 describe("getJob", () => {
   it("returns detailed guidance when the task has expired", async () => {
     vi.stubGlobal(
@@ -227,6 +338,93 @@ describe("getJob", () => {
         retryable: true,
       });
     }
+  });
+});
+
+describe("getTimeline", () => {
+  it("loads the cloud mora timeline without caching it", async () => {
+    const timeline = { confidence: 1, lines: [], warnings: [] };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(timeline), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { getTimeline } = await import("./api");
+
+    await expect(getTimeline("job-1")).resolves.toEqual(timeline);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/timeline",
+      { cache: "no-store" },
+    );
+  });
+});
+
+describe("getInstrumentalAudio", () => {
+  it("downloads the cloud UVR instrumental for an off-vocal export", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "audio/wav" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { getInstrumentalAudio } = await import("./api");
+
+    const audio = await getInstrumentalAudio("job-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/instrumental",
+      { cache: "no-store" },
+    );
+    expect(audio).toMatchObject({ name: "instrumental.wav", type: "audio/wav" });
+    expect(audio.size).toBe(3);
+  });
+});
+
+describe("submitCloudRender", () => {
+  it("uploads the original video and reviewed timeline to the render-only queue", async () => {
+    const queued = {
+      id: "job-1",
+      status: "UPLOADED",
+      stage: "CLOUD_RENDER_QUEUED",
+      progress: 0,
+    };
+    class FakeXMLHttpRequest {
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn((method: string, url: string) => {
+        expect(method).toBe("POST");
+        expect(url).toBe("/api/v1/browser/jobs/job-1/cloud-render");
+      });
+      readonly getResponseHeader = vi.fn(() => null);
+      readonly send = vi.fn((body: FormData) => {
+        expect(body.get("video")).toBeInstanceOf(File);
+        expect(JSON.parse(String(body.get("timeline_review")))).toMatchObject({
+          lines: [{ start_ms: 1000, end_ms: 2000 }],
+        });
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      status = 202;
+      responseText = JSON.stringify(queued);
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest as unknown as typeof XMLHttpRequest);
+    const { submitCloudRender } = await import("./api");
+
+    await expect(
+      submitCloudRender(
+        "job-1",
+        new File(["video"], "song.mp4", { type: "video/mp4" }),
+        { lines: [{ start_ms: 1000, end_ms: 2000, tokens: [] }] },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject(queued);
   });
 });
 

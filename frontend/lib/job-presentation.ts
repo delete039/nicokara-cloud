@@ -17,6 +17,7 @@ export type JobPresentation = {
 export function jobPresentation(
   status: string,
   stage: string,
+  inputMode?: "VIDEO" | "AUDIO_ONLY",
 ): JobPresentation {
   if (status === "CANCELED") {
     return {
@@ -39,6 +40,17 @@ export function jobPresentation(
     };
   }
   if (status === "SUBTITLE_GENERATED") {
+    if (inputMode === "AUDIO_ONLY") {
+      return {
+        eyebrow: "字幕已生成",
+        title: "字幕已生成，视频仍在本机",
+        description:
+          "云端时间轴已经完成。重新选择原视频后，可以在浏览器中预览并导出ニコカラ视频。",
+        progressLabel: "字幕生成完成",
+        terminal: true,
+        tone: "success",
+      };
+    }
     return {
       eyebrow: "字幕已生成",
       title: "字幕文件已生成",
@@ -89,7 +101,7 @@ export function jobPresentation(
           : stage === "RENDERING_VIDEO"
             ? "视频渲染失败"
           : stage === "GENERATING_SUBTITLE"
-            ? "ASS 字幕生成失败"
+            ? "Kirakara 字幕生成失败"
           : stage === "ALIGNING"
             ? "歌词时间轴对齐失败"
             : stage === "PROCESSING_LYRICS"
@@ -99,6 +111,16 @@ export function jobPresentation(
       progressLabel: "任务失败",
       terminal: true,
       tone: "error",
+    };
+  }
+  if (stage === "CLOUD_RENDER_QUEUED") {
+    return {
+      eyebrow: "云端渲染排队",
+      title: "Kirakara 视频正在排队",
+      description: "原视频与校正结果已保存，服务器将按顺序直接进行 Kirakara 嵌字和视频编码。",
+      progressLabel: "等待云端渲染",
+      terminal: false,
+      tone: "pending",
     };
   }
   if (stage === "REMOVING_VOCALS") {

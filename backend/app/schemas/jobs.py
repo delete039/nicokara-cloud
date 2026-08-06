@@ -18,6 +18,9 @@ class JobResponse(BaseModel):
     lyrics_source: str | None = None
     vocal_mode: str = "on"
     client_submission_id: str | None = None
+    input_mode: str = "VIDEO"
+    source_upload_size_bytes: int | None = None
+    source_upload_sha256: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     queue_position: int | None = None

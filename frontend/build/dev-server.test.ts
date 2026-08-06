@@ -29,4 +29,16 @@ describe("devServerConfig", () => {
       usePolling: true,
     });
   });
+
+  it("enables cross-origin isolation for threaded browser inference", () => {
+    const config = devServerConfig({
+      backendOrigin: undefined,
+      usePolling: false,
+    });
+
+    expect(config.headers).toMatchObject({
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    });
+  });
 });

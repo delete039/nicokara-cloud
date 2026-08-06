@@ -64,7 +64,7 @@ export const JOB_COPY = {
   downloadTranscript: "下载歌声识别数据",
   downloadLyrics: "下载歌词处理数据",
   downloadTimeline: "下载歌词时间轴",
-  downloadSubtitle: "下载字幕文件",
+  downloadSubtitle: "下载 Kirakara 字幕",
   unsupportedVideo: "当前浏览器无法播放该视频，请直接下载后查看。",
   downloadVideo: "下载生成的视频",
   createAnother: "创建新任务",

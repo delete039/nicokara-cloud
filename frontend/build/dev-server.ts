@@ -14,6 +14,10 @@ export function devServerConfig({
   ).origin;
 
   return {
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
     proxy: {
       "/api": {
         target,

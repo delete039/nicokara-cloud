@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.jobs import router as jobs_router
 from app.api.jobs import upload_tickets_router
 from app.api.admin import router as admin_router
+from app.api.mobile import router as mobile_router
 from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
 from app.alignment.aligner import LyricTimelineAligner
@@ -25,7 +26,7 @@ from app.lyrics.processor import (
 from app.tasks.pipeline import TranscriptionPipeline
 from app.tasks.runner import LocalTaskRunner
 from app.tasks.cleanup import JobCleanupService, PeriodicCleanupRunner
-from app.subtitle.ass_generator import AssGenerator
+from app.subtitle.kirakara_generator import KirakaraAssGenerator
 from app.video.audio import FFmpegAudioExtractor
 from app.video.rendering import FFmpegVideoRenderer
 from app.vocal.mdx import MDXNetVocalRemover
@@ -71,7 +72,7 @@ def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipel
         vocal_remover=build_vocal_remover(settings),
         lyric_processor=lyric_processor,
         aligner=LyricTimelineAligner(),
-        subtitle_generator=AssGenerator(),
+        subtitle_generator=KirakaraAssGenerator(),
         video_renderer=FFmpegVideoRenderer(
             command=(settings.ffmpeg_path,),
             timeout_seconds=(
@@ -178,7 +179,7 @@ def create_app(
 
     app = FastAPI(
         title=resolved_settings.app_name,
-        version="0.2.0",
+        version="0.3.0-alpha.2",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -205,6 +206,7 @@ def create_app(
         prefix=resolved_settings.api_prefix,
     )
     app.include_router(admin_router, prefix=resolved_settings.api_prefix)
+    app.include_router(mobile_router, prefix=resolved_settings.api_prefix)
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
     def health() -> HealthResponse:
