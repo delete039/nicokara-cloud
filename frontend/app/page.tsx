@@ -64,7 +64,38 @@ export default function Home() {
             <p>qq：{HOME_COPY.author.qq}</p>
             <p>bilibili：{HOME_COPY.author.bilibili}</p>
             <p>小红书：{HOME_COPY.author.xiaohongshu}</p>
-            <p className="mt-2 max-w-md">{HOME_COPY.author.message}</p>
+            <p className="mt-2 max-w-md">
+              <a
+                href={HOME_COPY.author.repositoryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {HOME_COPY.author.repositoryLabel}
+              </a>
+              ，{HOME_COPY.author.message}
+            </p>
+            <p className="mt-2 max-w-md">
+              特别鸣谢：
+              <a
+                href={HOME_COPY.author.acknowledgement.developerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {HOME_COPY.author.acknowledgement.developer}
+              </a>
+              开发的
+              <a
+                href={HOME_COPY.author.acknowledgement.projectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {HOME_COPY.author.acknowledgement.project}
+              </a>
+              。{HOME_COPY.author.acknowledgement.description}
+            </p>
           </aside>
         </div>
 

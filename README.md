@@ -118,6 +118,20 @@ Kirakara 渲染逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIR
 前端 /api 请求 -> FastAPI -> SQLite + storage/jobs + 本地模型缓存
 ```
 
+## 鸣谢
+
+- [@FMPeach](https://github.com/FMPeach) - [Kirakara-Player](https://github.com/FMPeach/Kirakara-Player)
+
+  本项目的ニコカラ字幕预览、样式配置及浏览器渲染适配参考了 Kirakara-Player 的设计与实现。感谢原作者公开项目并提供相关技术支持。
+
+本项目对相关功能进行了适配与整合。Kirakara-Player 的版权及许可证仍归原项目作者所有，完整许可内容见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
+### 参考项目
+
+- [@moriwx](https://github.com/moriwx) - [FA-Kara](https://github.com/moriwx/FA-Kara)
+
+  计划参考其歌词对齐方案，当前版本尚未正式集成。
+
 ## 本地部署 0 基础教程
 
 以下步骤以 Windows 10/11 为例。推荐使用 Docker Desktop，不需要单独安装 Python、Node.js 或 FFmpeg。

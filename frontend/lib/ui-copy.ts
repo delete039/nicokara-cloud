@@ -4,7 +4,7 @@ export const HOME_COPY = {
   steps: [
     {
       title: "提交素材",
-      text: "选择 MP4 视频，并粘贴歌词或上传 UTF-8 TXT 文件。",
+      text: "选择 MP4 视频，并粘贴歌词或上传 UTF-8 TXT / LRC 文件。",
     },
     {
       title: "服务器处理",
@@ -20,7 +20,16 @@ export const HOME_COPY = {
     qq: "280475274",
     bilibili: "esrgt",
     xiaohongshu: "esr",
-    message: "项目已开源，欢迎关注项目更新进度，与错误反馈或修改建议",
+    repositoryLabel: "本项目已开源",
+    repositoryUrl: "https://github.com/delete039/nicokara-cloud",
+    message: "欢迎关注项目更新进度，与错误反馈或修改建议",
+    acknowledgement: {
+      developer: "FMPeach",
+      developerUrl: "https://github.com/FMPeach",
+      project: "Kirakara-Player",
+      projectUrl: "https://github.com/FMPeach/Kirakara-Player",
+      description: "本项目的字幕预览、样式配置与渲染适配参考了该项目。",
+    },
   },
   metadataDescription:
     "上传 MV 和日语歌词，自动生成带逐字高亮和假名注音的ニコカラ视频。",
@@ -59,12 +68,12 @@ export const JOB_COPY = {
   taskId: "任务 ID",
   lyricsSource: "歌词来源",
   pastedLyrics: "粘贴输入",
-  textFileLyrics: "TXT 文件",
+  textFileLyrics: "TXT / LRC 文件",
   resultHeading: "生成结果",
   downloadTranscript: "下载歌声识别数据",
   downloadLyrics: "下载歌词处理数据",
   downloadTimeline: "下载歌词时间轴",
-  downloadSubtitle: "下载 Kirakara 字幕",
+  downloadSubtitle: "下载 Kirakara 工程 (.krl)",
   unsupportedVideo: "当前浏览器无法播放该视频，请直接下载后查看。",
   downloadVideo: "下载生成的视频",
   createAnother: "创建新任务",

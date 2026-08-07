@@ -22,12 +22,17 @@ export const DEFAULT_KIRAKARA_STYLE: KirakaraStyle = Object.freeze({
   lowerY: 563,
 });
 
-const FONT_FAMILIES = new Set([
-  DEFAULT_KIRAKARA_STYLE.fontFamily,
-  '"Yu Gothic", "Noto Sans JP", sans-serif',
-  '"Microsoft YaHei", "Noto Sans JP", sans-serif',
-]);
 const COLOR = /^#[0-9a-f]{6}$/i;
+const UNSAFE_FONT_FAMILY = /[\u0000-\u001f\u007f<>;{}]/u;
+
+function fontFamily(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_KIRAKARA_STYLE.fontFamily;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 200 || UNSAFE_FONT_FAMILY.test(trimmed)) {
+    return DEFAULT_KIRAKARA_STYLE.fontFamily;
+  }
+  return trimmed;
+}
 
 function numberInRange(
   value: unknown,
@@ -49,10 +54,7 @@ export function normalizeKirakaraStyle(
 ): KirakaraStyle {
   const source = value ?? {};
   return {
-    fontFamily:
-      typeof source.fontFamily === "string" && FONT_FAMILIES.has(source.fontFamily)
-        ? source.fontFamily
-        : DEFAULT_KIRAKARA_STYLE.fontFamily,
+    fontFamily: fontFamily(source.fontFamily),
     fontSize: numberInRange(source.fontSize, DEFAULT_KIRAKARA_STYLE.fontSize, 48, 80),
     rubySize: numberInRange(source.rubySize, DEFAULT_KIRAKARA_STYLE.rubySize, 18, 38),
     colorBefore: color(source.colorBefore, DEFAULT_KIRAKARA_STYLE.colorBefore),

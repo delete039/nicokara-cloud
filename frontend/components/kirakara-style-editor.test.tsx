@@ -22,5 +22,11 @@ describe("KirakaraStyleEditor", () => {
     expect(html).toContain("上行位置");
     expect(html).toContain("下行位置");
     expect(html).toContain("恢复 Kirakara 默认样式");
+    expect(html).toContain('placeholder="输入字体名"');
+    expect(html).toContain('data-kirakara-style-layout="responsive"');
+    expect(html).toContain('data-kirakara-font-control="kirakara"');
+    expect(html).toContain('aria-label="选择字体预设"');
+    expect(html).toContain("xl:grid-cols-4");
+    expect(html).not.toContain("<datalist");
   });
 });

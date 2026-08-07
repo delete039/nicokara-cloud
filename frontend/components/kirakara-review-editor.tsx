@@ -68,7 +68,7 @@ export function KirakaraReviewEditor({
   if (!line) return null;
 
   return (
-    <section className="mt-6 border-t pt-6" aria-labelledby="timeline-review-heading">
+    <section aria-labelledby="timeline-review-heading">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 id="timeline-review-heading" className="text-base font-bold">

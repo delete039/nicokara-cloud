@@ -156,7 +156,7 @@ export function KirakaraPreview({
   }
 
   return (
-    <section className="mt-8 border-t pt-8" aria-labelledby="kirakara-preview-heading">
+    <section className="mt-6 border-t pt-6" aria-labelledby="kirakara-preview-heading">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-base font-bold text-primary">Kirakara 引擎</p>
@@ -184,72 +184,101 @@ export function KirakaraPreview({
           </label>
         </div>
       ) : (
-        <>
-          <div className="relative mt-4 aspect-video w-full overflow-hidden rounded-lg bg-black">
-            {videoUrl && (
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                controls
-                playsInline
-                preload="metadata"
-                className="size-full object-contain"
-                onLoadedMetadata={updateFrame}
-                onTimeUpdate={updateFrame}
-                onSeeked={updateFrame}
-                onPlay={startDrawing}
-                onPause={() => {
-                  stopDrawing();
-                  updateFrame();
-                }}
-              />
-            )}
-            <KirakaraDomFrame frame={frame} style={style} />
-            {!timeline && !timelineError && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">
-                <LoaderCircle className="size-4 animate-spin" />
-                正在读取时间轴
-              </div>
-            )}
+        <div
+          data-kirakara-workbench="desktop-fit"
+          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(20rem,1fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]"
+        >
+          <div data-kirakara-preview-panel="true" className="min-w-0">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
+              {videoUrl && (
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="size-full object-contain"
+                  onLoadedMetadata={updateFrame}
+                  onTimeUpdate={updateFrame}
+                  onSeeked={updateFrame}
+                  onPlay={startDrawing}
+                  onPause={() => {
+                    stopDrawing();
+                    updateFrame();
+                  }}
+                />
+              )}
+              <KirakaraDomFrame frame={frame} style={style} />
+              {!timeline && !timelineError && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">
+                  <LoaderCircle className="size-4 animate-spin" />
+                  正在读取时间轴
+                </div>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>
+                {!capabilities
+                  ? "正在检查本地编码能力"
+                  : kirakaraSupportMessage(capabilities)}
+              </span>
+              <label className="focus-ring cursor-pointer rounded-sm font-medium text-foreground underline-offset-4 hover:underline">
+                更换视频
+                <input
+                  type="file"
+                  accept="video/mp4,.mp4"
+                  className="sr-only"
+                  onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>
-              {!capabilities
-                ? "正在检查本地编码能力"
-                : kirakaraSupportMessage(capabilities)}
-            </span>
-            <label className="focus-ring cursor-pointer rounded-sm font-medium text-foreground underline-offset-4 hover:underline">
-              更换视频
-              <input
-                type="file"
-                accept="video/mp4,.mp4"
-                className="sr-only"
-                onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
-              />
-            </label>
-          </div>
-          {timeline && (
-            <>
+
+          <div
+            data-kirakara-timeline-panel="true"
+            className={`min-w-0 lg:max-h-[min(22rem,calc(100vh-19rem))] lg:overflow-y-auto ${
+              timeline
+                ? "rounded-lg border bg-background/40 p-3"
+                : "hidden"
+            }`}
+          >
+            {timeline && (
               <KirakaraReviewEditor
                 timeline={timeline}
                 onChange={setTimeline}
                 onSeek={seekPreview}
               />
-              <KirakaraStyleEditor style={style} onChange={updateStyle} />
-            </>
-          )}
-          {timeline && capabilities && (
-            <KirakaraRenderActions
-              capabilities={capabilities}
-              video={video}
-              timeline={timeline}
-              style={style}
-              jobId={jobId}
-              vocalMode={vocalMode}
-              onCloudRenderQueued={onCloudRenderQueued}
-            />
-          )}
-        </>
+            )}
+          </div>
+
+          <div
+            data-kirakara-controls-panel="true"
+            className={`min-w-0 lg:col-span-2 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)] xl:items-start xl:gap-4 ${
+              timeline
+                ? "rounded-lg border bg-background/40 p-3"
+                : "hidden"
+            }`}
+          >
+            {timeline && (
+              <div className={capabilities ? "min-w-0" : "min-w-0 xl:col-span-2"}>
+                <KirakaraStyleEditor style={style} onChange={updateStyle} />
+              </div>
+            )}
+            {timeline && capabilities && (
+              <div className="min-w-0 xl:border-l xl:pl-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+                <KirakaraRenderActions
+                  capabilities={capabilities}
+                  video={video}
+                  timeline={timeline}
+                  style={style}
+                  jobId={jobId}
+                  vocalMode={vocalMode}
+                  onCloudRenderQueued={onCloudRenderQueued}
+                />
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {(timelineError || selectionWarning) && (

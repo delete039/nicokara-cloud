@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.database import Database, JobCanceledError
+from app.lyrics.lrc import parse_lrc, retime_timeline_from_lrc
 
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,10 @@ class TranscriptionPipeline:
                     transcript_path=transcript_path,
                 )
                 lyrics = Path(lyrics_path_value).read_text(encoding="utf-8")
-                processed_lyrics = self.lyric_processor.process(lyrics)
+                parsed_lrc = parse_lrc(lyrics)
+                processed_lyrics = self.lyric_processor.process(
+                    parsed_lrc.lyrics_text if parsed_lrc.has_timing else lyrics
+                )
                 lyrics_processed_path.write_text(
                     json.dumps(
                         processed_lyrics.to_dict(),
@@ -195,6 +199,11 @@ class TranscriptionPipeline:
                         lyrics_processed_path=lyrics_processed_path,
                     )
                     timeline = self.aligner.align(processed_lyrics, transcript)
+                    if parsed_lrc.has_timing:
+                        timeline = retime_timeline_from_lrc(
+                            timeline,
+                            parsed_lrc.line_starts_ms,
+                        )
                     timeline_path.write_text(
                         json.dumps(
                             timeline.to_dict(),

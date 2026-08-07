@@ -47,4 +47,18 @@ describe("Kirakara style", () => {
       DEFAULT_KIRAKARA_STYLE,
     );
   });
+
+  it("preserves a user-entered system font stack like upstream Kirakara", () => {
+    expect(
+      normalizeKirakaraStyle({
+        fontFamily: "'Hiragino Sans', sans-serif",
+      }).fontFamily,
+    ).toBe("'Hiragino Sans', sans-serif");
+  });
+
+  it("rejects control characters in custom font names", () => {
+    expect(
+      normalizeKirakaraStyle({ fontFamily: "Broken\nFont" }).fontFamily,
+    ).toBe(DEFAULT_KIRAKARA_STYLE.fontFamily);
+  });
 });

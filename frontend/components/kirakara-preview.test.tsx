@@ -56,4 +56,27 @@ describe("KirakaraPreview", () => {
     expect(html).toContain('data-kirakara-dom-preview="true"');
     expect(html).not.toContain("<canvas");
   });
+
+  it("uses a compact desktop workbench with preview and timeline above the controls", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-responsive-preview", new File(["video"], "song.mp4"));
+
+    const html = renderToStaticMarkup(
+      <preview.KirakaraPreview
+        jobId="job-responsive-preview"
+        expectedVideoName="song.mp4"
+      />,
+    );
+
+    expect(html).toContain('data-kirakara-workbench="desktop-fit"');
+    expect(html).toContain('data-kirakara-preview-panel="true"');
+    expect(html).toContain('data-kirakara-timeline-panel="true"');
+    expect(html).toContain('data-kirakara-controls-panel="true"');
+    expect(html).toContain("xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]");
+    expect(html).toContain("lg:col-span-2");
+    expect(html).toContain("lg:max-h-[min(22rem,calc(100vh-19rem))]");
+    expect(html).toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
+  });
 });

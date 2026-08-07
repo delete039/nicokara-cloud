@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
 import { JobMetadata } from "@/components/job-metadata";
 import { KirakaraPreview } from "@/components/kirakara-preview";
+import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
 import {
   jobFailureFeedback,
   networkErrorFeedback,
@@ -35,7 +36,6 @@ import {
   getJob,
   processedLyricsUrl,
   resultVideoUrl,
-  subtitleUrl,
   timelineUrl,
   transcriptUrl,
 } from "@/services/api";
@@ -316,13 +316,10 @@ export function JobStatus({ jobId }: { jobId: string }) {
             )}
             {(job.status === "SUBTITLE_GENERATED" ||
               job.status === "COMPLETED") && (
-              <a
-                href={subtitleUrl(job.id)}
-                className="focus-ring inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground"
-              >
-                <Download className="size-4" />
-                {JOB_COPY.downloadSubtitle}
-              </a>
+              <KirakaraProjectDownload
+                jobId={job.id}
+                videoName={job.original_video_name}
+              />
             )}
           </div>
         )}

@@ -112,50 +112,16 @@ function isKanji(character: string): boolean {
   );
 }
 
-function escapeRegularExpression(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function kanjiRuby(surface: string, reading: string): KirakaraRuby[] {
   const characters = [...surface];
-  const runs: Array<{ startCharacter: number; endCharacter: number }> = [];
-  let runStart: number | null = null;
-  characters.forEach((character, index) => {
-    if (isKanji(character)) {
-      runStart ??= index;
-    } else if (runStart !== null) {
-      runs.push({ startCharacter: runStart, endCharacter: index });
-      runStart = null;
-    }
-  });
-  if (runStart !== null) {
-    runs.push({ startCharacter: runStart, endCharacter: characters.length });
-  }
-  if (runs.length === 0 || !reading.trim()) return [];
-
-  const pattern: string[] = ["^"];
-  let position = 0;
-  for (const run of runs) {
-    pattern.push(
-      escapeRegularExpression(
-        normalizeKana(characters.slice(position, run.startCharacter).join("")),
-      ),
-    );
-    pattern.push("(.*?)");
-    position = run.endCharacter;
-  }
-  pattern.push(
-    escapeRegularExpression(normalizeKana(characters.slice(position).join(""))),
-    "$",
-  );
-  const captures = new RegExp(pattern.join("")).exec(normalizeKana(reading));
-
-  return runs
-    .map((run, index) => ({
-      ...run,
-      text: captures?.[index + 1] ?? (runs.length === 1 ? normalizeKana(reading) : ""),
-    }))
-    .filter((ruby) => ruby.text.length > 0);
+  if (!characters.some(isKanji) || !reading.trim()) return [];
+  return [
+    {
+      text: normalizeKana(reading),
+      startCharacter: 0,
+      endCharacter: characters.length,
+    },
+  ];
 }
 
 export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline {

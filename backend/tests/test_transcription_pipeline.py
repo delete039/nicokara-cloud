@@ -11,7 +11,7 @@ from app.ai.whisper import (
     TranscriptSegment,
     TranscriptWord,
 )
-from app.alignment.models import LyricTimeline
+from app.alignment.models import AlignedLine, AlignedToken, LyricTimeline
 from app.core.database import Database
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
 
@@ -382,6 +382,100 @@ def test_pipeline_aligns_processed_lyrics_and_persists_timeline(
     assert job["stage"] == "ALIGNMENT_COMPLETE"
     assert job["progress"] == 100
     assert job["timeline_path"] == str(timeline_path)
+
+
+def test_pipeline_uses_existing_lrc_text_and_line_timing(tmp_path: Path) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "job"
+    job_id = create_uploaded_job(database, job_dir)
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text(
+        "[00:01.00]{今日|きょう}も\n[00:03.50]歌う\n",
+        encoding="utf-8",
+    )
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET lyrics_path = ? WHERE id = ?",
+            (str(lyrics_path), job_id),
+        )
+
+    processed = LyricDocument(
+        provider="local",
+        source_text="今日も\n歌う",
+        lines=[
+            LyricLine(
+                source="今日も",
+                surface="今日も",
+                reading="きょうも",
+                tokens=[LyricToken(surface="今日も", reading="きょうも")],
+            ),
+            LyricLine(
+                source="歌う",
+                surface="歌う",
+                reading="うたう",
+                tokens=[LyricToken(surface="歌う", reading="うたう")],
+            ),
+        ],
+    )
+
+    class RecordingLyricProcessor:
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+
+        def process(self, text: str) -> LyricDocument:
+            self.texts.append(text)
+            return processed
+
+    class FixedAligner:
+        def align(
+            self,
+            lyrics: LyricDocument,
+            transcript: TranscriptDocument,
+        ) -> LyricTimeline:
+            return LyricTimeline(
+                confidence=1.0,
+                lines=[
+                    AlignedLine(
+                        surface=line.surface,
+                        reading=line.reading,
+                        start_ms=2000 + index * 2000,
+                        end_ms=3000 + index * 2000,
+                        confidence=1.0,
+                        tokens=[
+                            AlignedToken(
+                                surface=line.surface,
+                                reading=line.reading,
+                                start_ms=2000 + index * 2000,
+                                end_ms=3000 + index * 2000,
+                                confidence=1.0,
+                            )
+                        ],
+                    )
+                    for index, line in enumerate(lyrics.lines)
+                ],
+            )
+
+    lyric_processor = RecordingLyricProcessor()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        lyric_processor=lyric_processor,
+        aligner=FixedAligner(),
+    )
+
+    pipeline.process(job_id)
+
+    assert lyric_processor.texts == ["今日も\n歌う"]
+    timeline = json.loads(
+        (job_dir / "timeline.json").read_text(encoding="utf-8")
+    )
+    assert [
+        (line["start_ms"], line["end_ms"]) for line in timeline["lines"]
+    ] == [(1000, 3500), (3500, 4500)]
+    assert "lrc_timing_applied" in timeline["warnings"]
 
 
 def test_pipeline_records_alignment_failure(tmp_path: Path) -> None:

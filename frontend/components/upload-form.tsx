@@ -296,7 +296,7 @@ export function UploadForm() {
           <input
             ref={lyricsInput}
             type="file"
-            accept=".txt,text/plain"
+            accept=".txt,.lrc,text/plain,application/x-subrip"
             className="sr-only"
             onChange={(event) => {
               setLyricsFile(event.target.files?.[0] ?? null);
@@ -311,7 +311,7 @@ export function UploadForm() {
             className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
           >
             <FileText className="size-4" />
-            {lyricsFile ? lyricsFile.name : "选择 TXT 文件"}
+            {lyricsFile ? lyricsFile.name : "选择 TXT / LRC 文件"}
           </button>
           {lyricsFile && (
             <button

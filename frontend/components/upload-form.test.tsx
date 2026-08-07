@@ -13,4 +13,11 @@ describe("UploadForm", () => {
 
     expect(html).toContain("拖放 MP4 文件到这里");
   });
+
+  it("accepts existing LRC lyric files as well as plain text", () => {
+    const html = renderToStaticMarkup(<UploadForm />);
+
+    expect(html).toContain('accept=".txt,.lrc,text/plain,application/x-subrip"');
+    expect(html).toContain("选择 TXT / LRC 文件");
+  });
 });
