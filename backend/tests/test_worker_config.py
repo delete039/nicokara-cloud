@@ -26,12 +26,12 @@ def write_config(
     )
 
 
-def test_repository_worker_config_defaults_to_four_workers() -> None:
+def test_repository_worker_config_defaults_to_three_workers() -> None:
     config_path = Path(__file__).parents[1] / "config" / "workers.toml"
 
     config = load_worker_config(config_path)
 
-    assert config.worker_count == 4
+    assert config.worker_count == 3
     assert config.reload_interval_seconds == 1.0
 
 

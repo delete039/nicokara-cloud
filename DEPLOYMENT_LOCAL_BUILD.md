@@ -184,7 +184,7 @@ sudo ln -sfn "$RELEASE_DIR" /data/nicokara/current
 
 ```toml
 [processing]
-worker_count = 4
+worker_count = 3
 reload_interval_seconds = 1.0
 ```
 

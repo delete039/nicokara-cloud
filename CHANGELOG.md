@@ -7,7 +7,7 @@
 ### 运行配置
 
 - 增加可配置的首次访问公告，部署后可直接修改或关闭公告，无需重新构建前端。
-- 后台处理默认启动 4 个 worker，并支持通过 `workers.toml` 热调整 worker 数量。
+- 后台处理默认启动 3 个 worker，并支持通过 `workers.toml` 热调整 worker 数量。
 
 ### Kirakara 双行样式修正
 

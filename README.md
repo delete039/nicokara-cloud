@@ -22,7 +22,7 @@
 ### v0.3.0-alpha.2 - 2026-08-06
 
 - 增加可配置的首次访问公告，公告 JSON 可在部署后直接更新或关闭。
-- 后台任务默认使用 4 个 worker，并支持通过 TOML 配置热调整 worker 数量。
+- 后台任务默认使用 3 个 worker，并支持通过 TOML 配置热调整 worker 数量。
 - 浏览器预览、本地导出和云端渲染统一采用 Kirakara 双行交替字幕逻辑。
 - 增加可视化时间轴调整、整体偏移、逐词注音检查和字幕样式设置。
 - 增加 WebCodecs 本地 MP4 导出；支持时只显示本地导出，不支持时只显示云端渲染。
@@ -209,7 +209,7 @@ docker compose up --build
 - 后端接口文档：<http://localhost:8000/docs>
 - 后端健康检查：<http://localhost:8000/health>
 
-后台任务默认启动 4 个 worker。运行时可修改
+后台任务默认启动 3 个 worker。运行时可修改
 `backend/config/workers.toml` 中的 `processing.worker_count`，后端会在 1 秒内热加载，
 无需重启容器。全站公告位于 `frontend/public/announcement.json`；修改内容后刷新页面
 即可生效，设置 `enabled` 为 `false` 可关闭公告。
