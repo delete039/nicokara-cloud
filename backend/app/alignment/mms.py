@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import re
+import json
+import subprocess
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from pykakasi import kakasi
+
+from app.ai.whisper import TranscriptDocument
+from app.alignment.japanese import normalize_reading, split_moras
+from app.alignment.models import (
+    AlignedLine,
+    AlignedMora,
+    AlignedToken,
+    LyricTimeline,
+)
+from app.lyrics.models import LyricDocument
+
+
+MMS_MODEL_NAME = "torchaudio.pipelines.MMS_FA"
+_ROMAJI_FILTER = re.compile("[^a-z']")
+_CONVERTER = kakasi()
+
+
+class ForcedAlignmentError(RuntimeError):
+    """Raised when MMS_FA cannot produce a complete, usable alignment."""
+
+
+@dataclass(frozen=True)
+class MMSMoraSpan:
+    start_ms: int
+    end_ms: int
+    score: float
+
+
+class SubprocessMMSRuntime:
+    """Run the memory-heavy MMS model in a killable per-task process."""
+
+    def __init__(
+        self,
+        *,
+        device: str = "auto",
+        runner: Any = subprocess.run,
+        python_command: str = sys.executable,
+    ) -> None:
+        self.device = device
+        self.runner = runner
+        self.python_command = python_command
+
+    def align(
+        self,
+        audio_path: Path,
+        tokens: list[str],
+        timeout_seconds: float,
+    ) -> list[MMSMoraSpan]:
+        request_id = uuid.uuid4().hex
+        request_path = audio_path.parent / f".mms-{request_id}.request.json"
+        output_path = audio_path.parent / f".mms-{request_id}.output.json"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "audio_path": str(audio_path.resolve()),
+                    "tokens": tokens,
+                },
+                ensure_ascii=True,
+            ),
+            encoding="utf-8",
+        )
+        command = [
+            self.python_command,
+            "-m",
+            "app.alignment.mms_worker",
+            "--request",
+            str(request_path),
+            "--output",
+            str(output_path),
+            "--device",
+            self.device,
+        ]
+        try:
+            self.runner(
+                command,
+                timeout=timeout_seconds,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            return [
+                MMSMoraSpan(
+                    start_ms=int(span["start_ms"]),
+                    end_ms=int(span["end_ms"]),
+                    score=float(span["score"]),
+                )
+                for span in payload["spans"]
+            ]
+        except subprocess.TimeoutExpired as exc:
+            raise ForcedAlignmentError("MMS_FA alignment timed out") from exc
+        except Exception as exc:
+            raise ForcedAlignmentError("MMS_FA worker failed") from exc
+        finally:
+            request_path.unlink(missing_ok=True)
+            output_path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class _MoraTarget:
+    line_index: int
+    token_index: int
+    reading: str
+
+
+class MMSForcedAligner:
+    """Map FA-Kara-style MMS forced-alignment spans to Nicokara moras."""
+
+    requires_vocals = True
+
+    def __init__(
+        self,
+        *,
+        runtime: Any,
+        timeout_seconds: float = 600,
+    ) -> None:
+        self.runtime = runtime
+        self.timeout_seconds = timeout_seconds
+
+    def align(
+        self,
+        lyrics: LyricDocument,
+        transcript: TranscriptDocument,
+        *,
+        audio_path: Path,
+    ) -> LyricTimeline:
+        del transcript
+        targets = self._targets(lyrics)
+        if not targets:
+            raise ForcedAlignmentError("Lyrics contain no alignable moras")
+        tokens = self._romanized_tokens(targets)
+        spans = self.runtime.align(
+            audio_path,
+            tokens,
+            self.timeout_seconds,
+        )
+        if len(spans) != len(targets):
+            raise ForcedAlignmentError(
+                "MMS_FA span count does not match the lyric mora count"
+            )
+        self._validate_spans(spans)
+        return self._timeline(lyrics, targets, spans)
+
+    @staticmethod
+    def _targets(lyrics: LyricDocument) -> list[_MoraTarget]:
+        return [
+            _MoraTarget(line_index, token_index, mora)
+            for line_index, line in enumerate(lyrics.lines)
+            for token_index, token in enumerate(line.tokens)
+            for mora in split_moras(normalize_reading(token.reading))
+        ]
+
+    @staticmethod
+    def _romanized_tokens(targets: list[_MoraTarget]) -> list[str]:
+        raw = []
+        for target in targets:
+            converted = "".join(
+                item["hepburn"] for item in _CONVERTER.convert(target.reading)
+            ).lower()
+            raw.append(_ROMAJI_FILTER.sub("", converted))
+
+        tokens: list[str] = []
+        for index, token in enumerate(raw):
+            reading = targets[index].reading
+            if reading == "っ":
+                following = raw[index + 1] if index + 1 < len(raw) else ""
+                token = following[:1] or "t"
+            elif reading == "ー":
+                previous = tokens[-1] if tokens else ""
+                token = next(
+                    (char for char in reversed(previous) if char in "aeiou"),
+                    "u",
+                )
+            if not token:
+                raise ForcedAlignmentError(
+                    f"Mora cannot be romanized for MMS_FA: {reading!r}"
+                )
+            tokens.append(token)
+        return tokens
+
+    @staticmethod
+    def _validate_spans(spans: list[MMSMoraSpan]) -> None:
+        previous_end = 0
+        for span in spans:
+            if (
+                span.start_ms < previous_end
+                or span.end_ms < span.start_ms
+                or not 0 <= span.score <= 1
+            ):
+                raise ForcedAlignmentError("MMS_FA returned invalid spans")
+            previous_end = span.end_ms
+
+    @staticmethod
+    def _timeline(
+        lyrics: LyricDocument,
+        targets: list[_MoraTarget],
+        spans: list[MMSMoraSpan],
+    ) -> LyricTimeline:
+        lines: list[AlignedLine] = []
+        span_offset = 0
+        for line_index, line in enumerate(lyrics.lines):
+            aligned_tokens: list[AlignedToken] = []
+            for token_index, token in enumerate(line.tokens):
+                count = sum(
+                    target.line_index == line_index
+                    and target.token_index == token_index
+                    for target in targets
+                )
+                token_targets = targets[span_offset : span_offset + count]
+                token_spans = spans[span_offset : span_offset + count]
+                span_offset += count
+                moras = [
+                    AlignedMora(
+                        reading=target.reading,
+                        start_ms=span.start_ms,
+                        end_ms=span.end_ms,
+                        matched=True,
+                        confidence=span.score,
+                    )
+                    for target, span in zip(
+                        token_targets,
+                        token_spans,
+                        strict=True,
+                    )
+                ]
+                if moras:
+                    start_ms = moras[0].start_ms
+                    end_ms = moras[-1].end_ms
+                    confidence = sum(m.confidence for m in moras) / len(moras)
+                else:
+                    anchor = aligned_tokens[-1].end_ms if aligned_tokens else 0
+                    start_ms = end_ms = anchor
+                    confidence = 1.0
+                aligned_tokens.append(
+                    AlignedToken(
+                        surface=token.surface,
+                        reading=token.reading,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        confidence=confidence,
+                        moras=moras,
+                    )
+                )
+            if not aligned_tokens:
+                continue
+            lines.append(
+                AlignedLine(
+                    surface=line.surface,
+                    reading=line.reading,
+                    start_ms=aligned_tokens[0].start_ms,
+                    end_ms=aligned_tokens[-1].end_ms,
+                    confidence=(
+                        sum(token.confidence for token in aligned_tokens)
+                        / len(aligned_tokens)
+                    ),
+                    tokens=aligned_tokens,
+                )
+            )
+
+        confidence = sum(span.score for span in spans) / len(spans)
+        warnings = ["mms_low_confidence"] if confidence < 0.5 else []
+        return LyricTimeline(
+            confidence=confidence,
+            lines=lines,
+            warnings=warnings,
+            alignment_engine="fa_kara_mms",
+            alignment_model=MMS_MODEL_NAME,
+        )

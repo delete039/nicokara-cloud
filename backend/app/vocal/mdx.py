@@ -26,7 +26,12 @@ class MDXNetVocalRemover:
         self._separator_factory = separator_factory
         self._lock = threading.Lock()
 
-    def _create_separator(self, output_dir: Path) -> Any:
+    def _create_separator(
+        self,
+        output_dir: Path,
+        *,
+        output_single_stem: str | None = "Instrumental",
+    ) -> Any:
         factory = self._separator_factory
         if factory is None:
             try:
@@ -42,7 +47,7 @@ class MDXNetVocalRemover:
             model_file_dir=str(self.model_dir),
             output_dir=str(output_dir),
             output_format="WAV",
-            output_single_stem="Instrumental",
+            output_single_stem=output_single_stem,
         )
         separator.load_model(model_filename=self.model_filename)
         return separator
@@ -65,6 +70,39 @@ class MDXNetVocalRemover:
         except Exception as exc:
             raise AudioExtractionError(
                 "MDX-Net vocal removal failed"
+            ) from exc
+
+    def separate_stems(
+        self,
+        input_path: Path,
+        vocals_path: Path,
+        instrumental_path: Path,
+    ) -> None:
+        if vocals_path.parent.resolve() != instrumental_path.parent.resolve():
+            raise ValueError("Separated stems must share an output directory")
+        vocals_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._lock:
+                vocals_path.unlink(missing_ok=True)
+                instrumental_path.unlink(missing_ok=True)
+                separator = self._create_separator(
+                    vocals_path.parent,
+                    output_single_stem=None,
+                )
+                output_files = separator.separate(
+                    str(input_path),
+                    {
+                        "Vocals": vocals_path.stem,
+                        "Instrumental": instrumental_path.stem,
+                    },
+                )
+                self._place_output(output_files, vocals_path)
+                self._place_output(output_files, instrumental_path)
+        except AudioExtractionError:
+            raise
+        except Exception as exc:
+            raise AudioExtractionError(
+                "MDX-Net stem separation failed"
             ) from exc
 
     @staticmethod

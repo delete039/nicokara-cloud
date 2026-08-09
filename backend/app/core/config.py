@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    fa_kara_enabled: bool = True
+    fa_kara_device: str = "auto"
+    fa_kara_timeout_seconds: int = 600
     vocal_removal_backend: str = "mdx"
     vocal_removal_model: str = "UVR_MDXNET_KARA_2.onnx"
     vocal_removal_model_dir: Path = Field(
@@ -84,6 +87,7 @@ class Settings(BaseSettings):
         "job_retention_hours",
         "cleanup_interval_seconds",
         "video_render_timeout_seconds",
+        "fa_kara_timeout_seconds",
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:
@@ -128,6 +132,13 @@ class Settings(BaseSettings):
     def valid_vocal_removal_backend(cls, value: str) -> str:
         if value not in {"mdx", "stft"}:
             raise ValueError("must be mdx or stft")
+        return value
+
+    @field_validator("fa_kara_device")
+    @classmethod
+    def valid_fa_kara_device(cls, value: str) -> str:
+        if value not in {"auto", "cpu", "cuda"}:
+            raise ValueError("must be auto, cpu or cuda")
         return value
 
     @property

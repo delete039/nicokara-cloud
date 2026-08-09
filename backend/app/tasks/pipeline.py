@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,7 @@ class TranscriptionPipeline:
         video_path = Path(job["video_path"])
         job_dir = video_path.parent
         audio_path = job_dir / "audio.wav"
+        vocals_path = job_dir / "audio_vocals.wav"
         instrumental_path = job_dir / "audio_instrumental.wav"
         transcript_path = job_dir / "transcript.json"
         lyrics_processed_path = job_dir / "lyrics_processed.json"
@@ -131,7 +133,15 @@ class TranscriptionPipeline:
             self.extractor.extract(video_path, audio_path)
             vocal_mode = job.get("vocal_mode", "on")
             render_vocal_mode = "on"
-            if vocal_mode == "off":
+            high_accuracy_audio_job = (
+                job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+                and bool(getattr(self.aligner, "requires_vocals", False))
+                and self.vocal_remover is not None
+                and hasattr(self.vocal_remover, "separate_stems")
+            )
+            alignment_fallback_warning: str | None = None
+            analysis_audio_path = audio_path
+            if vocal_mode == "off" or high_accuracy_audio_job:
                 stage = "REMOVING_VOCALS"
                 self.database.update_job_state(
                     job_id,
@@ -143,11 +153,40 @@ class TranscriptionPipeline:
                 if self.vocal_remover is not None:
                     stereo_path = job_dir / "audio_stereo.wav"
                     self.extractor.extract_stereo(video_path, stereo_path)
-                    self.vocal_remover.remove_vocals(
-                        stereo_path, instrumental_path
-                    )
-                    stereo_path.unlink(missing_ok=True)
-                render_vocal_mode = "off"
+                    try:
+                        if high_accuracy_audio_job and hasattr(
+                            self.vocal_remover,
+                            "separate_stems",
+                        ):
+                            try:
+                                self.vocal_remover.separate_stems(
+                                    stereo_path,
+                                    vocals_path,
+                                    instrumental_path,
+                                )
+                                analysis_audio_path = vocals_path
+                            except Exception as exc:
+                                if vocal_mode == "off":
+                                    raise
+                                vocals_path.unlink(missing_ok=True)
+                                instrumental_path.unlink(missing_ok=True)
+                                high_accuracy_audio_job = False
+                                alignment_fallback_warning = (
+                                    f"uvr_fallback:{type(exc).__name__}"
+                                )
+                                logger.warning(
+                                    "Vocal separation failed; using original "
+                                    "audio and Whisper alignment: %s",
+                                    type(exc).__name__,
+                                )
+                        else:
+                            self.vocal_remover.remove_vocals(
+                                stereo_path, instrumental_path
+                            )
+                    finally:
+                        stereo_path.unlink(missing_ok=True)
+                if vocal_mode == "off":
+                    render_vocal_mode = "off"
             stage = "TRANSCRIBING"
             self.database.update_job_state(
                 job_id,
@@ -156,7 +195,7 @@ class TranscriptionPipeline:
                 progress=40,
                 audio_path=audio_path,
             )
-            transcript = self.transcriber.transcribe(audio_path)
+            transcript = self.transcriber.transcribe(analysis_audio_path)
             transcript_path.write_text(
                 json.dumps(transcript.to_dict(), ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -194,7 +233,22 @@ class TranscriptionPipeline:
                         transcript_path=transcript_path,
                         lyrics_processed_path=lyrics_processed_path,
                     )
-                    timeline = self.aligner.align(processed_lyrics, transcript)
+                    if high_accuracy_audio_job:
+                        timeline = self.aligner.align(
+                            processed_lyrics,
+                            transcript,
+                            audio_path=analysis_audio_path,
+                        )
+                    else:
+                        timeline = self.aligner.align(processed_lyrics, transcript)
+                    if alignment_fallback_warning is not None:
+                        timeline = replace(
+                            timeline,
+                            warnings=[
+                                *timeline.warnings,
+                                alignment_fallback_warning,
+                            ],
+                        )
                     timeline_path.write_text(
                         json.dumps(
                             timeline.to_dict(),

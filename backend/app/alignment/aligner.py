@@ -118,6 +118,7 @@ class LyricTimelineAligner:
             confidence=confidence,
             lines=lines,
             warnings=warnings,
+            alignment_engine="whisper_mora",
         )
 
     @staticmethod
