@@ -616,7 +616,7 @@ class Database:
                 UPDATE jobs
                 SET status = 'UPLOADED',
                     stage = 'CLOUD_RENDER_QUEUED',
-                    progress = 0,
+                    progress = 10,
                     video_path = ?,
                     video_size_bytes = ?,
                     video_sha256 = ?,

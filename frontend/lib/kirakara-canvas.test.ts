@@ -21,6 +21,10 @@ function context(
     beginPath: vi.fn(),
     rect: vi.fn(),
     clip: vi.fn(),
+    arc: vi.fn(),
+    fill: vi.fn(),
+    stroke: vi.fn(),
+    globalAlpha: 1,
     fillStyle: "",
     strokeStyle: "",
     lineWidth: 0,
@@ -146,6 +150,24 @@ describe("drawKirakaraFrame", () => {
     });
 
     expect(canvas.lineWidth).toBeCloseTo(11, 5);
+  });
+
+  it("draws the paragraph indicator supplied by the shared Kirakara frame", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [
+        {
+          slot: "upper",
+          text: "line",
+          opacity: 1,
+          indicatorOpacities: [1, 0, 0, 0],
+          units: [{ text: "line", progress: 0, ruby: [] }],
+        },
+      ],
+    });
+
+    expect(canvas.arc).toHaveBeenCalledTimes(1);
   });
 
   it("measures the kanji base with the main font before centering ruby", () => {

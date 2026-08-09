@@ -96,7 +96,7 @@ class TranscriptionPipeline:
                     job_id,
                     status="PROCESSING",
                     stage=stage,
-                    progress=98,
+                    progress=50,
                     timeline_path=timeline_path if timeline_path.exists() else None,
                     ass_path=ass_path,
                 )

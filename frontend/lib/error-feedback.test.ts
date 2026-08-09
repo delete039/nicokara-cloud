@@ -79,6 +79,30 @@ describe("httpErrorFeedback", () => {
     expect(feedback.solutions.join(" ")).toContain("Nginx");
     expect(feedback.solutions.join(" ")).toContain("nicokara-backend");
   });
+
+  it("describes invalid reviewed timelines as cloud render input errors", () => {
+    const feedback = httpErrorFeedback(
+      "cloud_render",
+      422,
+      "时间轴校正数据无效：line 6 token timing is invalid",
+    );
+
+    expect(feedback.title).toBe("时间轴校正数据无效");
+    expect(feedback.description).toContain("第 6 行");
+    expect(feedback.description).not.toContain("歌词或表单参数创建任务");
+  });
+
+  it("does not describe a cloud render state conflict as a download error", () => {
+    const feedback = httpErrorFeedback(
+      "cloud_render",
+      409,
+      "当前任务不能进入云端仅渲染队列",
+    );
+
+    expect(feedback.title).toBe("云端渲染状态已变化");
+    expect(feedback.description).toContain("刷新");
+    expect(feedback.description).not.toContain("文件暂时不能下载");
+  });
 });
 
 describe("jobFailureFeedback", () => {

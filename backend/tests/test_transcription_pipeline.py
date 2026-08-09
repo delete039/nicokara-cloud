@@ -830,9 +830,13 @@ def test_cloud_render_queue_skips_recognition_and_only_renders_video(
     class RecordingRenderer:
         def __init__(self) -> None:
             self.calls = []
+            self.progress_during_render = []
 
         def render(self, input_path, subtitle_path, output_path, **kwargs) -> None:
             self.calls.append((input_path, subtitle_path, kwargs))
+            current = database.get_job(job_id)
+            assert current is not None
+            self.progress_during_render.append(current["progress"])
             output_path.write_bytes(b"rendered")
 
     renderer = RecordingRenderer()
@@ -846,6 +850,7 @@ def test_cloud_render_queue_skips_recognition_and_only_renders_video(
     pipeline.process(job_id)
 
     assert renderer.calls == [(video_path, ass_path, {"vocal_mode": "on", "instrumental_audio_path": None})]
+    assert renderer.progress_during_render == [50]
     job = database.get_job(job_id)
     assert job is not None
     assert job["status"] == "COMPLETED"

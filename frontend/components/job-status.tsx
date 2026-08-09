@@ -315,7 +315,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
               </a>
             )}
             {(job.status === "SUBTITLE_GENERATED" ||
-              job.status === "COMPLETED") && (
+              job.status === "COMPLETED") &&
+              job.input_mode !== "AUDIO_ONLY" && (
               <KirakaraProjectDownload
                 jobId={job.id}
                 videoName={job.original_video_name}

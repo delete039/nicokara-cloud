@@ -3,7 +3,11 @@ import {
   normalizeKirakaraStyle,
   type KirakaraStyle,
 } from "./kirakara-style";
-import type { KirakaraRenderUnit, KirakaraTimeline } from "./kirakara-timeline";
+import {
+  layoutKirakaraParagraphs,
+  type KirakaraRenderUnit,
+  type KirakaraTimeline,
+} from "./kirakara-timeline";
 
 const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
 
@@ -43,11 +47,15 @@ function rubyDirectives(timeline: KirakaraTimeline): string[] {
 
 export function serializeKirakaraLrc(timeline: KirakaraTimeline): string {
   const directives = rubyDirectives(timeline);
-  const lyricLines = timeline.lines.map((line) => {
+  const layout = layoutKirakaraParagraphs(timeline.lines);
+  const lyricLines = layout.map(({ line, paragraph }, index) => {
     const body = line.units
       .map((unit) => `${formatKirakaraTime(unit.startMs)}${unit.text}`)
       .join("");
-    return `${body}${formatKirakaraTime(line.endMs)}`;
+    const paragraphBreak = index > 0 && paragraph !== layout[index - 1].paragraph
+      ? "\n"
+      : "";
+    return `${paragraphBreak}${body}${formatKirakaraTime(line.endMs)}`;
   });
   return [...directives, ...lyricLines].join("\n");
 }

@@ -281,6 +281,7 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         payload = response.json()
         assert payload["status"] == "UPLOADED"
         assert payload["stage"] == "CLOUD_RENDER_QUEUED"
+        assert payload["progress"] == 10
         assert payload["queue_position"] == 1
         assert runner.job_ids == [job_id]
         job = client.app.state.database.get_job(job_id)

@@ -20,6 +20,8 @@ describe("KirakaraDomFrame", () => {
         {
           slot: "upper" as const,
           text: "東京",
+          opacity: 0.25,
+          indicatorOpacities: [1, 0, 0, 0],
           units: [
             {
               text: "東京",
@@ -28,7 +30,18 @@ describe("KirakaraDomFrame", () => {
                 { text: "東", progress: 1 },
                 { text: "京", progress: 0.25 },
               ],
-              ruby: [{ text: "とうきょう", startCharacter: 0, endCharacter: 2 }],
+              ruby: [{
+                text: "とうきょう",
+                startCharacter: 0,
+                endCharacter: 2,
+                characters: [
+                  { text: "と", progress: 1 },
+                  { text: "う", progress: 0.75 },
+                  { text: "き", progress: 0 },
+                  { text: "ょ", progress: 0 },
+                  { text: "う", progress: 0 },
+                ],
+              }],
             },
           ],
         },
@@ -45,7 +58,10 @@ describe("KirakaraDomFrame", () => {
     expect(html).toContain('data-kirakara-dom-preview="true"');
     expect(html.match(/data-kirakara-character=/g)).toHaveLength(2);
     expect(html).toContain("clip-path:inset(-50% calc(75% + 0.5px) -50% -5px)");
+    expect(html).toContain("clip-path:inset(-50% calc(25% + 0.5px) -50% -4px)");
     expect(html).toContain('data-kirakara-ruby-sizer="true"');
+    expect(html).toContain("opacity:0.25");
+    expect(html.match(/data-kirakara-indicator-dot=/g)).toHaveLength(4);
     expect(html).not.toContain("letter-spacing:5px");
   });
 });

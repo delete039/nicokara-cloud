@@ -2,8 +2,8 @@ import type {
   KirakaraFrame,
   KirakaraFrameCharacter,
   KirakaraFrameLine,
+  KirakaraFrameRuby,
   KirakaraFrameUnit,
-  KirakaraRuby,
 } from "./kirakara-timeline";
 import {
   DEFAULT_KIRAKARA_STYLE,
@@ -27,6 +27,10 @@ export type KirakaraCanvasContext = {
   beginPath(): void;
   rect(x: number, y: number, width: number, height: number): void;
   clip(): void;
+  arc?(x: number, y: number, radius: number, startAngle: number, endAngle: number): void;
+  fill?(): void;
+  stroke?(): void;
+  globalAlpha?: number;
   fillStyle: string | CanvasGradient | CanvasPattern;
   strokeStyle: string | CanvasGradient | CanvasPattern;
   lineWidth: number;
@@ -36,7 +40,7 @@ export type KirakaraCanvasContext = {
 
 type LayoutGroup = {
   characters: Array<KirakaraFrameCharacter & { width: number; x: number }>;
-  ruby: KirakaraRuby | null;
+  ruby: KirakaraFrameRuby | null;
   baseWidth: number;
   rubyWidth: number;
   effectiveWidth: number;
@@ -49,6 +53,11 @@ const AFTER_STROKE = "#ffffff";
 const MAIN_LETTER_SPACING = 9;
 const RUBY_LETTER_SPACING = 5;
 const RUBY_OFFSET = 4;
+const RUBY_STROKE_WIDTH = 4;
+const INDICATOR_SIZE = 34;
+const INDICATOR_SPACING = 12;
+const INDICATOR_STROKE_WIDTH = 3;
+const INDICATOR_OFFSET_Y = 8;
 const MAIN_LINE_HEIGHT = 1.2;
 const RUBY_LINE_HEIGHT = 1.1;
 const baselineCache = new Map<string, number>();
@@ -257,6 +266,36 @@ function drawLine(
     - RUBY_OFFSET * scaleY
     - (rubyFontSize * RUBY_LINE_HEIGHT - rubyBaselineOffset);
 
+  const previousAlpha = context.globalAlpha ?? 1;
+  context.globalAlpha = previousAlpha * (line.opacity ?? 1);
+
+  if (line.indicatorOpacities && context.arc && context.fill && context.stroke) {
+    const radius = INDICATOR_SIZE * scaleY / 2;
+    const dotSize = INDICATOR_SIZE * scaleY;
+    const spacing = INDICATOR_SPACING * scaleX;
+    const baseX = 128 * scaleX;
+    const baseY = lineTop
+      - (style.rubySize + RUBY_OFFSET + INDICATOR_OFFSET_Y) * scaleY;
+    line.indicatorOpacities.forEach((opacity, index) => {
+      if (opacity <= 0) return;
+      context.globalAlpha = previousAlpha * (line.opacity ?? 1) * opacity;
+      context.beginPath();
+      context.arc?.(
+        baseX + index * (dotSize + spacing) + radius,
+        baseY - dotSize + radius,
+        radius - INDICATOR_STROKE_WIDTH * scaleY / 2,
+        0,
+        Math.PI * 2,
+      );
+      context.fillStyle = "#ffffff";
+      context.fill?.();
+      context.strokeStyle = "#000000";
+      context.lineWidth = INDICATOR_STROKE_WIDTH * scaleY;
+      context.stroke?.();
+    });
+    context.globalAlpha = previousAlpha * (line.opacity ?? 1);
+  }
+
   context.textBaseline = "alphabetic";
   for (const group of groups) {
     context.font = mainFont;
@@ -283,19 +322,24 @@ function drawLine(
     if (!group.ruby) continue;
     const rubyX = group.x + (group.effectiveWidth - group.rubyWidth) / 2;
     context.font = rubyFont;
-    const rubyStrokeWidth = Math.max(2, style.strokeWidth * 0.8) * scaleY;
+    const rubyStrokeWidth = RUBY_STROKE_WIDTH * scaleY;
     context.lineWidth = rubyStrokeWidth * 2.2;
     const groupProgress = group.characters.length > 0
       ? group.characters.reduce((progress, character) => progress + character.progress, 0)
         / group.characters.length
       : 0;
-    const rubyCharacters = [...group.ruby.text];
-    const rubyPosition = groupProgress * rubyCharacters.length;
+    const fallbackRubyCharacters = [...group.ruby.text].map((text, index, characters) => ({
+      text,
+      progress: Math.min(1, Math.max(0, groupProgress * characters.length - index)),
+    }));
+    const rubyCharacters = group.ruby.characters
+      ?.map(({ text }) => text).join("") === group.ruby.text
+        ? group.ruby.characters
+        : fallbackRubyCharacters;
     let characterX = rubyX;
     for (let index = 0; index < rubyCharacters.length; index += 1) {
-      const text = rubyCharacters[index];
+      const { text, progress } = rubyCharacters[index];
       const width = context.measureText(text).width;
-      const progress = Math.min(1, Math.max(0, rubyPosition - index));
       drawText(context, text, characterX, rubyBaseline, style.colorBefore, BEFORE_STROKE);
       context.save();
       context.beginPath();
@@ -314,6 +358,7 @@ function drawLine(
       characterX += width + RUBY_LETTER_SPACING * scaleX;
     }
   }
+  context.globalAlpha = previousAlpha;
 }
 
 export function drawKirakaraFrame(

@@ -5,6 +5,8 @@ import {
   toKirakaraTimeline,
   type CloudAlignedLine,
   type CloudLyricTimeline,
+  type KirakaraLine,
+  type KirakaraTimeline,
 } from "./kirakara-timeline";
 
 function line(
@@ -161,6 +163,76 @@ describe("activeKirakaraFrame", () => {
     expect(unit?.characters).toEqual([
       { text: "東", progress: 1 },
       { text: "京", progress: 0.25 },
+    ]);
+  });
+
+  it("uses the continuous @Ruby mora offsets emitted to KRL", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("火", "ab", 1_000, 1_600, [
+          {
+            surface: "火",
+            reading: "ab",
+            start_ms: 1_000,
+            end_ms: 1_600,
+            confidence: 1,
+            moras: [
+              { reading: "a", start_ms: 1_000, end_ms: 1_200, matched: true, confidence: 1 },
+              { reading: "b", start_ms: 1_400, end_ms: 1_600, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const unit = activeKirakaraFrame(toKirakaraTimeline(source), 1_300)
+      ?.lines[0].units[0];
+    expect(unit?.progress).toBeCloseTo(0.625);
+    expect(unit?.ruby[0]).toMatchObject({
+      characters: [
+        { text: "a", progress: 1 },
+        { text: "b", progress: 0.25 },
+      ],
+    });
+  });
+
+  it("uses Kirakara paragraph timing and resets the first pair to upper and lower", () => {
+    const lyric = (text: string, startMs: number, endMs: number): KirakaraLine => ({
+      text,
+      reading: text,
+      startMs,
+      endMs,
+      units: [{ text, reading: text, startMs, endMs, moras: [], ruby: [] }],
+    });
+    const timeline: KirakaraTimeline = {
+      confidence: 1,
+      warnings: [],
+      durationMs: 11_500,
+      lines: [
+        lyric("line-1", 1_000, 1_500),
+        lyric("line-2", 2_000, 2_500),
+        lyric("line-3", 3_000, 3_500),
+        lyric("line-4", 10_000, 10_500),
+        lyric("line-5", 11_000, 11_500),
+      ],
+    };
+
+    expect(activeKirakaraFrame(timeline, 6_000)?.lines).toEqual([
+      expect.objectContaining({ slot: "upper", text: "line-4" }),
+      expect.objectContaining({ slot: "lower", text: "line-5" }),
+    ]);
+
+    const entryFrame = activeKirakaraFrame(timeline, 5_834);
+    expect(entryFrame?.lines).toEqual([
+      expect.objectContaining({
+        slot: "upper",
+        text: "line-4",
+        opacity: 0,
+        indicatorOpacities: [1, 1, 1, 1],
+      }),
+      expect.objectContaining({ slot: "lower", text: "line-5", opacity: 0 }),
     ]);
   });
 });

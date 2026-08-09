@@ -121,7 +121,11 @@ def apply_timeline_review(
             if (
                 token_start < start_ms
                 or token_finish > end_ms
-                or token_finish <= token_start
+                or token_finish < token_start
+                or (
+                    token_finish == token_start
+                    and source_token.end_ms > source_token.start_ms
+                )
                 or token_start < token_end
             ):
                 raise TimelineReviewError(

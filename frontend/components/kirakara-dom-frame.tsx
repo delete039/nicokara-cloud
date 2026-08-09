@@ -11,8 +11,8 @@ import type {
   KirakaraFrame,
   KirakaraFrameCharacter,
   KirakaraFrameLine,
+  KirakaraFrameRuby,
   KirakaraFrameUnit,
-  KirakaraRuby,
 } from "@/lib/kirakara-timeline";
 
 const DESIGN_WIDTH = 1280;
@@ -21,6 +21,11 @@ const LINE_LEFT = 128;
 const MAIN_LETTER_SPACING = 9;
 const RUBY_LETTER_SPACING = 5;
 const RUBY_OFFSET = 4;
+const RUBY_STROKE_WIDTH = 4;
+const INDICATOR_SIZE = 34;
+const INDICATOR_SPACING = 12;
+const INDICATOR_STROKE_WIDTH = 3;
+const INDICATOR_OFFSET_Y = 8;
 const BEFORE_STROKE = "#000000";
 const AFTER_STROKE = "#ffffff";
 const strokeCache = new Map<string, string>();
@@ -34,7 +39,7 @@ let measurementCanvas: HTMLCanvasElement | null = null;
 
 type RenderGroup = {
   characters: KirakaraFrameCharacter[];
-  ruby: KirakaraRuby | null;
+  ruby: KirakaraFrameRuby | null;
 };
 
 function clampProgress(progress: number): number {
@@ -257,8 +262,16 @@ function LyricGroup({ group, style, last }: {
     ? group.characters.reduce((total, character) => total + character.progress, 0)
       / group.characters.length
     : 0;
-  const rubyCharacters = group.ruby ? [...group.ruby.text] : [];
-  const rubyPosition = groupProgress * rubyCharacters.length;
+  const fallbackRubyCharacters = group.ruby
+    ? [...group.ruby.text].map((text, index, characters) => ({
+        text,
+        progress: clampProgress(groupProgress * characters.length - index),
+      }))
+    : [];
+  const rubyCharacters = group.ruby?.characters
+    ?.map(({ text }) => text).join("") === group.ruby?.text
+      ? group.ruby.characters
+      : fallbackRubyCharacters;
 
   return (
     <span
@@ -285,7 +298,7 @@ function LyricGroup({ group, style, last }: {
             display: "inline-flex",
           }}
         >
-          {rubyCharacters.map((text, index) => (
+          {rubyCharacters.map(({ text }, index) => (
             <span
               key={`${index}-${text}`}
               style={{
@@ -335,11 +348,11 @@ function LyricGroup({ group, style, last }: {
             whiteSpace: "nowrap",
           }}
         >
-          {rubyCharacters.map((text, index) => (
+          {rubyCharacters.map(({ text, progress }, index) => (
             <TextMask
               key={`${index}-${text}`}
               text={text}
-              progress={clampProgress(rubyPosition - index)}
+              progress={progress}
               fontFamily={style.fontFamily}
               fontSize={style.rubySize}
               fontWeight={400}
@@ -348,7 +361,7 @@ function LyricGroup({ group, style, last }: {
               colorAfter={style.colorAfter}
               strokeBefore={BEFORE_STROKE}
               strokeAfter={AFTER_STROKE}
-              strokeWidth={Math.max(2, style.strokeWidth * 0.8)}
+              strokeWidth={RUBY_STROKE_WIDTH}
               ruby
             />
           ))}
@@ -371,8 +384,41 @@ function LyricLine({ line, style }: { line: KirakaraFrameLine; style: KirakaraSt
         display: "flex",
         alignItems: "flex-end",
         whiteSpace: "nowrap",
+        opacity: line.opacity ?? 1,
       }}
     >
+      {line.indicatorOpacities && (
+        <span
+          style={{
+            position: "absolute",
+            left: 0,
+            bottom: `calc(100% + ${style.rubySize + RUBY_OFFSET + INDICATOR_OFFSET_Y}px)`,
+            display: "flex",
+            alignItems: "flex-end",
+            gap: `${INDICATOR_SPACING}px`,
+            height: `${INDICATOR_SIZE}px`,
+          }}
+        >
+          {line.indicatorOpacities.map((opacity, index) => (
+            <svg
+              key={index}
+              data-kirakara-indicator-dot={index}
+              width={INDICATOR_SIZE}
+              height={INDICATOR_SIZE}
+              style={{ opacity }}
+            >
+              <circle
+                cx={INDICATOR_SIZE / 2}
+                cy={INDICATOR_SIZE / 2}
+                r={INDICATOR_SIZE / 2 - INDICATOR_STROKE_WIDTH / 2}
+                fill="#ffffff"
+                stroke="#000000"
+                strokeWidth={INDICATOR_STROKE_WIDTH}
+              />
+            </svg>
+          ))}
+        </span>
+      )}
       {groups.map((group, index) => (
         <LyricGroup
           key={index}

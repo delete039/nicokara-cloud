@@ -426,6 +426,53 @@ describe("submitCloudRender", () => {
       ),
     ).resolves.toMatchObject(queued);
   });
+
+  it("recovers the job status when the render was already queued", async () => {
+    const queued = {
+      id: "job-1",
+      status: "UPLOADED",
+      stage: "CLOUD_RENDER_QUEUED",
+      progress: 10,
+    };
+    class FakeXMLHttpRequest {
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly getResponseHeader = vi.fn(() => null);
+      readonly send = vi.fn(() => {
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      status = 409;
+      responseText = JSON.stringify({
+        detail: "当前任务不能进入云端仅渲染队列",
+      });
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest as unknown as typeof XMLHttpRequest);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(queued), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const { submitCloudRender } = await import("./api");
+
+    await expect(
+      submitCloudRender(
+        "job-1",
+        new File(["video"], "song.mp4", { type: "video/mp4" }),
+        { lines: [] },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject(queued);
+  });
 });
 
 describe("cancelJob", () => {

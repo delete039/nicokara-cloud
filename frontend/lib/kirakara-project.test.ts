@@ -74,4 +74,32 @@ describe("Kirakara project compatibility", () => {
     });
     expect(project.slice(lyricStart + 3)).toBe(serializeKirakaraLrc(timeline));
   });
+
+  it("keeps visible paragraph separators at Kirakara timing boundaries", () => {
+    const paragraphTimeline: KirakaraTimeline = {
+      confidence: 1,
+      warnings: [],
+      durationMs: 11_500,
+      lines: [
+        {
+          text: "line-1",
+          reading: "line-1",
+          startMs: 1_000,
+          endMs: 1_500,
+          units: [{ text: "line-1", reading: "line-1", startMs: 1_000, endMs: 1_500, moras: [] }],
+        },
+        {
+          text: "line-2",
+          reading: "line-2",
+          startMs: 10_000,
+          endMs: 11_500,
+          units: [{ text: "line-2", reading: "line-2", startMs: 10_000, endMs: 11_500, moras: [] }],
+        },
+      ],
+    };
+
+    expect(serializeKirakaraLrc(paragraphTimeline)).toContain(
+      "[00:01:00]line-1[00:01:50]\n\n[00:10:00]line-2[00:11:50]",
+    );
+  });
 });

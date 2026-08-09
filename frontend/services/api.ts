@@ -84,10 +84,13 @@ function retryAfterSeconds(value: string | null): number | undefined {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
-function xhrRequestError(xhr: XMLHttpRequest): ApiRequestError {
+function xhrRequestError(
+  xhr: XMLHttpRequest,
+  context: ErrorContext = "upload",
+): ApiRequestError {
   return new ApiRequestError(
     httpErrorFeedback(
-      "upload",
+      context,
       xhr.status,
       responseDetail(xhr),
       retryAfterSeconds(xhr.getResponseHeader("Retry-After")),
@@ -660,13 +663,31 @@ export function submitCloudRender(
         onProgress(Math.round(event.loaded / event.total * 100));
       }
     });
-    xhr.addEventListener("load", () => {
+    xhr.addEventListener("load", async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress(100);
         resolve(JSON.parse(xhr.responseText) as Job);
-      } else {
-        reject(xhrRequestError(xhr));
+        return;
       }
+
+      if (xhr.status === 409) {
+        try {
+          const current = await getJob(jobId);
+          if (
+            current.stage === "CLOUD_RENDER_QUEUED" ||
+            current.stage === "RENDERING_VIDEO" ||
+            current.status === "COMPLETED"
+          ) {
+            onProgress(100);
+            resolve(current);
+            return;
+          }
+        } catch {
+          // Preserve the original submission response below.
+        }
+      }
+
+      reject(xhrRequestError(xhr, "cloud_render"));
     });
     xhr.addEventListener("error", () => reject(connectionError("upload")));
     xhr.addEventListener("abort", () => reject(connectionError("upload")));

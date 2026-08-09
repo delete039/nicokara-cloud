@@ -6,7 +6,7 @@ export type ErrorFeedback = {
   retryable: boolean;
 };
 
-export type ErrorContext = "upload" | "job";
+export type ErrorContext = "upload" | "job" | "cloud_render";
 
 export type ValidationErrorCode =
   | "video_required"
@@ -106,6 +106,37 @@ export function httpErrorFeedback(
   retryAfterSeconds?: number,
 ): ErrorFeedback {
   const technicalDetails = httpDetails(status, detail);
+
+  if (context === "cloud_render" && (status === 400 || status === 422)) {
+    const lineMatch = detail?.match(/line\s+(\d+)/iu);
+    const lineNumber = lineMatch?.[1];
+    return {
+      title: "时间轴校正数据无效",
+      description: lineNumber
+        ? `第 ${lineNumber} 行的时间范围或词元时间不符合要求，服务器无法生成云端渲染字幕。`
+        : "校正后的时间轴与服务器保存的歌词结构不一致，暂时不能进入云端渲染队列。",
+      solutions: [
+        "检查相邻歌词是否发生时间重叠，并确认每行结束时间晚于开始时间。",
+        "刷新任务页重新读取服务器时间轴；如仍然失败，请保留下方服务器信息。",
+      ],
+      technicalDetails,
+      retryable: false,
+    };
+  }
+
+  if (context === "cloud_render" && status === 409) {
+    return {
+      title: "云端渲染状态已变化",
+      description:
+        "任务可能已经进入队列，或者重新选择的视频与最初素材不一致。页面将优先恢复最新任务状态，必要时刷新后继续查看。",
+      solutions: [
+        "刷新任务页查看排队位置或渲染进度，不要连续重复提交同一视频。",
+        "如果任务仍可编辑，请重新选择名称和大小都与最初上传记录一致的原视频。",
+      ],
+      technicalDetails,
+      retryable: true,
+    };
+  }
 
   if (status === 413) {
     return {

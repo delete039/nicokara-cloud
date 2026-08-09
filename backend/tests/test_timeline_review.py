@@ -71,6 +71,62 @@ def test_applies_reviewed_timing_and_rebuilds_moras() -> None:
     assert reviewed.lines[0].tokens[0].moras[-1].end_ms == 3200
 
 
+def test_accepts_zero_duration_tokens_from_the_generated_timeline() -> None:
+    source = source_timeline()
+    source_line = source.lines[0]
+    source = LyricTimeline(
+        confidence=source.confidence,
+        lines=[
+            AlignedLine(
+                surface=f"{source_line.surface}，",
+                reading=f"{source_line.reading}、",
+                start_ms=source_line.start_ms,
+                end_ms=source_line.end_ms,
+                confidence=source_line.confidence,
+                tokens=[
+                    *source_line.tokens,
+                    AlignedToken(
+                        surface="，",
+                        reading="、",
+                        start_ms=source_line.end_ms,
+                        end_ms=source_line.end_ms,
+                        confidence=1.0,
+                        moras=[],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    reviewed = apply_timeline_review(
+        source,
+        {
+            "lines": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 2000,
+                    "tokens": [
+                        {
+                            "reading": "きょう",
+                            "start_ms": 1000,
+                            "end_ms": 2000,
+                        },
+                        {
+                            "reading": "、",
+                            "start_ms": 2000,
+                            "end_ms": 2000,
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    punctuation = reviewed.lines[0].tokens[1]
+    assert punctuation.start_ms == punctuation.end_ms == 2000
+    assert punctuation.moras == []
+
+
 def test_rejects_review_with_a_different_timeline_shape() -> None:
     with pytest.raises(TimelineReviewError, match="line count"):
         apply_timeline_review(source_timeline(), {"lines": []})

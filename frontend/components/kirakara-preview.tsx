@@ -4,6 +4,7 @@ import { Film, FolderOpen, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
+import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
@@ -265,7 +266,13 @@ export function KirakaraPreview({
               </div>
             )}
             {timeline && capabilities && (
-              <div className="min-w-0 xl:border-l xl:pl-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+              <div className="min-w-0 space-y-3 xl:border-l xl:pl-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+                <KirakaraProjectDownload
+                  jobId={jobId}
+                  videoName={expectedVideoName}
+                  timeline={timeline}
+                  style={style}
+                />
                 <KirakaraRenderActions
                   capabilities={capabilities}
                   video={video}
