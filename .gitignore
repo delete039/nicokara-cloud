@@ -29,6 +29,7 @@ models/
 # Generated deployment bundles stay local; keep release scripts tracked.
 release/*.tar.gz
 release/SHA256SUMS
+release/_stage-*/
 *.zip
 
 backend/data/

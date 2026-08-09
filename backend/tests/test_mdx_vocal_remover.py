@@ -68,6 +68,62 @@ def test_mdx_net_generates_named_instrumental_wav(
     ]
 
 
+def test_mdx_net_separates_vocals_and_instrumental_in_one_inference(
+    tmp_path: Path,
+) -> None:
+    created: list[FakeSeparator] = []
+
+    class DualStemSeparator(FakeSeparator):
+        def separate(
+            self,
+            input_path: str,
+            output_names: dict[str, str],
+        ) -> list[str]:
+            self.separations.append((input_path, output_names))
+            outputs = []
+            for stem, content in (
+                ("Vocals", b"isolated vocals"),
+                ("Instrumental", b"instrumental audio"),
+            ):
+                path = Path(self.output_dir) / f"{output_names[stem]}.wav"
+                path.write_bytes(content)
+                outputs.append(str(path))
+            return outputs
+
+    def separator_factory(**kwargs) -> DualStemSeparator:
+        separator = DualStemSeparator(**kwargs)
+        created.append(separator)
+        return separator
+
+    input_path = tmp_path / "input.wav"
+    input_path.write_bytes(b"input audio")
+    vocals_path = tmp_path / "job" / "audio_vocals.wav"
+    instrumental_path = tmp_path / "job" / "audio_instrumental.wav"
+
+    MDXNetVocalRemover(
+        model_dir=tmp_path / "models",
+        separator_factory=separator_factory,
+    ).separate_stems(input_path, vocals_path, instrumental_path)
+
+    assert vocals_path.read_bytes() == b"isolated vocals"
+    assert instrumental_path.read_bytes() == b"instrumental audio"
+    assert created[0].init_kwargs == {
+        "model_file_dir": str(tmp_path / "models"),
+        "output_dir": str(vocals_path.parent),
+        "output_format": "WAV",
+        "output_single_stem": None,
+    }
+    assert created[0].separations == [
+        (
+            str(input_path),
+            {
+                "Vocals": "audio_vocals",
+                "Instrumental": "audio_instrumental",
+            },
+        )
+    ]
+
+
 def test_mdx_net_isolates_separator_output_for_each_job(
     tmp_path: Path,
 ) -> None:

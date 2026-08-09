@@ -14,6 +14,8 @@ from app.api.mobile import router as mobile_router
 from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
 from app.alignment.aligner import LyricTimelineAligner
+from app.alignment.engine import ResilientAlignmentEngine
+from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
@@ -46,6 +48,19 @@ def build_vocal_remover(settings: Settings):
     )
 
 
+def build_alignment_engine(settings: Settings):
+    fallback = LyricTimelineAligner()
+    if not settings.fa_kara_enabled:
+        return fallback
+    return ResilientAlignmentEngine(
+        primary=MMSForcedAligner(
+            runtime=SubprocessMMSRuntime(device=settings.fa_kara_device),
+            timeout_seconds=settings.fa_kara_timeout_seconds,
+        ),
+        fallback=fallback,
+    )
+
+
 def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipeline:
     local_lyric_processor = LocalJapaneseLyricProcessor()
     if settings.deepseek_api_key is not None:
@@ -75,7 +90,7 @@ def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipel
         ),
         vocal_remover=build_vocal_remover(settings),
         lyric_processor=lyric_processor,
-        aligner=LyricTimelineAligner(),
+        aligner=build_alignment_engine(settings),
         subtitle_generator=KirakaraAssGenerator(),
         video_renderer=FFmpegVideoRenderer(
             command=(settings.ffmpeg_path,),

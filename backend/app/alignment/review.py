@@ -17,6 +17,8 @@ class TimelineReviewError(ValueError):
 
 def lyric_timeline_from_dict(value: dict[str, Any]) -> LyricTimeline:
     try:
+        alignment_engine = value.get("alignment_engine") or "whisper_mora"
+        alignment_model = value.get("alignment_model")
         lines = [
             AlignedLine(
                 surface=str(line["surface"]),
@@ -51,6 +53,10 @@ def lyric_timeline_from_dict(value: dict[str, Any]) -> LyricTimeline:
             confidence=float(value["confidence"]),
             lines=lines,
             warnings=[str(warning) for warning in value.get("warnings", [])],
+            alignment_engine=str(alignment_engine),
+            alignment_model=(
+                str(alignment_model) if alignment_model is not None else None
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise TimelineReviewError("stored timeline is invalid") from exc
@@ -159,4 +165,6 @@ def apply_timeline_review(
         confidence=1.0,
         lines=lines,
         warnings=[*source.warnings, "browser_reviewed"],
+        alignment_engine=source.alignment_engine,
+        alignment_model=source.alignment_model,
     )

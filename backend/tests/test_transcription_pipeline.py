@@ -789,6 +789,240 @@ def test_audio_only_pipeline_stops_after_subtitle_generation(
     assert job["output_path"] is None
 
 
+def test_audio_only_high_accuracy_pipeline_runs_uvr_once_and_uses_vocals(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "audio-job-high-accuracy"
+    job_dir.mkdir(parents=True)
+    source_audio = job_dir / "input_audio.m4a"
+    source_audio.write_bytes(b"source-audio")
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("物語\n", encoding="utf-8")
+    job_id = "8d517cd1-e9b8-485b-ad5b-bd766a6fb951"
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.mp4",
+        video_size_bytes=100,
+        video_sha256="audio-sha",
+        video_path=source_audio,
+        lyrics_source="text",
+        lyrics_path=lyrics_path,
+        input_mode="AUDIO_ONLY",
+        source_upload_size_bytes=len(b"source-audio"),
+        source_upload_sha256="audio-sha",
+    )
+
+    class StereoExtractor(FakeExtractor):
+        def extract_stereo(self, input_path: Path, output_path: Path) -> None:
+            output_path.write_bytes(b"stereo")
+
+    class StemSeparator:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def separate_stems(
+            self,
+            input_path: Path,
+            vocals_path: Path,
+            instrumental_path: Path,
+        ) -> None:
+            self.calls.append((input_path, vocals_path, instrumental_path))
+            vocals_path.write_bytes(b"vocals")
+            instrumental_path.write_bytes(b"instrumental")
+
+    class LyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(
+                provider="local",
+                source_text=text,
+                lines=[
+                    LyricLine(
+                        source="物語",
+                        surface="物語",
+                        reading="ものがたり",
+                        tokens=[
+                            LyricToken(surface="物語", reading="ものがたり")
+                        ],
+                    )
+                ],
+            )
+
+    class AudioAwareAligner:
+        requires_vocals = True
+
+        def __init__(self) -> None:
+            self.audio_paths: list[Path] = []
+
+        def align(self, lyrics, transcript, *, audio_path):
+            self.audio_paths.append(audio_path)
+            return LyricTimeline(
+                confidence=1.0,
+                alignment_engine="fa_kara_mms",
+            )
+
+    class SubtitleGenerator:
+        def generate(self, timeline: LyricTimeline) -> str:
+            return "[Script Info]\n"
+
+    separator = StemSeparator()
+    transcriber = FakeTranscriber()
+    aligner = AudioAwareAligner()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=StereoExtractor(),
+        transcriber=transcriber,
+        vocal_remover=separator,
+        lyric_processor=LyricProcessor(),
+        aligner=aligner,
+        subtitle_generator=SubtitleGenerator(),
+    )
+
+    pipeline.process(job_id)
+
+    vocals_path = job_dir / "audio_vocals.wav"
+    instrumental_path = job_dir / "audio_instrumental.wav"
+    assert separator.calls == [
+        (job_dir / "audio_stereo.wav", vocals_path, instrumental_path)
+    ]
+    assert transcriber.calls == [vocals_path]
+    assert aligner.audio_paths == [vocals_path]
+    timeline = json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline["alignment_engine"] == "fa_kara_mms"
+
+
+def test_audio_only_pipeline_falls_back_when_vocal_stem_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "audio-job-no-vocal-stem"
+    job_dir.mkdir(parents=True)
+    source_audio = job_dir / "input_audio.m4a"
+    source_audio.write_bytes(b"source-audio")
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("物語\n", encoding="utf-8")
+    job_id = "aabcc5e6-e31e-4f32-a6b5-f58414ab7814"
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.mp4",
+        video_size_bytes=100,
+        video_sha256="audio-sha",
+        video_path=source_audio,
+        lyrics_source="text",
+        lyrics_path=lyrics_path,
+        input_mode="AUDIO_ONLY",
+    )
+
+    class InstrumentalOnlyRemover:
+        def remove_vocals(self, input_path: Path, output_path: Path) -> None:
+            pytest.fail("ON VOCAL fallback must not run instrumental-only UVR")
+
+    class LyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(provider="local", source_text=text)
+
+    class OptionalAudioAligner:
+        requires_vocals = True
+
+        def __init__(self) -> None:
+            self.audio_paths = []
+
+        def align(self, lyrics, transcript, *, audio_path=None):
+            self.audio_paths.append(audio_path)
+            return LyricTimeline(
+                confidence=0.5,
+                alignment_engine="whisper_mora",
+            )
+
+    aligner = OptionalAudioAligner()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        vocal_remover=InstrumentalOnlyRemover(),
+        lyric_processor=LyricProcessor(),
+        aligner=aligner,
+    )
+
+    pipeline.process(job_id)
+
+    assert aligner.audio_paths == [None]
+
+
+def test_audio_only_pipeline_falls_back_when_vocal_separation_fails(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "audio-job-uvr-failure"
+    job_dir.mkdir(parents=True)
+    source_audio = job_dir / "input_audio.m4a"
+    source_audio.write_bytes(b"source-audio")
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("物語\n", encoding="utf-8")
+    job_id = "5c4845ab-6d9d-4b68-86b0-a47b77714d5d"
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.m4a",
+        video_size_bytes=100,
+        video_sha256="audio-sha",
+        video_path=source_audio,
+        lyrics_source="text",
+        lyrics_path=lyrics_path,
+        input_mode="AUDIO_ONLY",
+    )
+
+    class StereoExtractor(FakeExtractor):
+        def extract_stereo(self, input_path: Path, output_path: Path) -> None:
+            output_path.write_bytes(b"stereo")
+
+    class FailingSeparator:
+        def separate_stems(
+            self,
+            input_path: Path,
+            vocals_path: Path,
+            instrumental_path: Path,
+        ) -> None:
+            raise RuntimeError("model unavailable")
+
+    class LyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(provider="local", source_text=text)
+
+    class OptionalAudioAligner:
+        requires_vocals = True
+
+        def __init__(self) -> None:
+            self.audio_paths = []
+
+        def align(self, lyrics, transcript, *, audio_path=None):
+            self.audio_paths.append(audio_path)
+            return LyricTimeline(confidence=0.5)
+
+    transcriber = FakeTranscriber()
+    aligner = OptionalAudioAligner()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=StereoExtractor(),
+        transcriber=transcriber,
+        vocal_remover=FailingSeparator(),
+        lyric_processor=LyricProcessor(),
+        aligner=aligner,
+    )
+
+    pipeline.process(job_id)
+
+    assert transcriber.calls == [job_dir / "audio.wav"]
+    assert aligner.audio_paths == [None]
+    timeline = json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline["warnings"] == ["uvr_fallback:RuntimeError"]
+
+
 def test_cloud_render_queue_skips_recognition_and_only_renders_video(
     tmp_path: Path,
 ) -> None:

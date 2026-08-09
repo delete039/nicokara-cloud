@@ -28,6 +28,8 @@ export type CloudLyricTimeline = {
   confidence: number;
   lines: CloudAlignedLine[];
   warnings: string[];
+  alignment_engine?: string;
+  alignment_model?: string | null;
 };
 
 export type KirakaraMora = {

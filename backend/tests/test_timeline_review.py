@@ -8,7 +8,11 @@ from app.alignment.models import (
     AlignedToken,
     LyricTimeline,
 )
-from app.alignment.review import TimelineReviewError, apply_timeline_review
+from app.alignment.review import (
+    TimelineReviewError,
+    apply_timeline_review,
+    lyric_timeline_from_dict,
+)
 
 
 def source_timeline() -> LyricTimeline:
@@ -125,6 +129,36 @@ def test_accepts_zero_duration_tokens_from_the_generated_timeline() -> None:
     punctuation = reviewed.lines[0].tokens[1]
     assert punctuation.start_ms == punctuation.end_ms == 2000
     assert punctuation.moras == []
+
+
+def test_preserves_alignment_metadata_when_loading_and_reviewing() -> None:
+    source = source_timeline()
+    stored = source.to_dict()
+    stored["alignment_engine"] = "fa_kara_mms"
+    stored["alignment_model"] = "torchaudio.pipelines.MMS_FA"
+
+    loaded = lyric_timeline_from_dict(stored)
+    reviewed = apply_timeline_review(
+        loaded,
+        {
+            "lines": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 2000,
+                    "tokens": [
+                        {
+                            "reading": "きょう",
+                            "start_ms": 1000,
+                            "end_ms": 2000,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert reviewed.alignment_engine == "fa_kara_mms"
+    assert reviewed.alignment_model == "torchaudio.pipelines.MMS_FA"
 
 
 def test_rejects_review_with_a_different_timeline_shape() -> None:

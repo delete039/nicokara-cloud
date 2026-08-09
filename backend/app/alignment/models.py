@@ -38,6 +38,8 @@ class LyricTimeline:
     confidence: float
     lines: list[AlignedLine] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    alignment_engine: str = "whisper_mora"
+    alignment_model: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

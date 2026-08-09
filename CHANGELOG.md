@@ -2,6 +2,19 @@
 
 本文件记录已经完成并经过验证的主要改动。尚未实现的计划保留在 [ROADMAP.md](./ROADMAP.md)。
 
+## v0.3.0-alpha.3 - 2026-08-06
+
+### 云端 UVR + FA-Kara/MMS_FA 高精度对齐
+
+- 增加可插拔高精度对齐引擎；音频优先任务使用 FA-Kara 的罗马音 token 思路和 TorchAudio `MMS_FA` 生成 Mora 时间戳。
+- UVR 单次推理同时保存人声与伴奏，人声供 Whisper 和 MMS_FA 使用，伴奏继续供 `OFF VOCAL` 下载。
+- MMS_FA 在独立子进程运行，达到配置超时后可终止；UVR 或 MMS_FA 缺少模型、推理失败、输出不完整或超时均自动回退原 Whisper Mora 对齐器，并记录回退原因。
+- `timeline.json` 增加 `alignment_engine` 和 `alignment_model`，记录任务实际使用的对齐引擎。
+- 增加 `NICOKARA_FA_KARA_ENABLED`、`NICOKARA_FA_KARA_DEVICE` 和 `NICOKARA_FA_KARA_TIMEOUT_SECONDS` 配置。
+- 固定使用仍支持 MMS forced-alignment API 的 TorchAudio 2.7.1，并为模型增加独立 Docker 持久化缓存。
+- 后端镜像默认使用 Debian 官方 HTTPS 软件源，支持有限重试、下载缓存和可选镜像参数，避免固定地区镜像阻断部署。
+- 增加固定歌曲集基准汇总工具，比较 Mora 误差、失败率、耗时和峰值内存。
+
 ## v0.3.0-alpha.2 - 2026-08-06
 
 ### 运行配置

@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.core.config import Settings
+from app.alignment.aligner import LyricTimelineAligner
+from app.alignment.engine import ResilientAlignmentEngine
+from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.main import create_app
 from app.lyrics.processor import (
     LocalJapaneseLyricProcessor,
@@ -162,6 +165,45 @@ def test_app_can_fall_back_to_stft_vocal_removal(
         assert isinstance(
             app.state.runner.pipeline.vocal_remover,
             VocalRemover,
+        )
+
+
+def test_app_enables_fa_kara_mms_for_audio_only_jobs(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        fa_kara_enabled=True,
+        fa_kara_device="cpu",
+        fa_kara_timeout_seconds=321,
+    )
+    app = create_app(settings)
+
+    with TestClient(app):
+        aligner = app.state.runner.pipeline.aligner
+        assert isinstance(aligner, ResilientAlignmentEngine)
+        assert isinstance(aligner.primary, MMSForcedAligner)
+        assert isinstance(aligner.primary.runtime, SubprocessMMSRuntime)
+        assert aligner.primary.runtime.device == "cpu"
+        assert aligner.primary.timeout_seconds == 321
+        assert isinstance(aligner.fallback, LyricTimelineAligner)
+
+
+def test_app_can_disable_fa_kara_without_disabling_processing(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        fa_kara_enabled=False,
+    )
+    app = create_app(settings)
+
+    with TestClient(app):
+        assert isinstance(
+            app.state.runner.pipeline.aligner,
+            LyricTimelineAligner,
         )
 
 
