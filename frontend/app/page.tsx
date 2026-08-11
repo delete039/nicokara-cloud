@@ -75,27 +75,29 @@ export default function Home() {
               </a>
               ，{HOME_COPY.author.message}
             </p>
-            <p className="mt-2 max-w-md">
-              特别鸣谢：
-              <a
-                href={HOME_COPY.author.acknowledgement.developerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline underline-offset-4"
-              >
-                {HOME_COPY.author.acknowledgement.developer}
-              </a>
-              开发的
-              <a
-                href={HOME_COPY.author.acknowledgement.projectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline underline-offset-4"
-              >
-                {HOME_COPY.author.acknowledgement.project}
-              </a>
-              。{HOME_COPY.author.acknowledgement.description}
-            </p>
+            {HOME_COPY.author.acknowledgements.map((acknowledgement, index) => (
+              <p key={acknowledgement.project} className="mt-2 max-w-md">
+                {index === 0 ? "特别鸣谢：" : ""}
+                <a
+                  href={acknowledgement.developerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-foreground underline underline-offset-4"
+                >
+                  {acknowledgement.developer}
+                </a>
+                开发的
+                <a
+                  href={acknowledgement.projectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-foreground underline underline-offset-4"
+                >
+                  {acknowledgement.project}
+                </a>
+                。{acknowledgement.description}
+              </p>
+            ))}
           </aside>
         </div>
 

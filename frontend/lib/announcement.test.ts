@@ -29,7 +29,8 @@ describe("announcement configuration", () => {
     const announcement = parseAnnouncement(config);
 
     expect(announcement).not.toBeNull();
-    expect(announcement?.id.length).toBeGreaterThan(0);
+    expect(announcement?.id).toBe("2026-08-11-update-v1");
+    expect(announcement?.title).toBe("2026-08-11 更新日志");
   });
 
   it("parses enabled plain-text announcements", () => {

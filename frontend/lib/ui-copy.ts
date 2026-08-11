@@ -23,13 +23,22 @@ export const HOME_COPY = {
     repositoryLabel: "本项目已开源",
     repositoryUrl: "https://github.com/delete039/nicokara-cloud",
     message: "欢迎关注项目更新进度，与错误反馈或修改建议",
-    acknowledgement: {
-      developer: "FMPeach",
-      developerUrl: "https://github.com/FMPeach",
-      project: "Kirakara-Player",
-      projectUrl: "https://github.com/FMPeach/Kirakara-Player",
-      description: "本项目的字幕预览、样式配置与渲染适配参考了该项目。",
-    },
+    acknowledgements: [
+      {
+        developer: "FMPeach",
+        developerUrl: "https://github.com/FMPeach",
+        project: "Kirakara-Player",
+        projectUrl: "https://github.com/FMPeach/Kirakara-Player",
+        description: "本项目的字幕预览、样式配置与渲染适配参考了该项目。",
+      },
+      {
+        developer: "moriwx",
+        developerUrl: "https://github.com/moriwx",
+        project: "FA-Kara",
+        projectUrl: "https://github.com/moriwx/FA-Kara",
+        description: "本项目的歌词发音标记、非静音处理与 MMS 强制对齐参考并适配了该项目。",
+      },
+    ],
   },
   metadataDescription:
     "上传 MV 和日语歌词，自动生成带逐字高亮和假名注音的ニコカラ视频。",

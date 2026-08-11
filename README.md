@@ -135,13 +135,11 @@ Kirakara 与 FA-Kara 适配逻辑的来源和许可信息见 [THIRD_PARTY_NOTICE
 
 本项目对相关功能进行了适配与整合。Kirakara-Player 的版权及许可证仍归原项目作者所有，完整许可内容见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
-### 参考项目
-
 - [@moriwx](https://github.com/moriwx) - [FA-Kara](https://github.com/moriwx/FA-Kara)
 
   本项目的歌词发音标记、非静音处理、MMS 强制对齐和时间回映射参考并适配了 FA-Kara。感谢原作者公开完整实现。
 
-本项目没有直接运行 FA-Kara 的命令行入口，而是将其对齐核心适配到现有 UVR、任务队列和 Mora 时间轴契约。完整对照范围与差异见 [FA_KARA_INTEGRATION_AUDIT.md](./FA_KARA_INTEGRATION_AUDIT.md)。
+本项目没有直接运行 FA-Kara 的命令行入口，而是将其对齐核心适配到现有 UVR、任务队列和 Mora 时间轴契约。FA-Kara 的版权及许可证仍归原项目作者所有，完整许可内容见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，对照范围与差异见 [FA_KARA_INTEGRATION_AUDIT.md](./FA_KARA_INTEGRATION_AUDIT.md)。
 
 ## 本地部署 0 基础教程
 

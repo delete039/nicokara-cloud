@@ -17,6 +17,8 @@ describe("Cloud home page", () => {
     expect(html).toContain('href="https://github.com/delete039/nicokara-cloud"');
     expect(html).toContain('href="https://github.com/FMPeach"');
     expect(html).toContain('href="https://github.com/FMPeach/Kirakara-Player"');
+    expect(html).toContain('href="https://github.com/moriwx"');
+    expect(html).toContain('href="https://github.com/moriwx/FA-Kara"');
     expect(html).toContain("特别鸣谢");
     expect(html).toContain('id="upload-form"');
     expect(html).toContain("lg:min-h-[calc(100dvh-5rem)]");
