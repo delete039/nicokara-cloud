@@ -5,13 +5,14 @@ from hmac import compare_digest
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.jobs import refresh_upload_queue
 from app.core.monitoring import collect_system_resources
 from app.schemas.admin import (
     AdminActionResponse,
+    AdminLogsResponse,
     AdminOverviewResponse,
     AdminQueueHealthResponse,
 )
@@ -27,7 +28,10 @@ def require_admin(request: Request) -> None:
     if configured is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Admin monitoring is not configured.",
+            detail=(
+                "管理员监控尚未配置，请在服务端设置 "
+                "NICOKARA_ADMIN_TOKEN 后重启服务。"
+            ),
         )
     authorization = request.headers.get("authorization", "")
     scheme, _, supplied = authorization.partition(" ")
@@ -154,6 +158,31 @@ def queue_health(request: Request) -> JSONResponse:
         status_code=200 if runner["healthy"] else 503,
         content=payload.model_dump(),
     )
+
+
+@router.get(
+    "/logs",
+    response_model=AdminLogsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def logs(
+    request: Request,
+    level: str | None = Query(default=None, max_length=16),
+    category: str | None = Query(default=None, max_length=32),
+    reference_id: str | None = Query(default=None, max_length=128),
+    query: str | None = Query(default=None, max_length=128),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AdminLogsResponse:
+    result = request.app.state.database.list_event_logs(
+        level=level,
+        category=category,
+        reference_id=reference_id,
+        query=query,
+        limit=limit,
+        offset=offset,
+    )
+    return AdminLogsResponse(**result)
 
 
 @router.post(

@@ -82,3 +82,31 @@ export type AdminAction = {
   id: string;
   status: string;
 };
+
+export type AdminLogItem = {
+  id: number;
+  level: string;
+  category: string;
+  event: string;
+  message: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AdminLogsResponse = {
+  items: AdminLogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type AdminLogFilters = {
+  level?: string;
+  category?: string;
+  referenceId?: string;
+  query?: string;
+  limit?: number;
+  offset?: number;
+};

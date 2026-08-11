@@ -26,3 +26,22 @@ class AdminQueueHealthResponse(BaseModel):
     runner_healthy: bool
     upload_waiting: int
     jobs_waiting: int
+
+
+class AdminLogItem(BaseModel):
+    id: int
+    level: str
+    category: str
+    event: str
+    message: str
+    reference_type: str | None
+    reference_id: str | None
+    details: dict[str, Any]
+    created_at: str
+
+
+class AdminLogsResponse(BaseModel):
+    items: list[AdminLogItem]
+    total: int
+    limit: int
+    offset: int

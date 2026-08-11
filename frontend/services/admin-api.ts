@@ -1,7 +1,14 @@
-import type { AdminAction, AdminOverview } from "@/types/admin";
+import type {
+  AdminAction,
+  AdminLogFilters,
+  AdminLogsResponse,
+  AdminOverview,
+} from "@/types/admin";
 
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+const ADMIN_NOT_CONFIGURED_MESSAGE =
+  "管理员监控尚未配置，请在服务端设置 NICOKARA_ADMIN_TOKEN 后重启服务。";
 
 
 export class AdminApiError extends Error {
@@ -42,6 +49,12 @@ async function adminRequest<T>(
     } catch {
       // Keep the HTTP status text when the response is not JSON.
     }
+    if (
+      response.status === 503 &&
+      detail === "Admin monitoring is not configured."
+    ) {
+      detail = ADMIN_NOT_CONFIGURED_MESSAGE;
+    }
     throw new AdminApiError(response.status, detail);
   }
   return (await response.json()) as T;
@@ -50,6 +63,24 @@ async function adminRequest<T>(
 
 export function getAdminOverview(token: string): Promise<AdminOverview> {
   return adminRequest<AdminOverview>(token, "/admin/overview");
+}
+
+
+export function getAdminLogs(
+  token: string,
+  filters: AdminLogFilters = {},
+): Promise<AdminLogsResponse> {
+  const search = new URLSearchParams();
+  if (filters.level) search.set("level", filters.level);
+  if (filters.category) search.set("category", filters.category);
+  if (filters.referenceId) search.set("reference_id", filters.referenceId);
+  if (filters.query) search.set("query", filters.query);
+  search.set("limit", String(filters.limit ?? 50));
+  search.set("offset", String(filters.offset ?? 0));
+  return adminRequest<AdminLogsResponse>(
+    token,
+    `/admin/logs?${search.toString()}`,
+  );
 }
 
 

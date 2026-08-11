@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
+import { AdminSectionNav } from "@/components/admin-section-nav";
 import {
   AdminApiError,
   cancelAdminJob,
@@ -311,6 +312,9 @@ export default function AdminPage() {
             <button type="button" title="退出管理员监控" aria-label="退出管理员监控" onClick={logout} className="focus-ring inline-flex size-10 items-center justify-center rounded-lg border hover:bg-muted"><LogOut className="size-4" /></button>
           </div>
         </div>
+        <div className="mx-auto max-w-[1500px] px-5 sm:px-8">
+          <AdminSectionNav active="monitor" />
+        </div>
       </header>
       <div className="mx-auto max-w-[1500px] px-5 pt-6 sm:px-8">
         {error && <div role="alert" className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
@@ -322,8 +326,10 @@ export default function AdminPage() {
             onCancelJob={(id) => void runAction(`job:${id}`, () => cancelAdminJob(token, id))}
             onRequeueJob={(id) => void runAction(`job:${id}`, () => requeueAdminJob(token, id))}
           />
-        ) : (
+        ) : loading ? (
           <div className="flex items-center justify-center gap-3 py-24 text-muted-foreground"><LoaderCircle className="size-5 animate-spin" />读取监控数据</div>
+        ) : (
+          <div className="py-24 text-center text-sm text-muted-foreground">监控数据尚未载入，请检查上方提示后重试。</div>
         )}
       </div>
     </main>

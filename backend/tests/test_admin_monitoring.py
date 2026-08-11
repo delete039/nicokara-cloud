@@ -91,6 +91,10 @@ def test_admin_monitor_requires_configured_bearer_token(tmp_path: Path) -> None:
         )
 
     assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == (
+        "管理员监控尚未配置，请在服务端设置 "
+        "NICOKARA_ADMIN_TOKEN 后重启服务。"
+    )
 
 
 def test_admin_overview_reports_upload_processing_worker_and_resources(
@@ -231,3 +235,72 @@ def test_admin_queue_health_is_probeable_and_fails_when_workers_are_unhealthy(
     }
     assert unhealthy.status_code == 503
     assert unhealthy.json()["status"] == "degraded"
+
+
+def test_admin_logs_are_protected_filterable_and_paginated(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        database = client.app.state.database
+        job_id = "50000000-0000-0000-0000-000000000001"
+        create_job(database, settings.storage_dir, job_id)
+        database.update_job_state(
+            job_id,
+            status="FAILED",
+            stage="TRANSCRIBING",
+            progress=40,
+            error_code="TRANSCRIPTION_FAILED",
+            error_message="Audio transcription failed.",
+        )
+        database.record_admin_audit(
+            action="job.inspect",
+            target_type="job",
+            target_id=job_id,
+            outcome="succeeded",
+        )
+
+        unauthorized = client.get("/api/v1/admin/logs")
+        filtered = client.get(
+            "/api/v1/admin/logs",
+            headers=auth_headers(),
+            params={
+                "level": "ERROR",
+                "category": "task",
+                "reference_id": job_id,
+                "query": "TRANSCRIPTION_FAILED",
+                "limit": 1,
+                "offset": 0,
+            },
+        )
+        second_page = client.get(
+            "/api/v1/admin/logs",
+            headers=auth_headers(),
+            params={"limit": 1, "offset": 1},
+        )
+
+    assert unauthorized.status_code == 401
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert body["total"] == 1
+    assert body["limit"] == 1
+    assert body["offset"] == 0
+    assert body["items"][0] == {
+        "id": body["items"][0]["id"],
+        "level": "ERROR",
+        "category": "task",
+        "event": "job.state_changed",
+        "message": "任务处理失败：TRANSCRIPTION_FAILED",
+        "reference_type": "job",
+        "reference_id": job_id,
+        "details": {
+            "error_code": "TRANSCRIPTION_FAILED",
+            "progress": 40,
+            "stage": "TRANSCRIBING",
+            "status": "FAILED",
+        },
+        "created_at": body["items"][0]["created_at"],
+    }
+    assert second_page.status_code == 200
+    assert second_page.json()["total"] >= 3
+    assert len(second_page.json()["items"]) == 1
+    assert "Audio transcription failed" not in filtered.text

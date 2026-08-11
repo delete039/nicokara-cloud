@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,18 @@ CREATE TABLE IF NOT EXISTS admin_audit_events (
     target_type TEXT NOT NULL,
     target_id TEXT NOT NULL,
     outcome TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS event_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    category TEXT NOT NULL,
+    event TEXT NOT NULL,
+    message TEXT NOT NULL,
+    reference_type TEXT,
+    reference_id TEXT,
     details TEXT,
     created_at TEXT NOT NULL
 );
@@ -171,6 +183,18 @@ class Database:
                 ON admin_audit_events(created_at DESC)
                 """
             )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_logs_created
+                ON event_logs(created_at DESC, id DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_logs_filters
+                ON event_logs(level, category, reference_id, created_at DESC)
+                """
+            )
 
     def create_job(
         self,
@@ -225,6 +249,19 @@ class Database:
         job = self.get_job(job_id)
         if job is None:
             raise RuntimeError("Created job could not be read back")
+        self.record_event_log(
+            level="INFO",
+            category="task",
+            event="job.created",
+            message="任务已创建并进入处理队列。",
+            reference_type="job",
+            reference_id=job_id,
+            details={
+                "input_mode": input_mode,
+                "status": "UPLOADED",
+                "stage": "UPLOAD_COMPLETE",
+            },
+        )
         return job
 
     def count_active_jobs_for_client(self, client_key: str) -> int:
@@ -286,6 +323,18 @@ class Database:
         ticket = self.get_upload_ticket(ticket_id)
         if ticket is None:
             raise RuntimeError("Created upload ticket could not be read back")
+        self.record_event_log(
+            level="INFO",
+            category="upload",
+            event="upload.queued",
+            message="上传请求已进入队列。",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            details={
+                "status": "WAITING",
+                "video_size_bytes": video_size_bytes,
+            },
+        )
         return ticket
 
     def get_upload_ticket(self, ticket_id: str) -> dict | None:
@@ -391,6 +440,16 @@ class Database:
                 )
                 if cursor.rowcount == 1:
                     activated.append(row["id"])
+        for ticket_id in activated:
+            self.record_event_log(
+                level="INFO",
+                category="upload",
+                event="upload.ready",
+                message="上传请求已获得上传名额。",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                details={"status": "READY"},
+            )
         return activated
 
     def begin_upload_ticket(self, ticket_id: str) -> dict | None:
@@ -420,6 +479,16 @@ class Database:
         if refreshed is None:
             raise RuntimeError("Upload ticket disappeared")
         refreshed["_upload_started"] = upload_started
+        if upload_started:
+            self.record_event_log(
+                level="INFO",
+                category="upload",
+                event="upload.started",
+                message="客户端已开始上传素材。",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                details={"status": "UPLOADING"},
+            )
         return refreshed
 
     def complete_upload_ticket(self, ticket_id: str, job_id: str) -> bool:
@@ -437,7 +506,18 @@ class Database:
                 """,
                 (job_id, timestamp, timestamp, ticket_id),
             )
-        return cursor.rowcount == 1
+        completed = cursor.rowcount == 1
+        if completed:
+            self.record_event_log(
+                level="INFO",
+                category="upload",
+                event="upload.completed",
+                message="素材上传完成，任务已创建。",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                details={"job_id": job_id, "status": "COMPLETED"},
+            )
+        return completed
 
     def cancel_upload_ticket(self, ticket_id: str) -> bool:
         timestamp = utc_now()
@@ -453,7 +533,18 @@ class Database:
                 """,
                 (timestamp, timestamp, ticket_id),
             )
-        return cursor.rowcount == 1
+        canceled = cursor.rowcount == 1
+        if canceled:
+            self.record_event_log(
+                level="WARNING",
+                category="upload",
+                event="upload.canceled",
+                message="上传请求已取消。",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                details={"status": "CANCELED"},
+            )
+        return canceled
 
     def expire_stale_upload_tickets(
         self,
@@ -491,6 +582,16 @@ class Database:
                     """,
                     (timestamp, timestamp, *ticket_ids),
                 )
+        for ticket_id in ticket_ids:
+            self.record_event_log(
+                level="WARNING",
+                category="upload",
+                event="upload.expired",
+                message="上传请求因长时间无活动而过期。",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                details={"status": "EXPIRED"},
+            )
         return ticket_ids
 
     def get_job(self, job_id: str) -> dict | None:
@@ -599,6 +700,28 @@ class Database:
                 ensure_ascii=True,
             )
         )
+        level = "ERROR" if status == "FAILED" else "INFO"
+        if status == "CANCELED":
+            level = "WARNING"
+        message = (
+            f"任务处理失败：{error_code or stage}"
+            if status == "FAILED"
+            else f"任务状态更新：{stage}"
+        )
+        self.record_event_log(
+            level=level,
+            category="task",
+            event="job.state_changed",
+            message=message,
+            reference_type="job",
+            reference_id=job_id,
+            details={
+                "status": status,
+                "stage": stage,
+                "progress": progress,
+                "error_code": error_code,
+            },
+        )
 
     def queue_cloud_render(
         self,
@@ -640,7 +763,21 @@ class Database:
                     job_id,
                 ),
             )
-        return cursor.rowcount == 1
+        queued = cursor.rowcount == 1
+        if queued:
+            self.record_event_log(
+                level="INFO",
+                category="task",
+                event="job.cloud_render_queued",
+                message="任务已进入云端视频渲染队列。",
+                reference_type="job",
+                reference_id=job_id,
+                details={
+                    "status": "UPLOADED",
+                    "stage": "CLOUD_RENDER_QUEUED",
+                },
+            )
+        return queued
 
     def cancel_job(self, job_id: str) -> bool:
         with self.connect() as connection:
@@ -657,7 +794,18 @@ class Database:
                 """,
                 (utc_now(), job_id),
             )
-        return cursor.rowcount == 1
+        canceled = cursor.rowcount == 1
+        if canceled:
+            self.record_event_log(
+                level="WARNING",
+                category="task",
+                event="job.canceled",
+                message="任务已取消。",
+                reference_type="job",
+                reference_id=job_id,
+                details={"status": "CANCELED", "stage": "CANCELED_BY_USER"},
+            )
+        return canceled
 
     def list_job_ids(self, *, status: str) -> list[str]:
         with self.connect() as connection:
@@ -753,6 +901,15 @@ class Database:
             )
         if cursor.rowcount != 1:
             return None
+        self.record_event_log(
+            level="INFO",
+            category="task",
+            event="job.requeued",
+            message="任务已由管理员重新加入处理队列。",
+            reference_type="job",
+            reference_id=job_id,
+            details={"status": "UPLOADED", "stage": "REQUEUED_BY_ADMIN"},
+        )
         return self.get_job(job_id)
 
     def record_admin_audit(
@@ -781,6 +938,116 @@ class Database:
                     utc_now(),
                 ),
             )
+        self.record_event_log(
+            level="ERROR" if outcome == "failed" else "INFO",
+            category="admin",
+            event=action,
+            message=f"管理员操作{('失败' if outcome == 'failed' else '完成')}：{action}",
+            reference_type=target_type,
+            reference_id=target_id,
+            details={"outcome": outcome, "diagnostic": details},
+        )
+
+    def record_event_log(
+        self,
+        *,
+        level: str,
+        category: str,
+        event: str,
+        message: str,
+        reference_type: str | None = None,
+        reference_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        serialized_details = (
+            json.dumps(details, ensure_ascii=False, sort_keys=True)
+            if details is not None
+            else None
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO event_logs (
+                    level, category, event, message, reference_type,
+                    reference_id, details, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    level.upper(),
+                    category.lower(),
+                    event,
+                    message,
+                    reference_type,
+                    reference_id,
+                    serialized_details,
+                    utc_now(),
+                ),
+            )
+
+    def list_event_logs(
+        self,
+        *,
+        level: str | None = None,
+        category: str | None = None,
+        reference_id: str | None = None,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if level:
+            conditions.append("level = ?")
+            parameters.append(level.upper())
+        if category:
+            conditions.append("category = ?")
+            parameters.append(category.lower())
+        if reference_id:
+            conditions.append("reference_id = ?")
+            parameters.append(reference_id)
+        if query:
+            pattern = f"%{query.strip()}%"
+            conditions.append(
+                "(event LIKE ? OR message LIKE ? OR reference_id LIKE ? "
+                "OR details LIKE ?)"
+            )
+            parameters.extend([pattern, pattern, pattern, pattern])
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        with self.connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM event_logs {where_clause}",
+                    parameters,
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""
+                SELECT id, level, category, event, message, reference_type,
+                       reference_id, details, created_at
+                FROM event_logs
+                {where_clause}
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*parameters, limit, offset),
+            ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            serialized_details = item.get("details")
+            item["details"] = (
+                json.loads(serialized_details) if serialized_details else {}
+            )
+            items.append(item)
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     def list_admin_audit_events(self, *, limit: int = 50) -> list[dict]:
         with self.connect() as connection:
@@ -842,7 +1109,21 @@ class Database:
                     timestamp,
                 ),
             )
-        return [row["id"] for row in rows]
+        job_ids = [row["id"] for row in rows]
+        for job_id in job_ids:
+            self.record_event_log(
+                level="ERROR",
+                category="system",
+                event="job.interrupted",
+                message="服务重启中断了正在处理的任务。",
+                reference_type="job",
+                reference_id=job_id,
+                details={
+                    "status": "FAILED",
+                    "error_code": "SERVICE_RESTARTED",
+                },
+            )
+        return job_ids
 
     def list_expired_terminal_job_ids(self, *, cutoff: str) -> list[str]:
         terminal_statuses = (

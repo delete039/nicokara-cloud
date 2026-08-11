@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelAdminUploadTicket,
+  getAdminLogs,
   getAdminOverview,
   requeueAdminJob,
 } from "./admin-api";
@@ -13,6 +14,23 @@ afterEach(() => {
 
 
 describe("admin API", () => {
+  it("explains how to enable admin monitoring when the server is unconfigured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ detail: "Admin monitoring is not configured." }),
+          { status: 503, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(getAdminOverview("secret-token")).rejects.toMatchObject({
+      status: 503,
+      message: "管理员监控尚未配置，请在服务端设置 NICOKARA_ADMIN_TOKEN 后重启服务。",
+    });
+  });
+
   it("loads the monitor overview with a bearer token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -66,6 +84,33 @@ describe("admin API", () => {
       2,
       "/api/v1/admin/jobs/job-1/requeue",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("loads filtered event logs with pagination and a bearer token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ items: [], total: 0, limit: 50, offset: 50 }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAdminLogs("secret-token", {
+      level: "ERROR",
+      category: "task",
+      referenceId: "job / 1",
+      query: "MMS 失败",
+      limit: 50,
+      offset: 50,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/admin/logs?level=ERROR&category=task&reference_id=job+%2F+1&query=MMS+%E5%A4%B1%E8%B4%A5&limit=50&offset=50",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer secret-token" },
+        cache: "no-store",
+      }),
     );
   });
 });
