@@ -169,8 +169,7 @@ def test_pipeline_marks_transcription_failure_in_database(tmp_path: Path) -> Non
     assert job["stage"] == "TRANSCRIBING"
     assert job["error_code"] == "TRANSCRIPTION_FAILED"
     assert job["error_message"] == (
-        "Processing failed during audio transcription. "
-        "Check server logs with this job ID."
+        "服务器未能生成歌声时间信息。请使用任务 ID 查询语音分析日志。"
     )
 
 
@@ -521,6 +520,8 @@ def test_pipeline_records_alignment_failure(tmp_path: Path) -> None:
     assert job["stage"] == "ALIGNING"
     assert job["progress"] == 90
     assert job["error_code"] == "ALIGNMENT_FAILED"
+    assert "备用时间轴" in job["error_message"]
+    assert "Whisper" not in job["error_message"]
     assert job["lyrics_processed_path"] == str(job_dir / "lyrics_processed.json")
 
 
@@ -852,11 +853,20 @@ def test_audio_only_high_accuracy_pipeline_runs_uvr_once_and_uses_vocals(
 
     class AudioAwareAligner:
         requires_vocals = True
+        supports_transcriptless_alignment = True
 
         def __init__(self) -> None:
             self.audio_paths: list[Path] = []
 
-        def align(self, lyrics, transcript, *, audio_path):
+        def align(
+            self,
+            lyrics,
+            transcript,
+            *,
+            audio_path,
+            transcript_factory,
+        ):
+            assert transcript is None
             self.audio_paths.append(audio_path)
             return LyricTimeline(
                 confidence=1.0,
@@ -887,13 +897,14 @@ def test_audio_only_high_accuracy_pipeline_runs_uvr_once_and_uses_vocals(
     assert separator.calls == [
         (job_dir / "audio_stereo.wav", vocals_path, instrumental_path)
     ]
-    assert transcriber.calls == [vocals_path]
+    assert transcriber.calls == []
+    assert not (job_dir / "transcript.json").exists()
     assert aligner.audio_paths == [vocals_path]
     timeline = json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))
     assert timeline["alignment_engine"] == "fa_kara_mms"
 
 
-def test_audio_only_pipeline_falls_back_when_vocal_stem_is_unavailable(
+def test_audio_only_pipeline_uses_fallback_when_vocal_stem_is_unavailable(
     tmp_path: Path,
 ) -> None:
     pipeline_module = importlib.import_module("app.tasks.pipeline")
@@ -927,11 +938,20 @@ def test_audio_only_pipeline_falls_back_when_vocal_stem_is_unavailable(
 
     class OptionalAudioAligner:
         requires_vocals = True
+        supports_transcriptless_alignment = True
 
         def __init__(self) -> None:
             self.audio_paths = []
 
-        def align(self, lyrics, transcript, *, audio_path=None):
+        def align(
+            self,
+            lyrics,
+            transcript,
+            *,
+            audio_path=None,
+            transcript_factory=None,
+        ):
+            assert transcript is not None
             self.audio_paths.append(audio_path)
             return LyricTimeline(
                 confidence=0.5,
@@ -951,6 +971,9 @@ def test_audio_only_pipeline_falls_back_when_vocal_stem_is_unavailable(
     pipeline.process(job_id)
 
     assert aligner.audio_paths == [None]
+    assert pipeline.transcriber.calls == [job_dir / "audio.wav"]
+    timeline = json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline["warnings"] == ["uvr_unavailable"]
 
 
 def test_audio_only_pipeline_falls_back_when_vocal_separation_fails(
@@ -996,13 +1019,25 @@ def test_audio_only_pipeline_falls_back_when_vocal_separation_fails(
 
     class OptionalAudioAligner:
         requires_vocals = True
+        supports_transcriptless_alignment = True
 
         def __init__(self) -> None:
             self.audio_paths = []
 
-        def align(self, lyrics, transcript, *, audio_path=None):
+        def align(
+            self,
+            lyrics,
+            transcript,
+            *,
+            audio_path=None,
+            transcript_factory=None,
+        ):
+            assert transcript is not None
             self.audio_paths.append(audio_path)
-            return LyricTimeline(confidence=0.5)
+            return LyricTimeline(
+                confidence=0.5,
+                alignment_engine="whisper_mora",
+            )
 
     transcriber = FakeTranscriber()
     aligner = OptionalAudioAligner()
@@ -1180,6 +1215,5 @@ def test_pipeline_does_not_expose_raw_exception_details(tmp_path: Path) -> None:
     assert "secret-token" not in job["error_message"]
     assert "private" not in job["error_message"]
     assert job["error_message"] == (
-        "Processing failed during audio transcription. "
-        "Check server logs with this job ID."
+        "服务器未能生成歌声时间信息。请使用任务 ID 查询语音分析日志。"
     )

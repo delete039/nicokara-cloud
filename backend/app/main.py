@@ -54,8 +54,22 @@ def build_alignment_engine(settings: Settings):
         return fallback
     return ResilientAlignmentEngine(
         primary=MMSForcedAligner(
-            runtime=SubprocessMMSRuntime(device=settings.fa_kara_device),
+            runtime=SubprocessMMSRuntime(
+                device=settings.fa_kara_device,
+                audio_speed=settings.fa_kara_audio_speed,
+                silence_window_seconds=(
+                    settings.fa_kara_silence_window_seconds
+                ),
+                silence_top_percent=(
+                    settings.fa_kara_silence_top_percent
+                ),
+                silence_threshold_ratio=(
+                    settings.fa_kara_silence_threshold_ratio
+                ),
+                tail_window_seconds=settings.fa_kara_tail_window_seconds,
+            ),
             timeout_seconds=settings.fa_kara_timeout_seconds,
+            min_confidence=settings.fa_kara_min_confidence,
         ),
         fallback=fallback,
     )
@@ -206,7 +220,7 @@ def create_app(
 
     app = FastAPI(
         title=resolved_settings.app_name,
-        version="0.3.0-alpha.2",
+        version="0.3.0-alpha.3",
         lifespan=lifespan,
     )
     app.add_middleware(

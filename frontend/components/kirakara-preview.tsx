@@ -189,7 +189,10 @@ export function KirakaraPreview({
           data-kirakara-workbench="desktop-fit"
           className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(20rem,1fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]"
         >
-          <div data-kirakara-preview-panel="true" className="min-w-0">
+          <div
+            data-kirakara-preview-panel="true"
+            className="min-w-0 lg:col-start-1 lg:row-start-1"
+          >
             <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
               {videoUrl && (
                 <video
@@ -237,7 +240,7 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-timeline-panel="true"
-            className={`min-w-0 lg:max-h-[min(22rem,calc(100vh-19rem))] lg:overflow-y-auto ${
+            className={`min-w-0 lg:col-span-2 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -254,19 +257,19 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-controls-panel="true"
-            className={`min-w-0 lg:col-span-2 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)] xl:items-start xl:gap-4 ${
+            className={`min-w-0 lg:col-start-2 lg:row-start-1 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
             }`}
           >
             {timeline && (
-              <div className={capabilities ? "min-w-0" : "min-w-0 xl:col-span-2"}>
+              <div className="min-w-0">
                 <KirakaraStyleEditor style={style} onChange={updateStyle} />
               </div>
             )}
             {timeline && capabilities && (
-              <div className="min-w-0 space-y-3 xl:border-l xl:pl-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+              <div className="mt-4 min-w-0 space-y-3 border-t pt-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
                 <KirakaraProjectDownload
                   jobId={jobId}
                   videoName={expectedVideoName}

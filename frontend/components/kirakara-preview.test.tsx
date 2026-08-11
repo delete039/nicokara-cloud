@@ -75,8 +75,10 @@ describe("KirakaraPreview", () => {
     expect(html).toContain('data-kirakara-timeline-panel="true"');
     expect(html).toContain('data-kirakara-controls-panel="true"');
     expect(html).toContain("xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]");
-    expect(html).toContain("lg:col-span-2");
-    expect(html).toContain("lg:max-h-[min(22rem,calc(100vh-19rem))]");
-    expect(html).toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
+    expect(html).toContain("lg:col-start-1 lg:row-start-1");
+    expect(html).toContain("lg:col-span-2 lg:row-start-2");
+    expect(html).toContain("lg:col-start-2 lg:row-start-1");
+    expect(html).not.toContain("lg:max-h-[min(22rem,calc(100vh-19rem))]");
+    expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
   });
 });

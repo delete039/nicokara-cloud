@@ -70,7 +70,19 @@ function retryDelay(seconds?: number): string {
 
 function httpDetails(status: number, detail?: string | null): string[] {
   const details = [`HTTP 状态码：${status}`];
-  if (detail?.trim()) details.push(`服务器信息：${detail.trim()}`);
+  const normalizedDetail = detail?.trim();
+  const looksLikeHtml = normalizedDetail
+    ? /<!doctype|<html|<head|<body/iu.test(normalizedDetail)
+    : false;
+  if (normalizedDetail && !looksLikeHtml) {
+    details.push(
+      `服务器信息：${
+        normalizedDetail.length > 800
+          ? `${normalizedDetail.slice(0, 800)}…`
+          : normalizedDetail
+      }`,
+    );
+  }
   return details;
 }
 
@@ -106,6 +118,23 @@ export function httpErrorFeedback(
   retryAfterSeconds?: number,
 ): ErrorFeedback {
   const technicalDetails = httpDetails(status, detail);
+
+  if (status === 524) {
+    return {
+      title: "服务器响应超时，正在确认任务",
+      description:
+        context === "upload"
+          ? "Cloudflare 等待服务器响应超时，但任务可能已经创建并继续处理。页面会优先按本次提交编号恢复任务。"
+          : "代理等待服务器响应超时，任务仍可能继续处理。返回任务页后可继续查看状态。",
+      solutions: [
+        "先等待页面自动恢复或刷新当前任务页，不要重复提交同一份素材。",
+        "如果 2 分钟后仍无法恢复，请保留发生时间和任务链接并联系管理员。",
+        "管理员应检查后端任务日志，并避免让上传或任务创建请求执行长时间同步处理。",
+      ],
+      technicalDetails,
+      retryable: true,
+    };
+  }
 
   if (context === "cloud_render" && (status === 400 || status === 422)) {
     const lineMatch = detail?.match(/line\s+(\d+)/iu);
@@ -274,10 +303,21 @@ export function httpErrorFeedback(
   }
 
   return {
-    title: status >= 500 ? "服务器处理请求失败" : "请求未能完成",
+    title:
+      status >= 500
+        ? context === "job"
+          ? "任务状态读取失败"
+          : context === "cloud_render"
+            ? "云端渲染提交失败"
+            : "任务提交失败"
+        : "请求未能完成",
     description:
       status >= 500
-        ? "服务器发生内部错误，当前请求没有正常完成。"
+        ? context === "job"
+          ? "服务器暂时无法返回最新状态，任务仍可能继续处理，页面会继续尝试读取。"
+          : context === "cloud_render"
+            ? "服务器没有完成本次云端渲染提交，原始时间轴与浏览器预览仍保留在当前页面。"
+            : "服务器没有完成本次任务提交；请先确认任务是否已经创建，再决定是否重新上传。"
         : "服务器拒绝了当前请求，请检查提交内容或任务地址。",
     solutions: [
       "稍后重试一次。",
@@ -313,12 +353,12 @@ const JOB_FAILURES: Record<string, JobFailureDefinition> = {
     ],
   },
   TRANSCRIPTION_FAILED: {
-    title: "日语语音识别失败",
-    description: "服务器未能完成 Whisper 转录，后续歌词对齐无法继续。",
+    title: "歌声时间分析失败",
+    description: "服务器未能生成可供歌词对齐使用的歌声时间信息。",
     solutions: [
       "确认视频音轨清晰且不是完全静音。",
       "尝试上传较短或码率更低的视频，避免服务器内存不足。",
-      "管理员应检查 Whisper 模型路径、可用内存和后端日志。",
+      "管理员应检查语音分析模型缓存、网络访问、可用内存和后端日志。",
     ],
   },
   LYRIC_PROCESSING_FAILED: {
@@ -332,11 +372,14 @@ const JOB_FAILURES: Record<string, JobFailureDefinition> = {
   },
   ALIGNMENT_FAILED: {
     title: "歌词时间轴对齐失败",
-    description: "歌词内容与识别到的演唱音频差异过大，无法生成可靠时间轴。",
+    description:
+      "FA-Kara / MMS 强制对齐和备用时间轴都未能生成完整、可靠的歌词时间轴。",
     solutions: [
       "确保歌词与视频中的实际演唱内容一致，不要混入翻译、时间标签或说明文字。",
       "每句歌词单独一行，并保持与演唱顺序一致。",
+      "训读、古语或特殊唱法可写成 {漢字|かな}；英文等特殊发音可使用 [表记|romaji]。",
       "删去视频中未演唱的歌词，或补齐明显缺失的歌词后重试。",
+      "若同一素材反复失败，请将任务 ID 提供给管理员检查 UVR 人声、MMS 模型缓存和内存。",
     ],
   },
   SUBTITLE_GENERATION_FAILED: {

@@ -6,11 +6,19 @@
 
 ### 云端 UVR + FA-Kara/MMS_FA 高精度对齐
 
+- 修复 UVR 下载中断留下部分 ONNX 文件后永久失败的问题；检测到不受支持的缓存 MD5 时自动删除当前模型并重试一次。
+- UVR 失败或人声 stem 不可用时不再拿原曲混音继续跑 MMS，改用备用时间轴；MMS 平均置信度低于可配置门槛时也会自动回退。
 - 增加可插拔高精度对齐引擎；音频优先任务使用 FA-Kara 的罗马音 token 思路和 TorchAudio `MMS_FA` 生成 Mora 时间戳。
+- 补齐 FA-Kara 的 RMS 非静音检测、片段压缩、推理时间回映射、句首修正和 20 ms 尾音检测，不再对整段静音音频直接运行 MMS。
+- 支持 `{漢字|かな}` 显式 Ruby 和 `[表记|romaji]` 隐式发音；使用 Janome 修正助词 `は/へ` 的对齐读音。
+- 未注音英文或数字不再按拼写字母静默对齐，自动转入 Whisper 安全降级。
 - UVR 单次推理同时保存人声与伴奏，人声供 Whisper 和 MMS_FA 使用，伴奏继续供 `OFF VOCAL` 下载。
 - MMS_FA 在独立子进程运行，达到配置超时后可终止；UVR 或 MMS_FA 缺少模型、推理失败、输出不完整或超时均自动回退原 Whisper Mora 对齐器，并记录回退原因。
 - `timeline.json` 增加 `alignment_engine` 和 `alignment_model`，记录任务实际使用的对齐引擎。
 - 增加 `NICOKARA_FA_KARA_ENABLED`、`NICOKARA_FA_KARA_DEVICE` 和 `NICOKARA_FA_KARA_TIMEOUT_SECONDS` 配置。
+- 增加音频倍速、静音检测窗口/阈值和尾音窗口配置；默认值与 FA-Kara 当前命令行实现一致。
+- 只上传音频遇到 Cloudflare 524、5xx 或网络中断时，按 `client_submission_id` 恢复已创建任务，避免重复提交。
+- 优化首页处理说明、UVR/FA-Kara 阶段提示与错误反馈；Cloudflare HTML 错误页不再整页显示为诊断信息。
 - 固定使用仍支持 MMS forced-alignment API 的 TorchAudio 2.7.1，并为模型增加独立 Docker 持久化缓存。
 - 后端镜像默认使用 Debian 官方 HTTPS 软件源，支持有限重试、下载缓存和可选镜像参数，避免固定地区镜像阻断部署。
 - 增加固定歌曲集基准汇总工具，比较 Mora 误差、失败率、耗时和峰值内存。

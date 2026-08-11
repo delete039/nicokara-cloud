@@ -10,6 +10,9 @@ describe("server-facing interface copy", () => {
     expect(copy).not.toContain("最快约");
     expect(copy).not.toContain("请勿在处理中关闭服务");
     expect(HOME_COPY.introduction).toContain("服务器");
+    expect(HOME_COPY.introduction).toContain("视频保留在浏览器");
+    expect(HOME_COPY.steps[1].text).toContain("FA-Kara");
+    expect(HOME_COPY.steps[2].text).toContain("浏览器");
     expect(UPLOAD_COPY.footer).toContain("排队时请保持页面打开");
     expect(UPLOAD_COPY.footer).toContain("保存浏览器地址");
     expect(UPLOAD_COPY.footer).toContain("之后打开即可查看结果");

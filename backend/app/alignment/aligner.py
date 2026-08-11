@@ -10,6 +10,7 @@ from app.alignment.models import (
     AlignedMora,
     AlignedToken,
     LyricTimeline,
+    close_mora_gaps,
 )
 from app.lyrics.models import LyricDocument
 
@@ -114,11 +115,13 @@ class LyricTimelineAligner:
             )
 
         warnings = [] if confidence == 1.0 else ["partial_alignment"]
-        return LyricTimeline(
-            confidence=confidence,
-            lines=lines,
-            warnings=warnings,
-            alignment_engine="whisper_mora",
+        return close_mora_gaps(
+            LyricTimeline(
+                confidence=confidence,
+                lines=lines,
+                warnings=warnings,
+                alignment_engine="whisper_mora",
+            )
         )
 
     @staticmethod

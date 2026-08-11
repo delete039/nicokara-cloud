@@ -64,4 +64,43 @@ describe("KirakaraDomFrame", () => {
     expect(html.match(/data-kirakara-indicator-dot=/g)).toHaveLength(4);
     expect(html).not.toContain("letter-spacing:5px");
   });
+
+  it("renders lyric groups without ruby annotations", async () => {
+    const renderer = await loadDomFrame();
+    expect(renderer, "Kirakara DOM renderer should exist").not.toBeNull();
+    if (!renderer) return;
+
+    const frame = {
+      lines: [
+        {
+          slot: "upper" as const,
+          text: "ラララ",
+          opacity: 1,
+          indicatorOpacities: [1, 0, 0, 0],
+          units: [
+            {
+              text: "ラララ",
+              progress: 0.5,
+              characters: [
+                { text: "ラ", progress: 1 },
+                { text: "ラ", progress: 0.5 },
+                { text: "ラ", progress: 0 },
+              ],
+              ruby: [],
+            },
+          ],
+        },
+      ],
+    } as unknown as KirakaraFrame;
+
+    const html = renderToStaticMarkup(
+      <renderer.KirakaraDomFrame
+        frame={frame}
+        style={DEFAULT_KIRAKARA_STYLE}
+      />,
+    );
+
+    expect(html.match(/data-kirakara-character=/g)).toHaveLength(3);
+    expect(html).not.toContain('data-kirakara-ruby-sizer="true"');
+  });
 });

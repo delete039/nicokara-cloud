@@ -11,7 +11,7 @@ const ROUTE_STATUS = {
   AUDIO_ONLY: {
     icon: Music2,
     title: "仅上传音频",
-    detail: "视频保留在当前设备，仅发送音频与歌词；本地素材上限 300 MB。",
+    detail: "视频保留在当前设备，仅发送音频与歌词；服务器使用 UVR 与 FA-Kara 对齐，本地素材上限 300 MB。",
   },
   REMOTE_VIDEO: {
     icon: CloudUpload,

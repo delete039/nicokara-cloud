@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "Janome>=0.5,<0.6",
   "pydantic-settings>=2.10,<3",
   "pykakasi>=2.3,<3",
   "python-multipart>=0.0.20,<1",
@@ -16,6 +17,7 @@ dependencies = [
 ai = [
   "audio-separator[cpu]>=0.44.5,<0.45",
   "faster-whisper>=1.2,<2",
+  "librosa>=0.11,<0.12",
   "scipy>=1.14,<2",
   "torchaudio>=2.7.1,<2.8",
 ]

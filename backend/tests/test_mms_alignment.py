@@ -53,11 +53,14 @@ def test_mms_aligner_maps_romanized_spans_to_existing_mora_timeline(
             audio_path: Path,
             tokens: list[str],
             timeout_seconds: float,
+            *,
+            line_token_counts: list[int],
         ) -> list[MMSMoraSpan]:
             self.calls.append((audio_path, tokens, timeout_seconds))
+            assert line_token_counts == [3]
             return [
-                MMSMoraSpan(start_ms=1000, end_ms=1180, score=0.91),
-                MMSMoraSpan(start_ms=1180, end_ms=1390, score=0.88),
+                MMSMoraSpan(start_ms=1000, end_ms=1150, score=0.91),
+                MMSMoraSpan(start_ms=1180, end_ms=1350, score=0.88),
                 MMSMoraSpan(start_ms=1390, end_ms=1600, score=0.95),
             ]
 
@@ -89,6 +92,7 @@ def test_mms_aligner_maps_romanized_spans_to_existing_mora_timeline(
 
 def test_resilient_aligner_falls_back_and_records_actual_engine(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.alignment.engine import ResilientAlignmentEngine
     from app.alignment.mms import ForcedAlignmentError
@@ -117,6 +121,82 @@ def test_resilient_aligner_falls_back_and_records_actual_engine(
 
     assert timeline.alignment_engine == "whisper_mora"
     assert timeline.warnings == ["fa_kara_fallback:ForcedAlignmentError"]
+    assert "MMS_FA timed out" in caplog.text
+
+
+def test_resilient_aligner_does_not_load_transcript_when_mms_succeeds(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.engine import ResilientAlignmentEngine
+
+    class SuccessfulPrimary:
+        def align(self, lyrics, transcript, *, audio_path):
+            assert transcript is None
+            return LyricTimeline(
+                confidence=1.0,
+                alignment_engine="fa_kara_mms",
+            )
+
+    class UnexpectedFallback:
+        def align(self, lyrics, transcript):
+            pytest.fail("Whisper fallback must not run after MMS succeeds")
+
+    def unexpected_transcript_factory() -> TranscriptDocument:
+        pytest.fail("MMS must run before a Whisper transcript is requested")
+
+    timeline = ResilientAlignmentEngine(
+        primary=SuccessfulPrimary(),
+        fallback=UnexpectedFallback(),
+    ).align(
+        sample_lyrics(),
+        None,
+        audio_path=tmp_path / "vocals.wav",
+        transcript_factory=unexpected_transcript_factory,
+    )
+
+    assert timeline.alignment_engine == "fa_kara_mms"
+
+
+def test_resilient_aligner_loads_transcript_only_after_mms_fails(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.engine import ResilientAlignmentEngine
+    from app.alignment.mms import ForcedAlignmentError
+
+    transcript = empty_transcript()
+    factory_calls = 0
+
+    class FailingPrimary:
+        def align(self, lyrics, supplied_transcript, *, audio_path):
+            assert supplied_transcript is None
+            raise ForcedAlignmentError("MMS_FA unavailable")
+
+    class RecordingFallback:
+        def align(self, lyrics, supplied_transcript):
+            assert supplied_transcript is transcript
+            return LyricTimeline(
+                confidence=0.6,
+                alignment_engine="whisper_mora",
+            )
+
+    def transcript_factory() -> TranscriptDocument:
+        nonlocal factory_calls
+        factory_calls += 1
+        return transcript
+
+    timeline = ResilientAlignmentEngine(
+        primary=FailingPrimary(),
+        fallback=RecordingFallback(),
+    ).align(
+        sample_lyrics(),
+        None,
+        audio_path=tmp_path / "vocals.wav",
+        transcript_factory=transcript_factory,
+    )
+
+    assert factory_calls == 1
+    assert timeline.alignment_engine == "whisper_mora"
+    assert timeline.warnings == ["fa_kara_fallback:ForcedAlignmentError"]
 
 
 def test_mms_aligner_rejects_incomplete_span_output(tmp_path: Path) -> None:
@@ -127,12 +207,130 @@ def test_mms_aligner_rejects_incomplete_span_output(tmp_path: Path) -> None:
     )
 
     class IncompleteRuntime:
-        def align(self, audio_path, tokens, timeout_seconds):
+        def align(
+            self,
+            audio_path,
+            tokens,
+            timeout_seconds,
+            *,
+            line_token_counts,
+        ):
             return [MMSMoraSpan(start_ms=1000, end_ms=1200, score=0.9)]
 
     with pytest.raises(ForcedAlignmentError, match="span count"):
         MMSForcedAligner(runtime=IncompleteRuntime()).align(
             sample_lyrics(),
+            empty_transcript(),
+            audio_path=tmp_path / "vocals.wav",
+        )
+
+
+def test_mms_aligner_rejects_low_confidence_span_output(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import (
+        ForcedAlignmentError,
+        MMSForcedAligner,
+        MMSMoraSpan,
+    )
+
+    class LowConfidenceRuntime:
+        def align(
+            self,
+            audio_path,
+            tokens,
+            timeout_seconds,
+            *,
+            line_token_counts,
+        ):
+            return [
+                MMSMoraSpan(
+                    start_ms=1000 + index * 200,
+                    end_ms=1200 + index * 200,
+                    score=0.1,
+                )
+                for index in range(len(tokens))
+            ]
+
+    with pytest.raises(ForcedAlignmentError, match="confidence"):
+        MMSForcedAligner(runtime=LowConfidenceRuntime()).align(
+            sample_lyrics(),
+            empty_transcript(),
+            audio_path=tmp_path / "vocals.wav",
+        )
+
+
+def test_mms_aligner_uses_fa_kara_explicit_pronunciation(tmp_path: Path) -> None:
+    from app.alignment.mms import MMSForcedAligner, MMSMoraSpan
+
+    lyrics = LyricDocument(
+        provider="local",
+        source_text="[の|n]",
+        lines=[
+            LyricLine(
+                source="[の|n]",
+                surface="の",
+                reading="の",
+                tokens=[
+                    LyricToken(
+                        surface="の",
+                        reading="の",
+                        alignment_pronunciation="n",
+                    )
+                ],
+            )
+        ],
+    )
+
+    class RecordingRuntime:
+        def __init__(self) -> None:
+            self.tokens: list[str] = []
+            self.line_token_counts: list[int] = []
+
+        def align(
+            self,
+            audio_path,
+            tokens,
+            timeout_seconds,
+            *,
+            line_token_counts,
+        ):
+            self.tokens = tokens
+            self.line_token_counts = line_token_counts
+            return [MMSMoraSpan(start_ms=100, end_ms=200, score=0.9)]
+
+    runtime = RecordingRuntime()
+    MMSForcedAligner(runtime=runtime).align(
+        lyrics,
+        empty_transcript(),
+        audio_path=tmp_path / "vocals.wav",
+    )
+
+    assert runtime.tokens == ["n"]
+    assert runtime.line_token_counts == [1]
+
+
+def test_mms_aligner_falls_back_for_unannotated_latin_lyrics(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import ForcedAlignmentError, MMSForcedAligner
+
+    lyrics = LyricDocument(
+        provider="local",
+        source_text="More love",
+        lines=[
+            LyricLine(
+                source="More love",
+                surface="More love",
+                reading="More love",
+                tokens=[LyricToken(surface="More love", reading="More love")],
+            )
+        ],
+    )
+
+    with pytest.raises(ForcedAlignmentError, match="Latin"):
+        MMSForcedAligner(runtime=object()).align(
+            lyrics,
             empty_transcript(),
             audio_path=tmp_path / "vocals.wav",
         )
@@ -177,12 +375,23 @@ def test_subprocess_runtime_parses_worker_output(tmp_path: Path) -> None:
         device="cpu",
         runner=runner,
         python_command="python-test",
-    ).align(audio_path, ["ki", "mi"], 12)
+    ).align(
+        audio_path,
+        ["ki", "mi"],
+        12,
+        line_token_counts=[2],
+    )
 
     assert recorded["timeout"] == 12
     assert recorded["request"] == {
         "audio_path": str(audio_path.resolve()),
         "tokens": ["ki", "mi"],
+        "line_token_counts": [2],
+        "audio_speed": 1.0,
+        "silence_window_seconds": 0.8,
+        "silence_top_percent": 10.0,
+        "silence_threshold_ratio": 0.1,
+        "tail_window_seconds": 0.02,
     }
     assert [(span.start_ms, span.end_ms, span.score) for span in spans] == [
         (10, 90, 0.75),
@@ -206,4 +415,81 @@ def test_subprocess_runtime_turns_timeout_into_safe_fallback_error(
         SubprocessMMSRuntime(
             runner=timing_out_runner,
             python_command="python-test",
-        ).align(audio_path, ["ki"], 0.1)
+        ).align(audio_path, ["ki"], 0.1, line_token_counts=[1])
+
+
+def test_subprocess_runtime_preserves_bounded_worker_diagnostics(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import ForcedAlignmentError, SubprocessMMSRuntime
+
+    def failing_runner(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=command,
+            stderr="model cache is corrupt",
+        )
+
+    audio_path = tmp_path / "audio_vocals.wav"
+    audio_path.write_bytes(b"vocals")
+
+    with pytest.raises(
+        ForcedAlignmentError,
+        match="model cache is corrupt",
+    ):
+        SubprocessMMSRuntime(
+            runner=failing_runner,
+            python_command="python-test",
+        ).align(audio_path, ["ki"], 10, line_token_counts=[1])
+
+
+def test_fa_kara_time_mapping_restores_packed_audio_positions() -> None:
+    from app.alignment.mms_worker import map_packed_time_ms
+
+    ranges = [(1.0, 2.0), (4.0, 6.0)]
+
+    assert map_packed_time_ms(0, ranges) == 1000
+    assert map_packed_time_ms(500, ranges) == 1500
+    assert map_packed_time_ms(1000, ranges) == 4000
+    assert map_packed_time_ms(1250, ranges) == 4250
+    assert map_packed_time_ms(4000, ranges) == 6000
+
+
+def test_fa_kara_rms_detection_finds_the_vocal_region() -> None:
+    import numpy as np
+
+    from app.alignment.mms_worker import recognize_non_silent_ranges
+
+    audio = np.zeros(4000, dtype=np.float32)
+    audio[1000:2000] = 0.8
+
+    ranges = recognize_non_silent_ranges(
+        audio,
+        1000,
+        frame_seconds=0.2,
+        top_percent=10,
+        threshold_ratio=0.1,
+    )
+
+    assert ranges
+    assert ranges[0][0] <= 1.0
+    assert ranges[0][1] >= 2.0
+
+
+def test_fa_kara_line_boundary_correction_uses_vocal_edges() -> None:
+    from app.alignment.mms_worker import _adjust_line_boundaries
+
+    spans = [
+        {"start_ms": 900, "end_ms": 1100, "score": 0.9},
+        {"start_ms": 1300, "end_ms": 1500, "score": 0.9},
+    ]
+
+    corrected = _adjust_line_boundaries(
+        spans,
+        [2],
+        [(1.0, 2.0)],
+        [(1.0, 1.7)],
+    )
+
+    assert corrected[0]["start_ms"] == 1000
+    assert corrected[-1]["end_ms"] == 1700

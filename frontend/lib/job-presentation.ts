@@ -104,9 +104,9 @@ export function jobPresentation(
             ? "Kirakara 字幕生成失败"
           : stage === "ALIGNING"
             ? "歌词时间轴对齐失败"
-            : stage === "PROCESSING_LYRICS"
+          : stage === "PROCESSING_LYRICS"
               ? "歌词处理失败"
-              : "歌声识别失败",
+              : "歌声时间分析失败",
       description: "服务器未能完成当前处理阶段，请按下方建议检查素材或服务状态。",
       progressLabel: "任务失败",
       terminal: true,
@@ -126,8 +126,8 @@ export function jobPresentation(
   if (stage === "REMOVING_VOCALS") {
     return {
       eyebrow: "人声处理",
-      title: "正在生成伴奏音轨",
-      description: "服务器正在分离人声并生成伴奏音轨。选择 OFF VOCAL 模式时会执行此步骤。",
+      title: "正在分离人声与伴奏",
+      description: "服务器正在使用 UVR 分离人声与伴奏：人声音轨用于提高歌词对齐精度，选择 OFF VOCAL 时还会用于最终导出。",
       progressLabel: "分离人声",
       terminal: false,
       tone: "active",
@@ -145,10 +145,10 @@ export function jobPresentation(
   }
   if (stage === "TRANSCRIBING") {
     return {
-      eyebrow: "歌声识别",
-      title: "正在识别歌声",
-      description: "服务器正在识别日语歌声，并记录每句歌词对应的时间。",
-      progressLabel: "识别歌声",
+      eyebrow: "歌声分析",
+      title: "正在分析歌声时间",
+      description: "服务器正在生成备用的歌声时间信息。",
+      progressLabel: "分析歌声",
       terminal: false,
       tone: "active",
     };
@@ -167,7 +167,7 @@ export function jobPresentation(
     return {
       eyebrow: "时间轴同步",
       title: "正在匹配歌词时间",
-      description: "服务器正在把歌词与演唱时间匹配，确保逐字高亮同步。",
+      description: "服务器正在使用 FA-Kara / MMS 匹配人声与歌词；主对齐无法完成时才会尝试备用时间轴。",
       progressLabel: "对齐时间",
       terminal: false,
       tone: "active",

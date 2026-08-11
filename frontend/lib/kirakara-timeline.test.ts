@@ -104,6 +104,65 @@ describe("toKirakaraTimeline", () => {
     ]);
     expect(timeline.lines[0].units[1].ruby).toEqual([]);
   });
+
+  it("extends each mora to the next mora start only within its lyric line", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("abc", "abc", 1_000, 1_800, [
+          {
+            surface: "ab",
+            reading: "ab",
+            start_ms: 1_000,
+            end_ms: 1_400,
+            confidence: 1,
+            moras: [
+              { reading: "a", start_ms: 1_000, end_ms: 1_100, matched: true, confidence: 1 },
+              { reading: "b", start_ms: 1_300, end_ms: 1_400, matched: true, confidence: 1 },
+            ],
+          },
+          {
+            surface: "c",
+            reading: "c",
+            start_ms: 1_600,
+            end_ms: 1_800,
+            confidence: 1,
+            moras: [
+              { reading: "c", start_ms: 1_600, end_ms: 1_800, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+        line("d", "d", 2_200, 2_400, [
+          {
+            surface: "d",
+            reading: "d",
+            start_ms: 2_200,
+            end_ms: 2_400,
+            confidence: 1,
+            moras: [
+              { reading: "d", start_ms: 2_200, end_ms: 2_400, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const timeline = toKirakaraTimeline(source);
+
+    expect(timeline.lines[0].units[0].moras.map((mora) => [
+      mora.startMs,
+      mora.endMs,
+    ])).toEqual([
+      [1_000, 1_300],
+      [1_300, 1_600],
+    ]);
+    expect(timeline.lines[0].units[0].endMs).toBe(1_600);
+    expect(timeline.lines[1].units[0].moras[0]).toMatchObject({
+      startMs: 2_200,
+      endMs: 2_400,
+    });
+  });
 });
 
 describe("activeKirakaraFrame", () => {
@@ -166,7 +225,7 @@ describe("activeKirakaraFrame", () => {
     ]);
   });
 
-  it("uses the continuous @Ruby mora offsets emitted to KRL", () => {
+  it("keeps progress moving through a gap until the next mora starts", () => {
     const source: CloudLyricTimeline = {
       confidence: 1,
       warnings: [],
@@ -189,11 +248,11 @@ describe("activeKirakaraFrame", () => {
 
     const unit = activeKirakaraFrame(toKirakaraTimeline(source), 1_300)
       ?.lines[0].units[0];
-    expect(unit?.progress).toBeCloseTo(0.625);
+    expect(unit?.progress).toBeCloseTo(0.375);
     expect(unit?.ruby[0]).toMatchObject({
       characters: [
-        { text: "a", progress: 1 },
-        { text: "b", progress: 0.25 },
+        { text: "a", progress: 0.75 },
+        { text: "b", progress: 0 },
       ],
     });
   });

@@ -21,9 +21,11 @@
 
 ### v0.3.0-alpha.3 - 2026-08-06
 
-- 音频优先任务接入云端 UVR + FA-Kara/MMS_FA Mora 级高精度对齐。
+- 音频优先任务完整接入云端 UVR + FA-Kara/MMS_FA Mora 级高精度对齐，包括非静音压缩、原时间回映射和句首/尾音修正。
+- 支持 FA-Kara `{漢字|かな}` 与 `[表记|romaji]` 标注；未标注英文等不可靠输入会安全回退 Whisper，而不是输出错误 MMS 时间轴。
 - UVR 单次生成供识别使用的人声和供 `OFF VOCAL` 使用的伴奏，避免同一任务重复推理。
 - UVR 或 MMS_FA 超时、失败或不可用时自动回退原 Whisper 对齐器，并在时间轴中记录实际引擎和回退原因。
+- UVR 模型缓存下载不完整时自动清理并重试；低置信度 MMS 结果不会再作为成功时间轴进入预览。
 - 增加独立开关、超时、CPU/CUDA 配置、模型缓存和固定数据集基准工具。
 
 ### v0.3.0-alpha.2 - 2026-08-06
@@ -97,7 +99,7 @@
 | 前端 | React、TypeScript、vinext、Tailwind CSS；负责上传、排队、进度、预览和本地导出 |
 | 浏览器媒体 | Mediabunny、DOM、Canvas、WebCodecs；负责本地音频提取、Kirakara DOM 预览和 Canvas MP4 导出 |
 | 后端 | FastAPI、SQLite；负责任务、队列、上传票据、管理监控和产物接口 |
-| 音频与识别 | FFmpeg、audio-separator/UVR、faster-whisper、pykakasi |
+| 音频与识别 | FFmpeg、audio-separator/UVR、FA-Kara 适配层、TorchAudio MMS_FA、faster-whisper、Janome、pykakasi |
 | 字幕与视频 | Mora 时间轴、Ruby 注音、Kirakara 双行布局、FFmpeg/libass |
 | 数据 | `storage/jobs/{job_id}` 保存每个任务的输入、时间轴、字幕和结果 |
 
@@ -115,7 +117,7 @@ nicokara-cloud/
 `-- CHANGELOG.md              完整更新日志
 ```
 
-Kirakara 渲染逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+Kirakara 与 FA-Kara 适配逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 本地默认访问关系：
 
@@ -137,7 +139,9 @@ Kirakara 渲染逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIR
 
 - [@moriwx](https://github.com/moriwx) - [FA-Kara](https://github.com/moriwx/FA-Kara)
 
-  计划参考其歌词对齐方案，当前版本尚未正式集成。
+  本项目的歌词发音标记、非静音处理、MMS 强制对齐和时间回映射参考并适配了 FA-Kara。感谢原作者公开完整实现。
+
+本项目没有直接运行 FA-Kara 的命令行入口，而是将其对齐核心适配到现有 UVR、任务队列和 Mora 时间轴契约。完整对照范围与差异见 [FA_KARA_INTEGRATION_AUDIT.md](./FA_KARA_INTEGRATION_AUDIT.md)。
 
 ## 本地部署 0 基础教程
 
@@ -229,7 +233,7 @@ docker compose up --build
 4. 提交后观察上传及处理进度。
 5. 任务完成后检查注音、时间轴和字幕预览，再尝试导出。
 
-首次执行歌声识别或 `OFF VOCAL` 时可能继续下载模型，因此第一次任务会比较慢。
+首次执行高精度对齐会下载约 1.18 GiB 的 TorchAudio MMS_FA 模型；首次执行歌声识别或人声分离还可能下载 Whisper、UVR 模型，因此第一次任务会明显较慢。模型会保存在 Docker 数据卷中供后续任务复用。
 
 ### 第 7 步：停止和再次启动
 

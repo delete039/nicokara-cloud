@@ -28,7 +28,7 @@ describe("jobPresentation", () => {
     });
     expect(jobPresentation("PROCESSING", "REMOVING_VOCALS")).toMatchObject({
       eyebrow: "人声处理",
-      title: "正在生成伴奏音轨",
+      title: "正在分离人声与伴奏",
       progressLabel: "分离人声",
       terminal: false,
       tone: "active",
@@ -46,8 +46,8 @@ describe("jobPresentation", () => {
       tone: "error",
     });
     expect(jobPresentation("PROCESSING", "TRANSCRIBING")).toMatchObject({
-      title: "正在识别歌声",
-      progressLabel: "识别歌声",
+      title: "正在分析歌声时间",
+      progressLabel: "分析歌声",
       terminal: false,
       tone: "active",
     });
@@ -72,7 +72,7 @@ describe("jobPresentation", () => {
       tone: "success",
     });
     expect(jobPresentation("FAILED", "TRANSCRIBING")).toMatchObject({
-      title: "歌声识别失败",
+      title: "歌声时间分析失败",
       terminal: true,
       tone: "error",
     });
@@ -201,5 +201,17 @@ describe("jobPresentation", () => {
     const presentation = jobPresentation("PROCESSING", "REMOVING_VOCALS");
 
     expect(presentation.description).toContain("OFF VOCAL");
+    expect(presentation.description).toContain("UVR");
+  });
+
+  it("presents FA-Kara as the alignment engine", async () => {
+    const { jobPresentation } = await import("./job-presentation");
+
+    const presentation = jobPresentation("PROCESSING", "ALIGNING");
+
+    expect(presentation.description).toContain("FA-Kara");
+    expect(presentation.description).toContain("MMS");
+    expect(presentation.description).toContain("备用");
+    expect(presentation.description).not.toContain("Whisper");
   });
 });

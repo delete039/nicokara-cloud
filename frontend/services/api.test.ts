@@ -274,6 +274,61 @@ describe("createAudioOnlyJob", () => {
     expect(xhr.abort).toHaveBeenCalledOnce();
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("recovers an audio-only task by submission ID after a 524 timeout", async () => {
+    const clientSubmissionId = "11111111-2222-4333-8444-555555555555";
+    const recoveredJob = {
+      id: "job-audio-recovered",
+      status: "UPLOADED",
+      stage: "UPLOAD_COMPLETE",
+      progress: 100,
+      input_mode: "AUDIO_ONLY",
+    };
+    class FakeXMLHttpRequest {
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly getResponseHeader = vi.fn(() => null);
+      readonly send = vi.fn((body: FormData) => {
+        expect(body.get("client_submission_id")).toBe(clientSubmissionId);
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      status = 524;
+      responseText = "<!DOCTYPE html><title>A timeout occurred</title>";
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal("crypto", { randomUUID: vi.fn(() => clientSubmissionId) });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(recoveredJob), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const { createAudioOnlyJob } = await import("./api");
+
+    await expect(
+      createAudioOnlyJob(
+        {
+          audio: new File(["audio"], "song.m4a", { type: "audio/mp4" }),
+          originalVideoName: "song.mp4",
+          originalVideoSizeBytes: 1024,
+          lyricsText: "lyrics",
+        },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject(recoveredJob);
+  });
 });
 
 describe("getJob", () => {

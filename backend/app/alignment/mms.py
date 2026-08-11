@@ -18,12 +18,15 @@ from app.alignment.models import (
     AlignedMora,
     AlignedToken,
     LyricTimeline,
+    close_mora_gaps,
 )
 from app.lyrics.models import LyricDocument
 
 
 MMS_MODEL_NAME = "torchaudio.pipelines.MMS_FA"
+DEFAULT_MIN_CONFIDENCE = 0.15
 _ROMAJI_FILTER = re.compile("[^a-z']")
+_LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")
 _CONVERTER = kakasi()
 
 
@@ -47,16 +50,28 @@ class SubprocessMMSRuntime:
         device: str = "auto",
         runner: Any = subprocess.run,
         python_command: str = sys.executable,
+        audio_speed: float = 1.0,
+        silence_window_seconds: float = 0.8,
+        silence_top_percent: float = 10.0,
+        silence_threshold_ratio: float = 0.1,
+        tail_window_seconds: float = 0.02,
     ) -> None:
         self.device = device
         self.runner = runner
         self.python_command = python_command
+        self.audio_speed = audio_speed
+        self.silence_window_seconds = silence_window_seconds
+        self.silence_top_percent = silence_top_percent
+        self.silence_threshold_ratio = silence_threshold_ratio
+        self.tail_window_seconds = tail_window_seconds
 
     def align(
         self,
         audio_path: Path,
         tokens: list[str],
         timeout_seconds: float,
+        *,
+        line_token_counts: list[int],
     ) -> list[MMSMoraSpan]:
         request_id = uuid.uuid4().hex
         request_path = audio_path.parent / f".mms-{request_id}.request.json"
@@ -66,6 +81,12 @@ class SubprocessMMSRuntime:
                 {
                     "audio_path": str(audio_path.resolve()),
                     "tokens": tokens,
+                    "line_token_counts": line_token_counts,
+                    "audio_speed": self.audio_speed,
+                    "silence_window_seconds": self.silence_window_seconds,
+                    "silence_top_percent": self.silence_top_percent,
+                    "silence_threshold_ratio": self.silence_threshold_ratio,
+                    "tail_window_seconds": self.tail_window_seconds,
                 },
                 ensure_ascii=True,
             ),
@@ -101,6 +122,16 @@ class SubprocessMMSRuntime:
             ]
         except subprocess.TimeoutExpired as exc:
             raise ForcedAlignmentError("MMS_FA alignment timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            if detail:
+                detail = detail[-1200:]
+                raise ForcedAlignmentError(
+                    f"MMS_FA worker failed: {detail}"
+                ) from exc
+            raise ForcedAlignmentError(
+                f"MMS_FA worker exited with code {exc.returncode}"
+            ) from exc
         except Exception as exc:
             raise ForcedAlignmentError("MMS_FA worker failed") from exc
         finally:
@@ -113,6 +144,7 @@ class _MoraTarget:
     line_index: int
     token_index: int
     reading: str
+    pronunciation: str | None = None
 
 
 class MMSForcedAligner:
@@ -125,14 +157,16 @@ class MMSForcedAligner:
         *,
         runtime: Any,
         timeout_seconds: float = 600,
+        min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     ) -> None:
         self.runtime = runtime
         self.timeout_seconds = timeout_seconds
+        self.min_confidence = min_confidence
 
     def align(
         self,
         lyrics: LyricDocument,
-        transcript: TranscriptDocument,
+        transcript: TranscriptDocument | None,
         *,
         audio_path: Path,
     ) -> LyricTimeline:
@@ -145,36 +179,72 @@ class MMSForcedAligner:
             audio_path,
             tokens,
             self.timeout_seconds,
+            line_token_counts=[
+                sum(target.line_index == line_index for target in targets)
+                for line_index in range(len(lyrics.lines))
+            ],
         )
         if len(spans) != len(targets):
             raise ForcedAlignmentError(
                 "MMS_FA span count does not match the lyric mora count"
             )
         self._validate_spans(spans)
-        return self._timeline(lyrics, targets, spans)
+        confidence = sum(span.score for span in spans) / len(spans)
+        if confidence < self.min_confidence:
+            raise ForcedAlignmentError(
+                "MMS_FA confidence is below the usable threshold "
+                f"({confidence:.3f} < {self.min_confidence:.3f})"
+            )
+        return close_mora_gaps(self._timeline(lyrics, targets, spans))
 
     @staticmethod
     def _targets(lyrics: LyricDocument) -> list[_MoraTarget]:
-        return [
-            _MoraTarget(line_index, token_index, mora)
-            for line_index, line in enumerate(lyrics.lines)
-            for token_index, token in enumerate(line.tokens)
-            for mora in split_moras(normalize_reading(token.reading))
-        ]
+        targets: list[_MoraTarget] = []
+        for line_index, line in enumerate(lyrics.lines):
+            for token_index, token in enumerate(line.tokens):
+                if token.alignment_pronunciation is not None:
+                    targets.append(
+                        _MoraTarget(
+                            line_index,
+                            token_index,
+                            token.reading,
+                            token.alignment_pronunciation,
+                        )
+                    )
+                    continue
+                if _LATIN_OR_DIGIT.search(token.surface):
+                    raise ForcedAlignmentError(
+                        "Unannotated Latin letters or digits require the "
+                        "FA-Kara [surface|romaji] syntax"
+                    )
+                targets.extend(
+                    _MoraTarget(line_index, token_index, mora)
+                    for mora in split_moras(normalize_reading(token.reading))
+                )
+        return targets
 
     @staticmethod
     def _romanized_tokens(targets: list[_MoraTarget]) -> list[str]:
         raw = []
         for target in targets:
-            converted = "".join(
-                item["hepburn"] for item in _CONVERTER.convert(target.reading)
-            ).lower()
-            raw.append(_ROMAJI_FILTER.sub("", converted))
+            if target.pronunciation is not None:
+                raw.append(
+                    _ROMAJI_FILTER.sub("", target.pronunciation.lower())
+                )
+            else:
+                converted = "".join(
+                    item["hepburn"]
+                    for item in _CONVERTER.convert(target.reading)
+                ).lower()
+                raw.append(_ROMAJI_FILTER.sub("", converted))
 
         tokens: list[str] = []
         for index, token in enumerate(raw):
-            reading = targets[index].reading
-            if reading == "っ":
+            target = targets[index]
+            reading = target.reading
+            if target.pronunciation is not None:
+                pass
+            elif reading == "っ":
                 following = raw[index + 1] if index + 1 < len(raw) else ""
                 token = following[:1] or "t"
             elif reading == "ー":

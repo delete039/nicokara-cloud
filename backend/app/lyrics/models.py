@@ -8,6 +8,7 @@ from typing import Any
 class LyricToken:
     surface: str
     reading: str
+    alignment_pronunciation: str | None = None
 
 
 @dataclass(frozen=True)

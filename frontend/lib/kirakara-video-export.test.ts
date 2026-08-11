@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  ALL_FORMATS,
+  BlobSource,
+  BufferTarget,
+  Input,
+  Mp4OutputFormat,
+  Output,
+} from "mediabunny";
 
 import {
+  composableConversionOptions,
   createChunkedBlobWriter,
   exportKirakaraVideo,
   paintKirakaraVideoFrame,
@@ -88,6 +97,27 @@ describe("paintKirakaraVideoFrame", () => {
 });
 
 describe("exportKirakaraVideo", () => {
+  it("never attaches metadata tags to a composable conversion", () => {
+    const input = new Input({
+      source: new BlobSource(new File(["video"], "song.mp4")),
+      formats: ALL_FORMATS,
+    });
+    const output = new Output({
+      format: new Mp4OutputFormat(),
+      target: new BufferTarget(),
+    });
+
+    const options = composableConversionOptions({
+      input,
+      output,
+      tracks: "primary",
+      video: { discard: true },
+    });
+
+    expect(options.composable).toBe(true);
+    expect(options).not.toHaveProperty("tags");
+  });
+
   it("returns a named MP4 and forwards bounded progress", async () => {
     const runtime: KirakaraVideoExportRuntime = {
       transcode: vi.fn(async ({ writable, onProgress }) => {

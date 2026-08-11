@@ -164,7 +164,7 @@ def test_missing_asr_mora_is_interpolated_between_matches() -> None:
     )
 
 
-def test_punctuation_only_token_is_anchored_without_moras() -> None:
+def test_punctuation_only_token_moves_to_the_next_mora_boundary() -> None:
     aligner_module = importlib.import_module("app.alignment.aligner")
     lyrics = LyricDocument(
         provider="local",
@@ -207,7 +207,7 @@ def test_punctuation_only_token_is_anchored_without_moras() -> None:
 
     punctuation = timeline.lines[0].tokens[1]
     assert punctuation.moras == []
-    assert (punctuation.start_ms, punctuation.end_ms) == (1200, 1200)
+    assert (punctuation.start_ms, punctuation.end_ms) == (1500, 1500)
     assert timeline.confidence == 1.0
 
 

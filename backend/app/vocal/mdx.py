@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import threading
 from pathlib import Path
@@ -9,6 +10,12 @@ from app.video.audio import AudioExtractionError
 
 
 DEFAULT_MDX_MODEL = "UVR_MDXNET_KARA_2.onnx"
+_UNSUPPORTED_CACHED_MODEL = (
+    "Unsupported Model File: parameters for MD5 hash"
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class MDXNetVocalRemover:
@@ -43,14 +50,41 @@ class MDXNetVocalRemover:
             factory = Separator
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        separator = factory(
-            model_file_dir=str(self.model_dir),
-            output_dir=str(output_dir),
-            output_format="WAV",
-            output_single_stem=output_single_stem,
-        )
-        separator.load_model(model_filename=self.model_filename)
+
+        def build_separator() -> Any:
+            return factory(
+                model_file_dir=str(self.model_dir),
+                output_dir=str(output_dir),
+                output_format="WAV",
+                output_single_stem=output_single_stem,
+            )
+
+        separator = build_separator()
+        try:
+            separator.load_model(model_filename=self.model_filename)
+        except ValueError as exc:
+            cached_model = self._recoverable_cached_model(exc)
+            if cached_model is None:
+                raise
+            cached_model.unlink()
+            logger.warning(
+                "Removed an incomplete cached UVR model and retrying: %s",
+                self.model_filename,
+            )
+            separator = build_separator()
+            separator.load_model(model_filename=self.model_filename)
         return separator
+
+    def _recoverable_cached_model(self, exc: ValueError) -> Path | None:
+        if _UNSUPPORTED_CACHED_MODEL not in str(exc):
+            return None
+        model_dir = self.model_dir.resolve()
+        cached_model = (model_dir / self.model_filename).resolve()
+        try:
+            cached_model.relative_to(model_dir)
+        except ValueError:
+            return None
+        return cached_model if cached_model.is_file() else None
 
     def remove_vocals(self, input_path: Path, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)

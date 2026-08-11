@@ -187,6 +187,46 @@ def test_mdx_net_replaces_stale_output_from_an_earlier_attempt(
     assert output_path.read_bytes() == b"fresh instrumental"
 
 
+def test_mdx_net_removes_incomplete_cached_model_and_retries_once(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    cached_model = model_dir / "UVR_MDXNET_KARA_2.onnx"
+    cached_model.write_bytes(b"partial model")
+    created: list[FakeSeparator] = []
+
+    class RecoveringSeparator(FakeSeparator):
+        def load_model(self, *, model_filename: str) -> None:
+            super().load_model(model_filename=model_filename)
+            if cached_model.read_bytes() == b"partial model":
+                raise ValueError(
+                    "Unsupported Model File: parameters for MD5 hash deadbeef "
+                    "could not be found"
+                )
+            cached_model.write_bytes(b"complete model")
+
+    def separator_factory(**kwargs) -> RecoveringSeparator:
+        separator = RecoveringSeparator(**kwargs)
+        created.append(separator)
+        if not cached_model.exists():
+            cached_model.write_bytes(b"complete model")
+        return separator
+
+    input_path = tmp_path / "input.wav"
+    input_path.write_bytes(b"input")
+    output_path = tmp_path / "job" / "audio_instrumental.wav"
+
+    MDXNetVocalRemover(
+        model_dir=model_dir,
+        separator_factory=separator_factory,
+    ).remove_vocals(input_path, output_path)
+
+    assert len(created) == 2
+    assert cached_model.read_bytes() == b"complete model"
+    assert output_path.read_bytes() == b"instrumental audio"
+
+
 def test_mdx_net_wraps_internal_failure_without_leaking_details(
     tmp_path: Path,
 ) -> None:

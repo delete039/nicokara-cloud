@@ -268,8 +268,8 @@ function LyricGroup({ group, style, last }: {
         progress: clampProgress(groupProgress * characters.length - index),
       }))
     : [];
-  const rubyCharacters = group.ruby?.characters
-    ?.map(({ text }) => text).join("") === group.ruby?.text
+  const rubyCharacters = group.ruby
+    && group.ruby.characters?.map(({ text }) => text).join("") === group.ruby.text
       ? group.ruby.characters
       : fallbackRubyCharacters;
 

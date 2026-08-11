@@ -14,32 +14,25 @@ logger = logging.getLogger(__name__)
 
 PUBLIC_ERROR_MESSAGES = {
     "REMOVING_VOCALS": (
-        "Processing failed during vocal removal. "
-        "Check server logs with this job ID."
+        "服务器未完成人声与伴奏分离。请使用任务 ID 查询 UVR 处理日志。"
     ),
     "EXTRACTING_AUDIO": (
-        "Processing failed during audio extraction. "
-        "Check server logs with this job ID."
+        "服务器无法读取素材中的音轨。请使用任务 ID 查询 FFmpeg 日志。"
     ),
     "TRANSCRIBING": (
-        "Processing failed during audio transcription. "
-        "Check server logs with this job ID."
+        "服务器未能生成歌声时间信息。请使用任务 ID 查询语音分析日志。"
     ),
     "PROCESSING_LYRICS": (
-        "Processing failed during lyric processing. "
-        "Check server logs with this job ID."
+        "服务器无法解析歌词或注音格式。请检查歌词后使用任务 ID 查询日志。"
     ),
     "ALIGNING": (
-        "Processing failed during lyric alignment. "
-        "Check server logs with this job ID."
+        "FA-Kara / MMS 主对齐与备用时间轴均未生成完整结果。请使用任务 ID 查询日志。"
     ),
     "GENERATING_SUBTITLE": (
-        "Processing failed during subtitle generation. "
-        "Check server logs with this job ID."
+        "服务器未生成 Kirakara 字幕工程。请使用任务 ID 查询字幕日志。"
     ),
     "RENDERING_VIDEO": (
-        "Processing failed during video rendering. "
-        "Check server logs with this job ID."
+        "服务器未完成最终视频渲染。请使用任务 ID 查询渲染日志。"
     ),
 }
 
@@ -133,14 +126,33 @@ class TranscriptionPipeline:
             )
             self.extractor.extract(video_path, audio_path)
             vocal_mode = job.get("vocal_mode", "on")
+            lyrics_path_value = job.get("lyrics_path")
             render_vocal_mode = "on"
-            high_accuracy_audio_job = (
+            direct_alignment_job = (
                 job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+                and bool(
+                    getattr(
+                        self.aligner,
+                        "supports_transcriptless_alignment",
+                        False,
+                    )
+                )
+                and self.lyric_processor is not None
+                and bool(lyrics_path_value)
+            )
+            alignment_fallback_warning: str | None = None
+            alignment_requires_vocals = (
+                direct_alignment_job
                 and bool(getattr(self.aligner, "requires_vocals", False))
+            )
+            high_accuracy_audio_job = (
+                alignment_requires_vocals
                 and self.vocal_remover is not None
                 and hasattr(self.vocal_remover, "separate_stems")
             )
-            alignment_fallback_warning: str | None = None
+            if alignment_requires_vocals and not high_accuracy_audio_job:
+                direct_alignment_job = False
+                alignment_fallback_warning = "uvr_unavailable"
             analysis_audio_path = audio_path
             if vocal_mode == "off" or high_accuracy_audio_job:
                 stage = "REMOVING_VOCALS"
@@ -171,14 +183,16 @@ class TranscriptionPipeline:
                                     raise
                                 vocals_path.unlink(missing_ok=True)
                                 instrumental_path.unlink(missing_ok=True)
-                                high_accuracy_audio_job = False
                                 alignment_fallback_warning = (
                                     f"uvr_fallback:{type(exc).__name__}"
                                 )
+                                direct_alignment_job = False
                                 logger.warning(
                                     "Vocal separation failed; using original "
-                                    "audio and Whisper alignment: %s",
+                                    "audio and fallback alignment: %s: %s",
                                     type(exc).__name__,
+                                    exc,
+                                    exc_info=True,
                                 )
                         else:
                             self.vocal_remover.remove_vocals(
@@ -188,20 +202,35 @@ class TranscriptionPipeline:
                         stereo_path.unlink(missing_ok=True)
                 if vocal_mode == "off":
                     render_vocal_mode = "off"
-            stage = "TRANSCRIBING"
-            self.database.update_job_state(
-                job_id,
-                status="PROCESSING",
-                stage=stage,
-                progress=40,
-                audio_path=audio_path,
-            )
-            transcript = self.transcriber.transcribe(analysis_audio_path)
-            transcript_path.write_text(
-                json.dumps(transcript.to_dict(), ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            lyrics_path_value = job.get("lyrics_path")
+            transcript = None
+
+            def load_transcript():
+                nonlocal transcript
+                if transcript is None:
+                    transcript = self.transcriber.transcribe(
+                        analysis_audio_path
+                    )
+                    transcript_path.write_text(
+                        json.dumps(
+                            transcript.to_dict(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                return transcript
+
+            if not direct_alignment_job:
+                stage = "TRANSCRIBING"
+                self.database.update_job_state(
+                    job_id,
+                    status="PROCESSING",
+                    stage=stage,
+                    progress=40,
+                    audio_path=audio_path,
+                )
+                load_transcript()
             if self.lyric_processor is not None and lyrics_path_value:
                 stage = "PROCESSING_LYRICS"
                 self.database.update_job_state(
@@ -210,7 +239,9 @@ class TranscriptionPipeline:
                     stage=stage,
                     progress=75,
                     audio_path=audio_path,
-                    transcript_path=transcript_path,
+                    transcript_path=(
+                        transcript_path if transcript_path.exists() else None
+                    ),
                 )
                 lyrics = Path(lyrics_path_value).read_text(encoding="utf-8")
                 parsed_lrc = parse_lrc(lyrics)
@@ -234,14 +265,19 @@ class TranscriptionPipeline:
                         stage=stage,
                         progress=90,
                         audio_path=audio_path,
-                        transcript_path=transcript_path,
+                        transcript_path=(
+                            transcript_path
+                            if transcript_path.exists()
+                            else None
+                        ),
                         lyrics_processed_path=lyrics_processed_path,
                     )
-                    if high_accuracy_audio_job:
+                    if direct_alignment_job:
                         timeline = self.aligner.align(
                             processed_lyrics,
-                            transcript,
+                            None,
                             audio_path=analysis_audio_path,
+                            transcript_factory=load_transcript,
                         )
                     else:
                         timeline = self.aligner.align(processed_lyrics, transcript)
@@ -275,7 +311,11 @@ class TranscriptionPipeline:
                             stage=stage,
                             progress=95,
                             audio_path=audio_path,
-                            transcript_path=transcript_path,
+                            transcript_path=(
+                                transcript_path
+                                if transcript_path.exists()
+                                else None
+                            ),
                             lyrics_processed_path=lyrics_processed_path,
                             timeline_path=timeline_path,
                         )
@@ -295,7 +335,11 @@ class TranscriptionPipeline:
                                 stage=stage,
                                 progress=98,
                                 audio_path=audio_path,
-                                transcript_path=transcript_path,
+                                transcript_path=(
+                                    transcript_path
+                                    if transcript_path.exists()
+                                    else None
+                                ),
                                 lyrics_processed_path=lyrics_processed_path,
                                 timeline_path=timeline_path,
                                 ass_path=ass_path,
@@ -313,7 +357,11 @@ class TranscriptionPipeline:
                                 stage="VIDEO_RENDERING_COMPLETE",
                                 progress=100,
                                 audio_path=audio_path,
-                                transcript_path=transcript_path,
+                                transcript_path=(
+                                    transcript_path
+                                    if transcript_path.exists()
+                                    else None
+                                ),
                                 lyrics_processed_path=lyrics_processed_path,
                                 timeline_path=timeline_path,
                                 ass_path=ass_path,
@@ -326,7 +374,11 @@ class TranscriptionPipeline:
                                 stage="SUBTITLE_GENERATION_COMPLETE",
                                 progress=100,
                                 audio_path=audio_path,
-                                transcript_path=transcript_path,
+                                transcript_path=(
+                                    transcript_path
+                                    if transcript_path.exists()
+                                    else None
+                                ),
                                 lyrics_processed_path=lyrics_processed_path,
                                 timeline_path=timeline_path,
                                 ass_path=ass_path,
@@ -338,7 +390,11 @@ class TranscriptionPipeline:
                             stage="ALIGNMENT_COMPLETE",
                             progress=100,
                             audio_path=audio_path,
-                            transcript_path=transcript_path,
+                            transcript_path=(
+                                transcript_path
+                                if transcript_path.exists()
+                                else None
+                            ),
                             lyrics_processed_path=lyrics_processed_path,
                             timeline_path=timeline_path,
                         )
@@ -349,7 +405,11 @@ class TranscriptionPipeline:
                         stage="LYRIC_PROCESSING_COMPLETE",
                         progress=100,
                         audio_path=audio_path,
-                        transcript_path=transcript_path,
+                        transcript_path=(
+                            transcript_path
+                            if transcript_path.exists()
+                            else None
+                        ),
                         lyrics_processed_path=lyrics_processed_path,
                     )
             else:
@@ -359,7 +419,9 @@ class TranscriptionPipeline:
                     stage="TRANSCRIPTION_COMPLETE",
                     progress=100,
                     audio_path=audio_path,
-                    transcript_path=transcript_path,
+                    transcript_path=(
+                        transcript_path if transcript_path.exists() else None
+                    ),
                 )
         except JobCanceledError:
             logger.info("Job %s stopped after user cancellation", job_id)

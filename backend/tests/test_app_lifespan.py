@@ -176,6 +176,11 @@ def test_app_enables_fa_kara_mms_for_audio_only_jobs(tmp_path: Path) -> None:
         fa_kara_enabled=True,
         fa_kara_device="cpu",
         fa_kara_timeout_seconds=321,
+        fa_kara_audio_speed=1.2,
+        fa_kara_silence_window_seconds=0.7,
+        fa_kara_silence_top_percent=8,
+        fa_kara_silence_threshold_ratio=0.2,
+        fa_kara_tail_window_seconds=0.03,
     )
     app = create_app(settings)
 
@@ -185,6 +190,11 @@ def test_app_enables_fa_kara_mms_for_audio_only_jobs(tmp_path: Path) -> None:
         assert isinstance(aligner.primary, MMSForcedAligner)
         assert isinstance(aligner.primary.runtime, SubprocessMMSRuntime)
         assert aligner.primary.runtime.device == "cpu"
+        assert aligner.primary.runtime.audio_speed == 1.2
+        assert aligner.primary.runtime.silence_window_seconds == 0.7
+        assert aligner.primary.runtime.silence_top_percent == 8
+        assert aligner.primary.runtime.silence_threshold_ratio == 0.2
+        assert aligner.primary.runtime.tail_window_seconds == 0.03
         assert aligner.primary.timeout_seconds == 321
         assert isinstance(aligner.fallback, LyricTimelineAligner)
 

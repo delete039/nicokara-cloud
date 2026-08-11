@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     fa_kara_enabled: bool = True
     fa_kara_device: str = "auto"
     fa_kara_timeout_seconds: int = 600
+    fa_kara_min_confidence: float = 0.15
+    fa_kara_audio_speed: float = 1.0
+    fa_kara_silence_window_seconds: float = 0.8
+    fa_kara_silence_top_percent: float = 10.0
+    fa_kara_silence_threshold_ratio: float = 0.1
+    fa_kara_tail_window_seconds: float = 0.02
     vocal_removal_backend: str = "mdx"
     vocal_removal_model: str = "UVR_MDXNET_KARA_2.onnx"
     vocal_removal_model_dir: Path = Field(
@@ -95,11 +101,31 @@ class Settings(BaseSettings):
             raise ValueError("must be greater than zero")
         return value
 
-    @field_validator("worker_heartbeat_interval_seconds")
+    @field_validator(
+        "worker_heartbeat_interval_seconds",
+        "fa_kara_audio_speed",
+        "fa_kara_silence_window_seconds",
+        "fa_kara_silence_threshold_ratio",
+        "fa_kara_tail_window_seconds",
+    )
     @classmethod
     def positive_heartbeat_interval(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("fa_kara_silence_top_percent")
+    @classmethod
+    def valid_fa_kara_percent(cls, value: float) -> float:
+        if not 0 < value <= 100:
+            raise ValueError("must be greater than zero and at most 100")
+        return value
+
+    @field_validator("fa_kara_min_confidence")
+    @classmethod
+    def valid_fa_kara_confidence(cls, value: float) -> float:
+        if not 0 <= value <= 1:
+            raise ValueError("must be between zero and one")
         return value
 
     @field_validator("video_render_crf")

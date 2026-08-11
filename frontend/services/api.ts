@@ -531,7 +531,8 @@ export function createAudioOnlyJob(
       "original_video_size_bytes",
       String(input.originalVideoSizeBytes),
     );
-    data.append("client_submission_id", createClientSubmissionId());
+    const clientSubmissionId = createClientSubmissionId();
+    data.append("client_submission_id", clientSubmissionId);
     if (input.lyricsText?.trim()) {
       data.append("lyrics_text", input.lyricsText.trim());
     }
@@ -553,16 +554,35 @@ export function createAudioOnlyJob(
         onProgress(Math.round((event.loaded / event.total) * 100));
       }
     });
-    xhr.addEventListener("load", () => {
+    const recoverSubmittedJob = async (): Promise<Job | null> => {
+      if (signal?.aborted) return null;
+      return getJobByClientSubmissionIdOrNull(clientSubmissionId);
+    };
+    xhr.addEventListener("load", async () => {
       cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
         resolve(JSON.parse(xhr.responseText) as Job);
-      } else {
-        reject(xhrRequestError(xhr));
+        return;
       }
+      if (xhr.status >= 500) {
+        const recovered = await recoverSubmittedJob();
+        if (recovered) {
+          onProgress(100);
+          resolve(recovered);
+          return;
+        }
+      }
+      reject(xhrRequestError(xhr));
     });
-    xhr.addEventListener("error", () => {
+    xhr.addEventListener("error", async () => {
       cleanup();
+      const recovered = await recoverSubmittedJob();
+      if (recovered) {
+        onProgress(100);
+        resolve(recovered);
+        return;
+      }
       reject(connectionError("upload"));
     });
     xhr.addEventListener("abort", () => {

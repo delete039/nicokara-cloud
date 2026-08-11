@@ -18,6 +18,8 @@ describe("MobileRouteStatus", () => {
 
     expect(html).toContain("仅上传音频");
     expect(html).toContain("300 MB");
+    expect(html).toContain("UVR");
+    expect(html).toContain("FA-Kara");
     expect(html).not.toContain("模型推理已完成");
   });
 

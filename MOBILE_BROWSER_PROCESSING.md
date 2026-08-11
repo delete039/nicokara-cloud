@@ -42,11 +42,11 @@
 |---|---:|---:|---|
 | UVR-MDX-NET Karaoke 2 | ONNX 约 50.3 MB | 50.3 MB | 首选人声分离模型 |
 | ReazonSpeech Japanese wav2vec2-base-rs35kh | 96.7M 参数；FP32 约 387 MB | INT8 目标约 100 MB | 首选日语 CTC 实验模型 |
-| torchaudio `MMS_FA` | 下载约 1.18 GB | 不进入浏览器 | 只复用 FA-Kara 的处理思路与 CTC 强制对齐方法 |
+| torchaudio `MMS_FA` | 下载约 1.18 GiB | 不进入浏览器 | 在云端运行，并复用 FA-Kara 的非静音处理、CTC 强制对齐与时间回映射 |
 
 ReazonSpeech 的 100 MB 是按 96.7M 参数 INT8 量化得到的工程估算，不是仓库中已经存在的 ONNX 文件。转换后仍需验证算子兼容、精度和实际文件大小。
 
-FA-Kara 的核心流程是：使用 UVR/MSST 得到人声、进行歌词读音规范化和静音区间处理、通过 `MMS_FA` 生成 CTC emission，再把 token span 映射回原始时间。浏览器版本复用这条数据流和时间映射方式，但将声学模型替换为可量化的日语 base CTC 候选。
+FA-Kara 的核心流程是：使用 UVR/MSST 得到人声、进行歌词读音规范化和静音区间处理、通过 `MMS_FA` 生成 CTC emission，再把 token span 映射回原始时间。当前版本由服务器实际运行这条 FA-Kara/MMS 数据流；浏览器负责提取并上传音频、检查时间轴以及本地导出视频，不在手机中加载 1.18 GiB 的声学模型。
 
 参考资料：
 

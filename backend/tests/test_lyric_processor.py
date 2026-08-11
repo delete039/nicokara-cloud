@@ -100,6 +100,36 @@ def test_local_processor_generates_hiragana_and_tokens() -> None:
     assert document.warnings == ["local_reading_may_be_inaccurate"]
 
 
+def test_local_processor_parses_fa_kara_explicit_annotations() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("{知|し}るも[の|n]は{無|な}い")
+
+    line = document.lines[0]
+    assert line.surface == "知るものは無い"
+    assert line.reading == "しるものはない"
+    assert "{" not in line.surface
+    assert "[" not in line.surface
+    explicit = [
+        (token.surface, token.reading, token.alignment_pronunciation)
+        for token in line.tokens
+        if token.alignment_pronunciation is not None
+    ]
+    assert explicit == [("の", "の", "n"), ("は", "は", "wa")]
+
+
+def test_local_processor_rejects_malformed_fa_kara_annotations() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    with pytest.raises(
+        processor_module.LyricProcessingError,
+        match="FA-Kara",
+    ):
+        processor.process("{知|しる")
+
+
 def test_resilient_processor_falls_back_when_deepseek_fails() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
     if not hasattr(processor_module, "ResilientLyricProcessor"):

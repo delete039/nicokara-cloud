@@ -51,6 +51,28 @@ export type KirakaraVideoExportRuntime = {
 };
 
 type DrawableVideoSample = Pick<VideoSample, "timestamp" | "drawWithFit">;
+type ConversionInitOptions = Parameters<typeof Conversion.init>[0];
+type ConversionOptionsWithoutOwnership = Omit<
+  ConversionInitOptions,
+  "composable" | "tags"
+>;
+type ComposableConversionInitOptions = ConversionOptionsWithoutOwnership & {
+  composable: true;
+  tags?: never;
+};
+
+export function composableConversionOptions(
+  options: ConversionOptionsWithoutOwnership,
+): ComposableConversionInitOptions {
+  const {
+    composable: ignoredComposable,
+    tags: ignoredTags,
+    ...safeOptions
+  } = options as ConversionInitOptions;
+  void ignoredComposable;
+  void ignoredTags;
+  return { ...safeOptions, composable: true };
+}
 
 function abortError(): DOMException {
   return new DOMException("本地视频导出已取消", "AbortError");
@@ -128,7 +150,7 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
       }),
       target: new AppendOnlyStreamTarget(writable),
     });
-    const videoConversion = await Conversion.init({
+    const videoOptions: ConversionOptionsWithoutOwnership = {
       input: videoInput,
       output,
       tracks: "primary",
@@ -150,10 +172,13 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
         },
       },
       audio: replacementAudio ? { discard: true } : {},
-      tags: {},
       showWarnings: false,
-      composable: Boolean(replacementAudio),
-    });
+    };
+    const videoConversion = await Conversion.init(
+      replacementAudio
+        ? composableConversionOptions(videoOptions)
+        : { ...videoOptions, tags: {} },
+    );
 
     const replacementInput = replacementAudio
       ? new Input({
@@ -162,16 +187,14 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
         })
       : null;
     const audioConversion = replacementInput
-      ? await Conversion.init({
+      ? await Conversion.init(composableConversionOptions({
           input: replacementInput,
           output,
           tracks: "primary",
           video: { discard: true },
           audio: {},
-          tags: {},
           showWarnings: false,
-          composable: true,
-        })
+        }))
       : null;
 
     if (

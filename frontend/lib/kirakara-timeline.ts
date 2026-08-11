@@ -145,10 +145,45 @@ export function kanjiRuby(surface: string, reading: string): KirakaraRuby[] {
   ];
 }
 
+export function closeLineMoraGaps(line: KirakaraLine): KirakaraLine {
+  const units = line.units.map((unit) => ({
+    ...unit,
+    moras: unit.moras.map((mora) => ({ ...mora })),
+  }));
+  const references = units.flatMap((unit, unitIndex) =>
+    unit.moras.map((_, moraIndex) => ({ unitIndex, moraIndex })),
+  );
+
+  for (let index = 0; index < references.length - 1; index += 1) {
+    const current = references[index];
+    const next = references[index + 1];
+    const currentMora = units[current.unitIndex].moras[current.moraIndex];
+    const nextMora = units[next.unitIndex].moras[next.moraIndex];
+    if (currentMora.endMs >= nextMora.startMs) continue;
+
+    const boundary = nextMora.startMs;
+    currentMora.endMs = boundary;
+    if (current.unitIndex === next.unitIndex) continue;
+
+    units[current.unitIndex].endMs = boundary;
+    for (
+      let unitIndex = current.unitIndex + 1;
+      unitIndex < next.unitIndex;
+      unitIndex += 1
+    ) {
+      units[unitIndex].startMs = boundary;
+      units[unitIndex].endMs = boundary;
+    }
+    units[next.unitIndex].startMs = boundary;
+  }
+
+  return { ...line, units };
+}
+
 export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline {
   const lines = source.lines.map((line) => {
     const lineRange = normalizedRange(line.start_ms, line.end_ms);
-    return {
+    return closeLineMoraGaps({
       text: line.surface,
       reading: line.reading,
       ...lineRange,
@@ -163,7 +198,7 @@ export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline
         })),
         ruby: kanjiRuby(token.surface, token.reading),
       })),
-    };
+    });
   });
 
   return {

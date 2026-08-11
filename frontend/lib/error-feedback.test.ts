@@ -80,6 +80,27 @@ describe("httpErrorFeedback", () => {
     expect(feedback.solutions.join(" ")).toContain("nicokara-backend");
   });
 
+  it("explains Cloudflare 524 without dumping an HTML error page", () => {
+    const feedback = httpErrorFeedback(
+      "upload",
+      524,
+      "<!DOCTYPE html><title>A timeout occurred</title>",
+    );
+
+    expect(feedback.title).toBe("服务器响应超时，正在确认任务");
+    expect(feedback.description).toContain("任务可能已经创建");
+    expect(feedback.solutions.join(" ")).toContain("不要重复提交");
+    expect(feedback.technicalDetails.join(" ")).not.toContain("DOCTYPE");
+  });
+
+  it("uses a specific message for an internal job-status failure", () => {
+    const feedback = httpErrorFeedback("job", 500, "Internal Server Error");
+
+    expect(feedback.title).toBe("任务状态读取失败");
+    expect(feedback.description).toContain("任务仍可能继续处理");
+    expect(feedback.title).not.toBe("服务器处理请求失败");
+  });
+
   it("describes invalid reviewed timelines as cloud render input errors", () => {
     const feedback = httpErrorFeedback(
       "cloud_render",
@@ -131,6 +152,21 @@ describe("jobFailureFeedback", () => {
     expect(feedback.title).toBe("歌词时间轴对齐失败");
     expect(feedback.solutions.join(" ")).toContain("每句歌词单独一行");
     expect(feedback.solutions.join(" ")).toContain("演唱内容一致");
+    expect(feedback.description).toContain("FA-Kara / MMS");
+    expect(feedback.solutions.join(" ")).toContain("{漢字|かな}");
+  });
+
+  it("describes transcription failures without claiming Whisper is primary", () => {
+    const feedback = jobFailureFeedback(
+      "TRANSCRIPTION_FAILED",
+      "TRANSCRIBING",
+      null,
+      "job-transcription",
+    );
+
+    expect(feedback.title).toBe("歌声时间分析失败");
+    expect(feedback.description).toContain("歌声时间信息");
+    expect(JSON.stringify(feedback)).not.toContain("Whisper");
   });
 
   it("tells the user to recreate a task interrupted by deployment", () => {

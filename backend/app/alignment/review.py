@@ -79,6 +79,59 @@ def _review_moras(reading: str, start_ms: int, end_ms: int) -> list[AlignedMora]
     ]
 
 
+def _reviewed_moras(
+    reading: str,
+    start_ms: int,
+    end_ms: int,
+    value: Any,
+    line_index: int,
+    token_index: int,
+) -> list[AlignedMora]:
+    expected_readings = split_moras(normalize_reading(reading))
+    if value is None or (value == [] and expected_readings):
+        return _review_moras(reading, start_ms, end_ms)
+    if not isinstance(value, list) or len(value) != len(expected_readings):
+        raise TimelineReviewError(
+            f"line {line_index + 1} token {token_index + 1} mora count is invalid"
+        )
+
+    moras: list[AlignedMora] = []
+    previous_end = start_ms
+    for mora_index, (expected_reading, reviewed_mora) in enumerate(
+        zip(expected_readings, value, strict=True)
+    ):
+        try:
+            mora_reading = normalize_reading(str(reviewed_mora["reading"]))
+            mora_start = int(reviewed_mora["start_ms"])
+            mora_end = int(reviewed_mora["end_ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TimelineReviewError(
+                f"line {line_index + 1} token {token_index + 1} "
+                f"mora {mora_index + 1} is invalid"
+            ) from exc
+        if (
+            mora_reading != expected_reading
+            or mora_start < start_ms
+            or mora_end > end_ms
+            or mora_end <= mora_start
+            or mora_start < previous_end
+        ):
+            raise TimelineReviewError(
+                f"line {line_index + 1} token {token_index + 1} mora timing is invalid"
+            )
+        moras.append(
+            AlignedMora(
+                reading=expected_reading,
+                start_ms=mora_start,
+                end_ms=mora_end,
+                matched=True,
+                confidence=1.0,
+            )
+        )
+        previous_end = mora_end
+    return moras
+
+
 def apply_timeline_review(
     source: LyricTimeline,
     review: dict[str, Any],
@@ -144,7 +197,14 @@ def apply_timeline_review(
                     start_ms=token_start,
                     end_ms=token_finish,
                     confidence=1.0,
-                    moras=_review_moras(reading, token_start, token_finish),
+                    moras=_reviewed_moras(
+                        reading,
+                        token_start,
+                        token_finish,
+                        reviewed_token.get("moras"),
+                        line_index,
+                        token_index,
+                    ),
                 )
             )
             token_end = token_finish
