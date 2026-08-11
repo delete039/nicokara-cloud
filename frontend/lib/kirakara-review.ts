@@ -65,6 +65,19 @@ function scaleMora(
   };
 }
 
+function distributeMoras(
+  moras: KirakaraMora[],
+  startMs: number,
+  endMs: number,
+): KirakaraMora[] {
+  const duration = Math.max(0, endMs - startMs);
+  return moras.map((mora, index) => ({
+    ...mora,
+    startMs: startMs + Math.floor(duration * index / moras.length),
+    endMs: startMs + Math.floor(duration * (index + 1) / moras.length),
+  }));
+}
+
 function scaleUnit(
   unit: KirakaraRenderUnit,
   oldStart: number,
@@ -72,14 +85,52 @@ function scaleUnit(
   nextStart: number,
   nextEnd: number,
 ): KirakaraRenderUnit {
+  const startMs = mapRange(unit.startMs, oldStart, oldEnd, nextStart, nextEnd);
+  const endMs = mapRange(unit.endMs, oldStart, oldEnd, nextStart, nextEnd);
+  const hasMoraDuration = unit.moras.some((mora) => mora.endMs > mora.startMs);
   return {
     ...unit,
-    startMs: mapRange(unit.startMs, oldStart, oldEnd, nextStart, nextEnd),
-    endMs: mapRange(unit.endMs, oldStart, oldEnd, nextStart, nextEnd),
-    moras: unit.moras.map((mora) =>
-      scaleMora(mora, oldStart, oldEnd, nextStart, nextEnd),
-    ),
+    startMs,
+    endMs,
+    moras: unit.moras.length > 0 && !hasMoraDuration
+      ? distributeMoras(unit.moras, startMs, endMs)
+      : unit.moras.map((mora) =>
+          scaleMora(mora, oldStart, oldEnd, nextStart, nextEnd),
+        ),
   };
+}
+
+function redistributeLineUnits(
+  line: KirakaraLine,
+  startMs: number,
+  endMs: number,
+): KirakaraRenderUnit[] {
+  let weights = line.units.map((unit) =>
+    unit.moras.length || splitReadingMoras(unit.reading).length,
+  );
+  let totalWeight = weights.reduce((total, weight) => total + weight, 0);
+  if (totalWeight === 0) {
+    weights = line.units.map(() => 1);
+    totalWeight = Math.max(1, weights.length);
+  }
+
+  const duration = endMs - startMs;
+  let consumedWeight = 0;
+  return line.units.map((unit, index) => {
+    const unitStart = startMs + Math.floor(
+      duration * consumedWeight / totalWeight,
+    );
+    consumedWeight += weights[index];
+    const unitEnd = startMs + Math.floor(
+      duration * consumedWeight / totalWeight,
+    );
+    return {
+      ...unit,
+      startMs: unitStart,
+      endMs: unitEnd,
+      moras: distributeMoras(unit.moras, unitStart, unitEnd),
+    };
+  });
 }
 
 export function updateLineRange(
@@ -94,6 +145,10 @@ export function updateLineRange(
   const current = timeline.lines[lineIndex];
   if (!current) throw new RangeError("歌词行不存在");
 
+  const hasUnitDuration = current.units.some(
+    (unit) => unit.endMs > unit.startMs,
+  );
+
   const lines = timeline.lines.map((line, index): KirakaraLine =>
     index !== lineIndex
       ? line
@@ -101,15 +156,17 @@ export function updateLineRange(
           ...line,
           startMs: nextStart,
           endMs: nextEnd,
-          units: line.units.map((unit) =>
-            scaleUnit(
-              unit,
-              line.startMs,
-              line.endMs,
-              nextStart,
-              nextEnd,
-            ),
-          ),
+          units: line.endMs <= line.startMs || !hasUnitDuration
+            ? redistributeLineUnits(line, nextStart, nextEnd)
+            : line.units.map((unit) =>
+                scaleUnit(
+                  unit,
+                  line.startMs,
+                  line.endMs,
+                  nextStart,
+                  nextEnd,
+                ),
+              ),
         },
   );
   return { ...timeline, lines, durationMs: durationMs({ ...timeline, lines }) };

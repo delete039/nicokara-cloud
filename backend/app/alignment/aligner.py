@@ -386,16 +386,6 @@ class LyricTimelineAligner:
             while index < line_count and index not in completed:
                 index += 1
             gap_end = index
-            previous_end = (
-                completed[gap_start - 1][1]
-                if gap_start > 0 and gap_start - 1 in completed
-                else observations[0].start_ms
-            )
-            next_start = (
-                completed[gap_end][0]
-                if gap_end < line_count and gap_end in completed
-                else observations[-1].end_ms
-            )
             lengths = [
                 max(
                     1,
@@ -408,11 +398,23 @@ class LyricTimelineAligner:
                 for line in range(gap_start, gap_end)
             ]
             total_mora_count = sum(lengths)
-            span = max(0, next_start - previous_end)
             median_duration = LyricTimelineAligner._median_mora_duration(
                 observations
             )
             estimated_total = total_mora_count * median_duration
+            has_previous = gap_start > 0 and gap_start - 1 in completed
+            has_next = gap_end < line_count and gap_end in completed
+            next_start = (
+                completed[gap_end][0]
+                if has_next
+                else observations[-1].end_ms
+            )
+            previous_end = (
+                completed[gap_start - 1][1]
+                if has_previous
+                else max(0, next_start - estimated_total)
+            )
+            span = max(0, next_start - previous_end)
             scale = span / max(1, estimated_total)
             elapsed = previous_end
             for offset, line in enumerate(range(gap_start, gap_end)):

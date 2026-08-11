@@ -188,6 +188,67 @@ describe("Kirakara timeline review", () => {
     expect(updated.durationMs).toBe(6000);
   });
 
+  it("redistributes collapsed token and mora timing when a zero-length line is repaired", () => {
+    const collapsed: KirakaraTimeline = {
+      confidence: 0,
+      warnings: ["partial_alignment"],
+      durationMs: 25050,
+      lines: [{
+        text: "僕ら、",
+        reading: "ぼくら、",
+        startMs: 25050,
+        endMs: 25050,
+        units: [
+          {
+            text: "僕ら",
+            reading: "ぼくら",
+            startMs: 25050,
+            endMs: 25050,
+            moras: [
+              { reading: "ぼく", startMs: 25050, endMs: 25050, matched: false },
+              { reading: "ら", startMs: 25050, endMs: 25050, matched: false },
+            ],
+          },
+          {
+            text: "は",
+            reading: "は",
+            startMs: 25050,
+            endMs: 25050,
+            moras: [
+              { reading: "は", startMs: 25050, endMs: 25050, matched: false },
+            ],
+          },
+          {
+            text: "、",
+            reading: "、",
+            startMs: 25050,
+            endMs: 25050,
+            moras: [],
+          },
+        ],
+      }],
+    };
+
+    const updated = updateLineRange(collapsed, 0, 20000, 23000);
+
+    expect(updated.lines[0]).toMatchObject({ startMs: 20000, endMs: 23000 });
+    expect(updated.lines[0].units[0]).toMatchObject({ startMs: 20000, endMs: 22000 });
+    expect(updated.lines[0].units[0].moras).toEqual([
+      { reading: "ぼく", startMs: 20000, endMs: 21000, matched: false },
+      { reading: "ら", startMs: 21000, endMs: 22000, matched: false },
+    ]);
+    expect(updated.lines[0].units[1]).toMatchObject({ startMs: 22000, endMs: 23000 });
+    expect(updated.lines[0].units[1].moras[0]).toMatchObject({
+      startMs: 22000,
+      endMs: 23000,
+    });
+    expect(updated.lines[0].units[2]).toMatchObject({ startMs: 23000, endMs: 23000 });
+
+    const adjusted = updateMoraBoundary(updated, 0, 0, 20500);
+    expect(adjusted.lines[0].units[0].moras[0]).toMatchObject({ endMs: 20500 });
+    expect(adjusted.lines[0].units[0].moras[1]).toMatchObject({ startMs: 20500 });
+  });
+
   it("moves one boundary shared by two moras", () => {
     const updated = updateMoraBoundary(timeline, 0, 0, 1750);
 

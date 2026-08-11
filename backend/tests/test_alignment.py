@@ -164,6 +164,66 @@ def test_missing_asr_mora_is_interpolated_between_matches() -> None:
     )
 
 
+def test_unmatched_leading_lines_are_backfilled_before_first_audio_match() -> None:
+    aligner_module = importlib.import_module("app.alignment.aligner")
+    lyrics = LyricDocument(
+        provider="local",
+        source_text="かき\nくけこ\nあいう",
+        lines=[
+            LyricLine(
+                source="かき",
+                surface="かき",
+                reading="かき",
+                tokens=[LyricToken(surface="かき", reading="かき")],
+            ),
+            LyricLine(
+                source="くけこ",
+                surface="くけこ",
+                reading="くけこ",
+                tokens=[LyricToken(surface="くけこ", reading="くけこ")],
+            ),
+            LyricLine(
+                source="あいう",
+                surface="あいう",
+                reading="あいう",
+                tokens=[LyricToken(surface="あいう", reading="あいう")],
+            ),
+        ],
+    )
+    transcript = TranscriptDocument(
+        language="ja",
+        language_probability=1.0,
+        duration_seconds=6.0,
+        text="あいう",
+        segments=[
+            TranscriptSegment(
+                id=0,
+                text="あいう",
+                start_ms=5000,
+                end_ms=5600,
+                confidence=-0.1,
+                no_speech_probability=0,
+                words=[TranscriptWord("あいう", 5000, 5600, 1.0)],
+            )
+        ],
+    )
+
+    timeline = aligner_module.LyricTimelineAligner().align(lyrics, transcript)
+
+    assert (timeline.lines[0].start_ms, timeline.lines[0].end_ms) == (4000, 4400)
+    assert (timeline.lines[1].start_ms, timeline.lines[1].end_ms) == (4400, 5000)
+    assert (timeline.lines[2].start_ms, timeline.lines[2].end_ms) == (5000, 5600)
+    leading_moras = [
+        mora
+        for line in timeline.lines[:2]
+        for token in line.tokens
+        for mora in token.moras
+    ]
+    assert all(mora.end_ms > mora.start_ms for mora in leading_moras)
+    assert all(not mora.matched for mora in leading_moras)
+    assert timeline.warnings == ["partial_alignment"]
+
+
 def test_punctuation_only_token_moves_to_the_next_mora_boundary() -> None:
     aligner_module = importlib.import_module("app.alignment.aligner")
     lyrics = LyricDocument(
