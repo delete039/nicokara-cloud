@@ -34,6 +34,8 @@ export type KirakaraCanvasContext = {
   fillStyle: string | CanvasGradient | CanvasPattern;
   strokeStyle: string | CanvasGradient | CanvasPattern;
   lineWidth: number;
+  lineJoin: CanvasLineJoin;
+  miterLimit: number;
   font: string;
   textBaseline: CanvasTextBaseline;
 };
@@ -63,9 +65,13 @@ const RUBY_LINE_HEIGHT = 1.1;
 const baselineCache = new Map<string, number>();
 
 function drawText(context: KirakaraCanvasContext, text: string, x: number, y: number, fill: string, stroke: string): void {
+  context.save();
+  context.lineJoin = "round";
+  context.miterLimit = 2;
   context.strokeStyle = stroke;
-  context.fillStyle = fill;
   context.strokeText(text, x, y);
+  context.restore();
+  context.fillStyle = fill;
   context.fillText(text, x, y);
 }
 

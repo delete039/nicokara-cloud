@@ -51,10 +51,17 @@ def test_deepseek_processor_returns_ruby_ready_lyrics() -> None:
     assert line.surface == "君の知らない物語"
     assert line.reading == "きみのしらないものがたり"
     assert "".join(token.surface for token in line.tokens) == line.surface
-    assert line.tokens[0].surface == "君"
-    assert line.tokens[0].reading == "きみ"
+    assert [(token.surface, token.reading) for token in line.tokens] == [
+        ("君", "きみ"),
+        ("の", "の"),
+        ("知", "し"),
+        ("らない", "らない"),
+        ("物", "もの"),
+        ("語", "がたり"),
+    ]
     assert client.calls
     assert "JSON" in client.calls[0][0]
+    assert "每个汉字" in client.calls[0][0]
 
 
 def test_deepseek_processor_rejects_tokens_that_change_surface() -> None:
@@ -95,9 +102,38 @@ def test_local_processor_generates_hiragana_and_tokens() -> None:
     assert "".join(token.surface for token in document.lines[0].tokens) == (
         "物語"
     )
-    assert document.lines[0].tokens[0].surface == "物語"
-    assert document.lines[0].tokens[0].reading == "ものがたり"
+    assert [
+        (token.surface, token.reading)
+        for token in document.lines[0].tokens
+    ] == [("物", "もの"), ("語", "がたり")]
     assert document.warnings == ["local_reading_may_be_inaccurate"]
+
+
+def test_local_processor_keeps_ambiguous_compound_reading_complete() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("今日")
+
+    tokens = document.lines[0].tokens
+    assert [token.surface for token in tokens] == ["今", "日"]
+    assert all(token.reading for token in tokens)
+    assert "".join(token.reading for token in tokens) == "きょう"
+
+
+def test_local_processor_uses_kana_suffix_as_reading_anchor() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("大人しい")
+
+    tokens = document.lines[0].tokens
+    assert [(token.surface, token.reading) for token in tokens] == [
+        ("大", "おと"),
+        ("人", "な"),
+        ("しい", "しい"),
+    ]
+    assert "".join(token.reading for token in tokens) == "おとなしい"
 
 
 def test_local_processor_parses_fa_kara_explicit_annotations() -> None:
@@ -117,6 +153,21 @@ def test_local_processor_parses_fa_kara_explicit_annotations() -> None:
         if token.alignment_pronunciation is not None
     ]
     assert explicit == [("の", "の", "n"), ("は", "は", "wa")]
+
+
+def test_local_processor_splits_multi_kanji_explicit_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("{物語|ものがたり}")
+
+    line = document.lines[0]
+    assert [(token.surface, token.reading) for token in line.tokens] == [
+        ("物", "もの"),
+        ("語", "がたり"),
+    ]
+    assert line.surface == "物語"
+    assert line.reading == "ものがたり"
 
 
 def test_local_processor_rejects_malformed_fa_kara_annotations() -> None:

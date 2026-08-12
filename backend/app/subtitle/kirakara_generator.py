@@ -7,7 +7,10 @@ from app.subtitle.karaoke_effect import (
     escape_ass_text,
     line_chunks,
     render_karaoke,
+    ruby_chunks,
+    ruby_start_ms,
 )
+from app.subtitle.font_metrics import text_measurer
 from app.subtitle.ruby import ruby_placements
 
 
@@ -30,6 +33,8 @@ class KirakaraAssConfig:
     unsung_color: str = "&H00FFFFFF"
     outline_width: int = 5
     ruby_outline_width: int = 3
+    base_letter_spacing: int = 14
+    ruby_letter_spacing: int = 8
 
     @classmethod
     def from_browser_style(cls, value: object) -> "KirakaraAssConfig":
@@ -113,6 +118,13 @@ class KirakaraAssGenerator:
                     display_end,
                 )
             )
+            events.extend(
+                self._ruby_progress_events(
+                    line,
+                    index,
+                    display_end,
+                )
+            )
             events.append(
                 self._dialogue(
                     3,
@@ -165,7 +177,13 @@ class KirakaraAssGenerator:
         )
 
     def _line_center_x(self, line: AlignedLine, index: int) -> int:
-        estimated_width = len(line.surface) * self.config.base_font_size * 0.68
+        measure = text_measurer(
+            self.config.font_name,
+            self.config.base_font_size,
+            bold=True,
+        )
+        estimated_width = sum(measure(character) for character in line.surface)
+        estimated_width += max(0, len(line.surface) - 1) * self.config.base_letter_spacing
         if index % 2 == 0:
             return round(self.config.upper_left_x + estimated_width / 2)
         return round(self.config.lower_right_x - estimated_width / 2)
@@ -179,6 +197,11 @@ class KirakaraAssGenerator:
     ) -> list[str]:
         baseline_y = (
             self.config.upper_y if index % 2 == 0 else self.config.lower_y
+        )
+        measure = text_measurer(
+            self.config.font_name,
+            self.config.base_font_size,
+            bold=True,
         )
         return [
             self._dialogue(
@@ -200,7 +223,50 @@ class KirakaraAssGenerator:
                 base_font_size=self.config.base_font_size,
                 ruby_font_size=self.config.ruby_font_size,
                 center_x=self._line_center_x(line, index),
+                letter_spacing=self.config.base_letter_spacing,
+                measure_text=measure,
             )
+        ]
+
+    def _ruby_progress_events(
+        self,
+        line: AlignedLine,
+        index: int,
+        end: str,
+    ) -> list[str]:
+        baseline_y = self.config.upper_y if index % 2 == 0 else self.config.lower_y
+        measure = text_measurer(
+            self.config.font_name,
+            self.config.base_font_size,
+            bold=True,
+        )
+        placements = ruby_placements(
+            line,
+            play_res_x=self.config.play_res_x,
+            baseline_y=baseline_y,
+            base_font_size=self.config.base_font_size,
+            ruby_font_size=self.config.ruby_font_size,
+            center_x=self._line_center_x(line, index),
+            letter_spacing=self.config.base_letter_spacing,
+            measure_text=measure,
+        )
+        return [
+            self._dialogue(
+                4,
+                ass_time(
+                    ruby_start_ms(
+                        line.tokens[ruby.token_index],
+                        ruby.text,
+                    )
+                ),
+                end,
+                "KirakaraRubyProgress",
+                rf"\an2\pos({ruby.x},{ruby.y})",
+                render_karaoke(
+                    ruby_chunks(line.tokens[ruby.token_index], ruby.text)
+                ),
+            )
+            for ruby in placements
         ]
 
     @staticmethod
@@ -230,9 +296,10 @@ PlayResY: {config.play_res_y}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: KirakaraBase,{config.font_name},{config.base_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{config.outline_width},0,4,0,0,0,1
-Style: KirakaraRuby,{config.font_name},{config.ruby_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{config.ruby_outline_width},0,2,0,0,0,1
-Style: KirakaraProgress,{config.font_name},{config.base_font_size},{config.sung_color},{config.unsung_color},&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,{config.outline_width},0,4,0,0,0,1
+Style: KirakaraBase,{config.font_name},{config.base_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,-1,0,0,0,100,100,{config.base_letter_spacing},0,1,{config.outline_width},0,4,0,0,0,1
+Style: KirakaraRuby,{config.font_name},{config.ruby_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,0,0,0,0,100,100,{config.ruby_letter_spacing},0,1,{config.ruby_outline_width},0,2,0,0,0,1
+Style: KirakaraProgress,{config.font_name},{config.base_font_size},{config.sung_color},{config.unsung_color},&H00FFFFFF,&H00000000,-1,0,0,0,100,100,{config.base_letter_spacing},0,1,{config.outline_width},0,4,0,0,0,1
+Style: KirakaraRubyProgress,{config.font_name},{config.ruby_font_size},{config.sung_color},{config.unsung_color},&H00FFFFFF,&H00000000,0,0,0,0,100,100,{config.ruby_letter_spacing},0,1,{config.ruby_outline_width},0,2,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"""

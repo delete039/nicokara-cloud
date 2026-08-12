@@ -98,11 +98,9 @@ def retime_timeline_from_lrc(
             else None
         )
         duration = max(1, line.end_ms - line.start_ms)
-        new_end = (
-            next_start
-            if next_start is not None and next_start > new_start
-            else new_start + duration
-        )
+        new_end = new_start + duration
+        if next_start is not None and next_start > new_start:
+            new_end = min(new_end, next_start)
         lines.append(
             replace(
                 line,

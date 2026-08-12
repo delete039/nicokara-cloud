@@ -493,3 +493,113 @@ def test_fa_kara_line_boundary_correction_uses_vocal_edges() -> None:
 
     assert corrected[0]["start_ms"] == 1000
     assert corrected[-1]["end_ms"] == 1700
+
+
+def test_mms_aligner_rejects_zero_duration_mora_spans(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import ForcedAlignmentError, MMSForcedAligner, MMSMoraSpan
+
+    class CollapsedRuntime:
+        def align(self, audio_path, tokens, timeout_seconds, *, line_token_counts):
+            return [
+                MMSMoraSpan(start_ms=1000, end_ms=1000, score=0.95)
+                for _ in tokens
+            ]
+
+    with pytest.raises(ForcedAlignmentError, match="zero-duration"):
+        MMSForcedAligner(runtime=CollapsedRuntime()).align(
+            sample_lyrics(),
+            empty_transcript(),
+            audio_path=tmp_path / "vocals.wav",
+        )
+
+
+def test_mms_aligner_rejects_abnormally_long_mora_spans(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import ForcedAlignmentError, MMSForcedAligner, MMSMoraSpan
+
+    class LongSpanRuntime:
+        def align(self, audio_path, tokens, timeout_seconds, *, line_token_counts):
+            return [
+                MMSMoraSpan(
+                    start_ms=index * 20_000,
+                    end_ms=(index + 1) * 20_000,
+                    score=0.95,
+                )
+                for index, _ in enumerate(tokens)
+            ]
+
+    with pytest.raises(ForcedAlignmentError, match="duration"):
+        MMSForcedAligner(runtime=LongSpanRuntime()).align(
+            sample_lyrics(),
+            empty_transcript(),
+            audio_path=tmp_path / "vocals.wav",
+        )
+
+
+def test_mms_aligner_rejects_a_low_confidence_line_hidden_by_global_average(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import ForcedAlignmentError, MMSForcedAligner, MMSMoraSpan
+
+    lyrics = sample_lyrics()
+    lyrics.lines.append(sample_lyrics().lines[0])
+
+    class MixedConfidenceRuntime:
+        def align(self, audio_path, tokens, timeout_seconds, *, line_token_counts):
+            assert line_token_counts == [3, 3]
+            return [
+                MMSMoraSpan(
+                    start_ms=index * 200,
+                    end_ms=(index + 1) * 200,
+                    score=0.05 if index < 3 else 0.95,
+                )
+                for index, _ in enumerate(tokens)
+            ]
+
+    with pytest.raises(ForcedAlignmentError, match="line 1 confidence"):
+        MMSForcedAligner(runtime=MixedConfidenceRuntime()).align(
+            lyrics,
+            empty_transcript(),
+            audio_path=tmp_path / "vocals.wav",
+        )
+
+
+def test_subprocess_runtime_uses_the_shared_alignment_limiter(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import SubprocessMMSRuntime
+
+    class RecordingLimiter:
+        def __init__(self) -> None:
+            self.entered = 0
+
+        def __enter__(self):
+            self.entered += 1
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            self.entered -= 1
+
+    limiter = RecordingLimiter()
+
+    def runner(command, **kwargs):
+        assert limiter.entered == 1
+        output_path = Path(command[command.index("--output") + 1])
+        output_path.write_text(
+            json.dumps(
+                {"spans": [{"start_ms": 10, "end_ms": 90, "score": 0.9}]}
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    audio_path = tmp_path / "audio_vocals.wav"
+    audio_path.write_bytes(b"vocals")
+    runtime = SubprocessMMSRuntime(runner=runner, limiter=limiter)
+
+    runtime.align(audio_path, ["ki"], 10, line_token_counts=[1])
+
+    assert limiter.entered == 0

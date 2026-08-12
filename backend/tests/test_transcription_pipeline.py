@@ -617,7 +617,7 @@ def test_pipeline_uses_existing_lrc_text_and_line_timing(tmp_path: Path) -> None
     )
     assert [
         (line["start_ms"], line["end_ms"]) for line in timeline["lines"]
-    ] == [(1000, 3500), (3500, 4500)]
+    ] == [(1000, 2000), (3500, 4500)]
     assert "lrc_timing_applied" in timeline["warnings"]
 
 

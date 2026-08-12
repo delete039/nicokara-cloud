@@ -171,3 +171,80 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
     assert config.lower_y == 870
     assert config.unsung_color == "&H00FEFEFE"
     assert config.sung_color == "&H00563412"
+
+
+def test_kirakara_generator_preserves_mora_timing_when_counts_differ() -> None:
+    token = AlignedToken(
+        "\u6771\u4eac",
+        "\u3068\u3046\u304d\u3087\u3046",
+        1000,
+        1700,
+        1,
+        [
+            AlignedMora("\u3068", 1000, 1100, True, 1),
+            AlignedMora("\u3046", 1100, 1400, True, 1),
+            AlignedMora("\u304d\u3087\u3046", 1400, 1700, True, 1),
+        ],
+    )
+    timeline = LyricTimeline(
+        confidence=1,
+        lines=[lyric_line(token.surface, token.reading, 1000, 1700, [token])],
+    )
+
+    content = KirakaraAssGenerator().generate(timeline)
+
+    assert "{\\kf25}\u6771{\\kf45}\u4eac" in content
+
+
+def test_kirakara_generator_animates_ruby_with_mora_timing() -> None:
+    token = AlignedToken(
+        "\u4eca\u65e5",
+        "\u304d\u3087\u3046",
+        1000,
+        2000,
+        1,
+        [
+            AlignedMora("\u304d\u3087", 1000, 1300, True, 1),
+            AlignedMora("\u3046", 1300, 2000, True, 1),
+        ],
+    )
+    timeline = LyricTimeline(
+        confidence=1,
+        lines=[lyric_line(token.surface, token.reading, 1000, 2000, [token])],
+    )
+
+    content = KirakaraAssGenerator().generate(timeline)
+    progress_events = [
+        line for line in content.splitlines() if ",KirakaraRubyProgress," in line
+    ]
+
+    assert len(progress_events) == 1
+    assert "{\\kf15}\u304d{\\kf15}\u3087{\\kf70}\u3046" in progress_events[0]
+
+
+def test_kirakara_ruby_progress_starts_at_the_kanji_reading_inside_a_token() -> None:
+    token = AlignedToken(
+        "\u304a\u9858\u3044",
+        "\u304a\u306d\u304c\u3044",
+        1000,
+        1400,
+        1,
+        [
+            AlignedMora("\u304a", 1000, 1100, True, 1),
+            AlignedMora("\u306d", 1100, 1200, True, 1),
+            AlignedMora("\u304c", 1200, 1300, True, 1),
+            AlignedMora("\u3044", 1300, 1400, True, 1),
+        ],
+    )
+    timeline = LyricTimeline(
+        confidence=1,
+        lines=[lyric_line(token.surface, token.reading, 1000, 1400, [token])],
+    )
+
+    content = KirakaraAssGenerator().generate(timeline)
+    progress_event = next(
+        line for line in content.splitlines() if ",KirakaraRubyProgress," in line
+    )
+
+    assert progress_event.startswith("Dialogue: 4,0:00:01.10,")
+    assert "{\\kf10}\u306d{\\kf10}\u304c" in progress_event

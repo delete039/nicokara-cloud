@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import unicodedata
 
 from app.alignment.models import AlignedLine, AlignedToken
+from app.alignment.japanese import normalize_reading
 
 
 @dataclass(frozen=True)
@@ -39,19 +40,19 @@ def character_chunks(token: AlignedToken) -> list[KaraokeChunk]:
         ]
     total_cs = round((token.end_ms - token.start_ms) / 10)
     durations = [0] * len(characters)
-    if token.moras and len(token.moras) == len(sung_indices):
-        mora_durations = [
-            max(0, round((mora.end_ms - mora.start_ms) / 10))
-            for mora in token.moras
+    if token.moras:
+        boundaries = [
+            _sequence_time_ms(
+                token,
+                len(token.moras) * index / len(sung_indices),
+            )
+            for index in range(len(sung_indices) + 1)
         ]
-        difference = max(0, total_cs) - sum(mora_durations)
-        mora_durations[-1] = max(0, mora_durations[-1] + difference)
-        for character_index, duration in zip(
-            sung_indices,
-            mora_durations,
-            strict=True,
-        ):
-            durations[character_index] = duration
+        for position, character_index in enumerate(sung_indices):
+            durations[character_index] = max(
+                0,
+                round((boundaries[position + 1] - boundaries[position]) / 10),
+            )
     else:
         base, remainder = divmod(max(0, total_cs), len(sung_indices))
         for position, character_index in enumerate(sung_indices):
@@ -65,6 +66,100 @@ def character_chunks(token: AlignedToken) -> list[KaraokeChunk]:
         )
         for index, character in enumerate(characters)
     ]
+
+
+def _mora_segments(token: AlignedToken) -> list[tuple[str, int, int]]:
+    result: list[tuple[str, int, int]] = []
+    for index, mora in enumerate(token.moras):
+        previous = token.moras[index - 1] if index > 0 else None
+        start_ms = max(
+            token.start_ms,
+            token.start_ms if previous is None else previous.end_ms,
+        )
+        end_ms = min(
+            token.end_ms,
+            max(
+                start_ms,
+                token.end_ms if index == len(token.moras) - 1 else mora.end_ms,
+            ),
+        )
+        result.append((normalize_reading(mora.reading), start_ms, end_ms))
+    return result
+
+
+def _sequence_time_ms(token: AlignedToken, position: float) -> int:
+    segments = _mora_segments(token)
+    if not segments:
+        return token.start_ms
+    bounded = min(float(len(segments)), max(0.0, position))
+    index = min(len(segments) - 1, int(bounded))
+    progress = bounded - index
+    if bounded >= len(segments):
+        return token.end_ms
+    _, start_ms, end_ms = segments[index]
+    return round(start_ms + (end_ms - start_ms) * progress)
+
+
+def ruby_chunks(token: AlignedToken, reading: str) -> list[KaraokeChunk]:
+    normalized = normalize_reading(reading)
+    if not normalized:
+        return []
+    segments = _mora_segments(token)
+    full_reading = "".join(text for text, _, _ in segments)
+    match_start = full_reading.find(normalized)
+    if segments and match_start >= 0:
+        chunks: list[KaraokeChunk] = []
+        character_offset = 0
+        match_end = match_start + len(normalized)
+        for text, start_ms, end_ms in segments:
+            segment_end = character_offset + len(text)
+            overlap_start = max(match_start, character_offset)
+            overlap_end = min(match_end, segment_end)
+            if overlap_start < overlap_end:
+                duration = end_ms - start_ms
+                for character_index in range(overlap_start, overlap_end):
+                    local_index = character_index - character_offset
+                    character_start = start_ms + duration * local_index / len(text)
+                    character_end = start_ms + duration * (local_index + 1) / len(text)
+                    chunks.append(
+                        KaraokeChunk(
+                            text=full_reading[character_index],
+                            duration_cs=max(
+                                0,
+                                round((character_end - character_start) / 10),
+                            ),
+                        )
+                    )
+            character_offset = segment_end
+        if chunks and "".join(chunk.text for chunk in chunks) == normalized:
+            return chunks
+
+    total_cs = max(0, round((token.end_ms - token.start_ms) / 10))
+    base, remainder = divmod(total_cs, len(normalized))
+    return [
+        KaraokeChunk(
+            text=character,
+            duration_cs=base + (1 if index >= len(normalized) - remainder else 0),
+        )
+        for index, character in enumerate(normalized)
+    ]
+
+
+def ruby_start_ms(token: AlignedToken, reading: str) -> int:
+    normalized = normalize_reading(reading)
+    segments = _mora_segments(token)
+    full_reading = "".join(text for text, _, _ in segments)
+    match_start = full_reading.find(normalized)
+    if not segments or match_start < 0:
+        return token.start_ms
+    character_offset = 0
+    for text, start_ms, end_ms in segments:
+        segment_end = character_offset + len(text)
+        if match_start < segment_end:
+            local_index = match_start - character_offset
+            return round(start_ms + (end_ms - start_ms) * local_index / len(text))
+        character_offset = segment_end
+    return token.start_ms
 
 
 def line_chunks(line: AlignedLine) -> list[KaraokeChunk]:

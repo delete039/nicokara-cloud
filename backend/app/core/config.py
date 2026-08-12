@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     fa_kara_device: str = "auto"
     fa_kara_timeout_seconds: int = 600
     fa_kara_min_confidence: float = 0.15
+    fa_kara_max_concurrent_alignments: int = 1
     fa_kara_audio_speed: float = 1.0
     fa_kara_silence_window_seconds: float = 0.8
     fa_kara_silence_top_percent: float = 10.0
@@ -94,6 +95,7 @@ class Settings(BaseSettings):
         "cleanup_interval_seconds",
         "video_render_timeout_seconds",
         "fa_kara_timeout_seconds",
+        "fa_kara_max_concurrent_alignments",
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:

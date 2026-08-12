@@ -1,0 +1,9 @@
+services:
+  backend:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu126
+    environment:
+      NICOKARA_FA_KARA_DEVICE: cuda
+      NICOKARA_FA_KARA_MAX_CONCURRENT_ALIGNMENTS: ${NICOKARA_FA_KARA_MAX_CONCURRENT_ALIGNMENTS:-1}
+    gpus: all

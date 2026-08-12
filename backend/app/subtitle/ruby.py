@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from collections.abc import Callable
 
 from app.alignment.models import AlignedLine
 from app.alignment.japanese import normalize_reading
@@ -12,6 +13,7 @@ class RubyPlacement:
     text: str
     x: int
     y: int
+    token_index: int
 
 
 def contains_kanji(text: str) -> bool:
@@ -77,13 +79,25 @@ def ruby_placements(
     ruby_font_size: int = 48,
     char_width_ratio: float = 0.68,
     center_x: int | None = None,
+    letter_spacing: float = 0,
+    measure_text: Callable[[str], float] | None = None,
 ) -> list[RubyPlacement]:
-    char_width = round(base_font_size * char_width_ratio)
-    line_width = len(line.surface) * char_width
+    fallback_width = float(round(base_font_size * char_width_ratio))
+
+    def width(text: str) -> float:
+        characters = list(text)
+        measured = (
+            sum(measure_text(character) for character in characters)
+            if measure_text is not None
+            else len(characters) * fallback_width
+        )
+        return measured + max(0, len(characters) - 1) * letter_spacing
+
+    line_width = width(line.surface)
     line_left = (center_x or play_res_x / 2) - line_width / 2
     placements: list[RubyPlacement] = []
     character_offset = 0
-    for token in line.tokens:
+    for token_index, token in enumerate(line.tokens):
         for run_start, run_end, reading in kanji_readings(
             token.surface,
             token.reading,
@@ -93,13 +107,16 @@ def ruby_placements(
                     text=reading,
                     x=round(
                         line_left
+                        + width(line.surface[:character_offset + run_start])
                         + (
-                            character_offset
-                            + (run_start + run_end) / 2
+                            letter_spacing
+                            if character_offset + run_start > 0
+                            else 0
                         )
-                        * char_width
+                        + width(token.surface[run_start:run_end]) / 2
                     ),
                     y=baseline_y - base_font_size // 2 - 2,
+                    token_index=token_index,
                 )
             )
         character_offset += len(token.surface)

@@ -92,3 +92,54 @@ def test_backend_installs_mms_fa_and_persists_its_model_cache() -> None:
     assert 'NICOKARA_FA_KARA_ENABLED: ${NICOKARA_FA_KARA_ENABLED:-true}' in compose
     assert 'mms-model-cache:/root/.cache/torch' in compose
     assert 'mms-model-cache:' in compose
+
+
+def test_cpu_compose_and_dockerfile_use_an_explicit_matching_torch_device() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    dockerfile = (project_root / "backend" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    compose = (project_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu" in dockerfile
+    assert "--index-url $PYTORCH_INDEX_URL" in dockerfile
+    assert "NICOKARA_FA_KARA_DEVICE: ${NICOKARA_FA_KARA_DEVICE:-cpu}" in compose
+
+
+def test_gpu_compose_override_installs_cuda_torch_and_requests_the_gpu() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    override = (project_root / "docker-compose.gpu.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "https://download.pytorch.org/whl/cu126" in override
+    assert "NICOKARA_FA_KARA_DEVICE: cuda" in override
+    assert "gpus: all" in override
+
+
+def test_data_deployment_selects_a_matching_torch_build_and_device() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    script = (project_root / "release" / "deploy-nicokara-from-data.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "nvidia-smi" in script
+    assert "https://download.pytorch.org/whl/cu126" in script
+    assert "https://download.pytorch.org/whl/cpu" in script
+    assert "torch.cuda.is_available()" in script
+    assert "NICOKARA_FA_KARA_DEVICE=$FA_KARA_DEVICE" in script
+    assert "NICOKARA_FA_KARA_MAX_CONCURRENT_ALIGNMENTS=1" in script
+
+    resume_script = (
+        project_root / "release" / "resume-nicokara-after-pip.sh"
+    ).read_text(encoding="utf-8")
+    assert "torch.cuda.is_available()" in resume_script
+    assert "NICOKARA_FA_KARA_DEVICE=$FA_KARA_DEVICE" in resume_script
+
+
+def test_backend_installs_pillow_for_real_font_measurement() -> None:
+    pyproject = (
+        Path(__file__).parents[1] / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+
+    assert '"Pillow>=' in pyproject

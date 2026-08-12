@@ -59,3 +59,32 @@ def test_kana_only_tokens_never_receive_ruby() -> None:
     )
 
     assert placements == []
+
+
+def test_ruby_placement_uses_measured_glyph_widths() -> None:
+    module = importlib.import_module("app.subtitle.ruby")
+    line = AlignedLine(
+        surface="Wi\u6f22",
+        reading="Wi\u304b\u3093",
+        start_ms=0,
+        end_ms=1000,
+        confidence=1,
+        tokens=[
+            AlignedToken("W", "W", 0, 100, 1),
+            AlignedToken("i", "i", 100, 200, 1),
+            AlignedToken("\u6f22", "\u304b\u3093", 200, 1000, 1),
+        ],
+    )
+    widths = {"W": 30.0, "i": 5.0, "\u6f22": 20.0}
+
+    placements = module.ruby_placements(
+        line,
+        play_res_x=200,
+        baseline_y=100,
+        base_font_size=20,
+        center_x=100,
+        letter_spacing=10,
+        measure_text=lambda text: sum(widths[character] for character in text),
+    )
+
+    assert placements[0].x == 128

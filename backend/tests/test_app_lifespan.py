@@ -197,6 +197,11 @@ def test_app_enables_fa_kara_mms_for_audio_only_jobs(tmp_path: Path) -> None:
         assert aligner.primary.runtime.tail_window_seconds == 0.03
         assert aligner.primary.timeout_seconds == 321
         assert isinstance(aligner.fallback, LyricTimelineAligner)
+        second_pipeline = app.state.runner.pipeline_factory()
+        assert (
+            second_pipeline.aligner.primary.runtime.limiter
+            is aligner.primary.runtime.limiter
+        )
 
 
 def test_app_can_disable_fa_kara_without_disabling_processing(

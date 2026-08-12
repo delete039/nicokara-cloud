@@ -4,6 +4,7 @@ import re
 import json
 import subprocess
 import sys
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ from app.lyrics.models import LyricDocument
 
 MMS_MODEL_NAME = "torchaudio.pipelines.MMS_FA"
 DEFAULT_MIN_CONFIDENCE = 0.15
+DEFAULT_MAX_MORA_DURATION_MS = 15_000
 _ROMAJI_FILTER = re.compile("[^a-z']")
 _LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")
 _CONVERTER = kakasi()
@@ -55,6 +57,7 @@ class SubprocessMMSRuntime:
         silence_top_percent: float = 10.0,
         silence_threshold_ratio: float = 0.1,
         tail_window_seconds: float = 0.02,
+        limiter: Any | None = None,
     ) -> None:
         self.device = device
         self.runner = runner
@@ -64,6 +67,7 @@ class SubprocessMMSRuntime:
         self.silence_top_percent = silence_top_percent
         self.silence_threshold_ratio = silence_threshold_ratio
         self.tail_window_seconds = tail_window_seconds
+        self.limiter = limiter or threading.BoundedSemaphore(1)
 
     def align(
         self,
@@ -104,13 +108,14 @@ class SubprocessMMSRuntime:
             self.device,
         ]
         try:
-            self.runner(
-                command,
-                timeout=timeout_seconds,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            with self.limiter:
+                self.runner(
+                    command,
+                    timeout=timeout_seconds,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             return [
                 MMSMoraSpan(
@@ -158,10 +163,12 @@ class MMSForcedAligner:
         runtime: Any,
         timeout_seconds: float = 600,
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+        max_mora_duration_ms: int = DEFAULT_MAX_MORA_DURATION_MS,
     ) -> None:
         self.runtime = runtime
         self.timeout_seconds = timeout_seconds
         self.min_confidence = min_confidence
+        self.max_mora_duration_ms = max_mora_duration_ms
 
     def align(
         self,
@@ -175,20 +182,21 @@ class MMSForcedAligner:
         if not targets:
             raise ForcedAlignmentError("Lyrics contain no alignable moras")
         tokens = self._romanized_tokens(targets)
+        line_token_counts = [
+            sum(target.line_index == line_index for target in targets)
+            for line_index in range(len(lyrics.lines))
+        ]
         spans = self.runtime.align(
             audio_path,
             tokens,
             self.timeout_seconds,
-            line_token_counts=[
-                sum(target.line_index == line_index for target in targets)
-                for line_index in range(len(lyrics.lines))
-            ],
+            line_token_counts=line_token_counts,
         )
         if len(spans) != len(targets):
             raise ForcedAlignmentError(
                 "MMS_FA span count does not match the lyric mora count"
             )
-        self._validate_spans(spans)
+        self._validate_spans(spans, line_token_counts)
         confidence = sum(span.score for span in spans) / len(spans)
         if confidence < self.min_confidence:
             raise ForcedAlignmentError(
@@ -260,8 +268,11 @@ class MMSForcedAligner:
             tokens.append(token)
         return tokens
 
-    @staticmethod
-    def _validate_spans(spans: list[MMSMoraSpan]) -> None:
+    def _validate_spans(
+        self,
+        spans: list[MMSMoraSpan],
+        line_token_counts: list[int],
+    ) -> None:
         previous_end = 0
         for span in spans:
             if (
@@ -270,7 +281,29 @@ class MMSForcedAligner:
                 or not 0 <= span.score <= 1
             ):
                 raise ForcedAlignmentError("MMS_FA returned invalid spans")
+            if span.end_ms == span.start_ms:
+                raise ForcedAlignmentError(
+                    "MMS_FA returned a zero-duration mora span"
+                )
+            if span.end_ms - span.start_ms > self.max_mora_duration_ms:
+                raise ForcedAlignmentError(
+                    "MMS_FA mora duration exceeds the usable limit"
+                )
             previous_end = span.end_ms
+
+        offset = 0
+        for line_index, count in enumerate(line_token_counts, start=1):
+            if count <= 0:
+                continue
+            line_spans = spans[offset : offset + count]
+            offset += count
+            confidence = sum(span.score for span in line_spans) / count
+            if confidence < self.min_confidence:
+                raise ForcedAlignmentError(
+                    f"MMS_FA line {line_index} confidence is below the "
+                    f"usable threshold ({confidence:.3f} < "
+                    f"{self.min_confidence:.3f})"
+                )
 
     @staticmethod
     def _timeline(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
@@ -48,7 +49,11 @@ def build_vocal_remover(settings: Settings):
     )
 
 
-def build_alignment_engine(settings: Settings):
+def build_alignment_engine(
+    settings: Settings,
+    *,
+    fa_kara_limiter: Any | None = None,
+):
     fallback = LyricTimelineAligner()
     if not settings.fa_kara_enabled:
         return fallback
@@ -67,6 +72,7 @@ def build_alignment_engine(settings: Settings):
                     settings.fa_kara_silence_threshold_ratio
                 ),
                 tail_window_seconds=settings.fa_kara_tail_window_seconds,
+                limiter=fa_kara_limiter,
             ),
             timeout_seconds=settings.fa_kara_timeout_seconds,
             min_confidence=settings.fa_kara_min_confidence,
@@ -75,7 +81,12 @@ def build_alignment_engine(settings: Settings):
     )
 
 
-def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipeline:
+def build_pipeline(
+    settings: Settings,
+    database: Database,
+    *,
+    fa_kara_limiter: Any | None = None,
+) -> TranscriptionPipeline:
     local_lyric_processor = LocalJapaneseLyricProcessor()
     if settings.deepseek_api_key is not None:
         lyric_processor = ResilientLyricProcessor(
@@ -104,7 +115,10 @@ def build_pipeline(settings: Settings, database: Database) -> TranscriptionPipel
         ),
         vocal_remover=build_vocal_remover(settings),
         lyric_processor=lyric_processor,
-        aligner=build_alignment_engine(settings),
+        aligner=build_alignment_engine(
+            settings,
+            fa_kara_limiter=fa_kara_limiter,
+        ),
         subtitle_generator=KirakaraAssGenerator(),
         video_renderer=FFmpegVideoRenderer(
             command=(settings.ffmpeg_path,),
@@ -155,9 +169,13 @@ def create_app(
             worker_config = load_worker_config(
                 resolved_settings.worker_config_path
             )
+            fa_kara_limiter = threading.BoundedSemaphore(
+                resolved_settings.fa_kara_max_concurrent_alignments
+            )
             pipeline_factory = lambda: build_pipeline(
                 resolved_settings,
                 database,
+                fa_kara_limiter=fa_kara_limiter,
             )
             pipeline = pipeline_factory()
             active_runner = LocalTaskRunner(

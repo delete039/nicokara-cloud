@@ -7,12 +7,23 @@ function context(
   measureText: (text: string, font: string) => number = (text) =>
     [...text].length * 40,
 ) {
+  const strokeStates: Array<{
+    lineJoin: CanvasLineJoin;
+    miterLimit: number;
+    lineWidth: number;
+  }> = [];
   const canvasContext = {
     canvas: { width: 1280, height: 720 },
     clearRect: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
-    strokeText: vi.fn(),
+    strokeText: vi.fn(() => {
+      strokeStates.push({
+        lineJoin: canvasContext.lineJoin,
+        miterLimit: canvasContext.miterLimit,
+        lineWidth: canvasContext.lineWidth,
+      });
+    }),
     measureText: vi.fn((text: string) => ({
       width: measureText(text, canvasContext.font),
     })),
@@ -30,8 +41,9 @@ function context(
     lineWidth: 0,
     font: "",
     textBaseline: "alphabetic" as CanvasTextBaseline,
-    lineJoin: "round" as CanvasLineJoin,
-    miterLimit: 2,
+    lineJoin: "miter" as CanvasLineJoin,
+    miterLimit: 10,
+    strokeStates,
   };
   return canvasContext;
 }
@@ -150,6 +162,16 @@ describe("drawKirakaraFrame", () => {
     });
 
     expect(canvas.lineWidth).toBeCloseTo(11, 5);
+  });
+
+  it("uses Kirakara's rounded join for every Canvas text outline", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, frame);
+
+    expect(canvas.strokeStates.length).toBeGreaterThan(0);
+    expect(canvas.strokeStates.every(({ lineJoin }) => lineJoin === "round")).toBe(true);
+    expect(canvas.strokeStates.every(({ miterLimit }) => miterLimit === 2)).toBe(true);
   });
 
   it("draws the paragraph indicator supplied by the shared Kirakara frame", () => {

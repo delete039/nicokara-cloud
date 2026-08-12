@@ -95,6 +95,20 @@ printf '%s  %s\n' \
 echo "安装后端 Python 依赖..."
 python3 -m venv "$RELEASE_DIR/backend/.venv"
 "$RELEASE_DIR/backend/.venv/bin/python" -m pip install --upgrade pip
+PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+FA_KARA_DEVICE="cpu"
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+  PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu126"
+  FA_KARA_DEVICE="cuda"
+fi
+"$RELEASE_DIR/backend/.venv/bin/python" -m pip install \
+  torch==2.7.1 \
+  torchvision==0.22.1 \
+  torchaudio==2.7.1 \
+  --index-url "$PYTORCH_INDEX_URL"
+if [[ "$("$RELEASE_DIR/backend/.venv/bin/python" -c 'import torch; print(int(torch.cuda.is_available()))')" != "1" ]]; then
+  FA_KARA_DEVICE="cpu"
+fi
 "$RELEASE_DIR/backend/.venv/bin/python" -m pip install \
   -e "$RELEASE_DIR/backend[ai]"
 
@@ -146,6 +160,9 @@ NICOKARA_FFMPEG_PATH=ffmpeg
 NICOKARA_WHISPER_MODEL=$SHARED_DIR/models/faster-whisper-small
 NICOKARA_WHISPER_DEVICE=cpu
 NICOKARA_WHISPER_COMPUTE_TYPE=int8
+NICOKARA_FA_KARA_ENABLED=true
+NICOKARA_FA_KARA_DEVICE=$FA_KARA_DEVICE
+NICOKARA_FA_KARA_MAX_CONCURRENT_ALIGNMENTS=1
 NICOKARA_VOCAL_REMOVAL_BACKEND=mdx
 NICOKARA_VOCAL_REMOVAL_MODEL=UVR_MDXNET_KARA_2.onnx
 NICOKARA_VOCAL_REMOVAL_MODEL_DIR=$SHARED_DIR/models/audio-separator

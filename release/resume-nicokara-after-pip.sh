@@ -70,6 +70,10 @@ mkdir -p \
   "$SHARED_DIR/storage/jobs"
 
 ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+FA_KARA_DEVICE="cpu"
+if [[ "$($PYTHON_BIN -c 'import torch; print(int(torch.cuda.is_available()))')" == "1" ]]; then
+  FA_KARA_DEVICE="cuda"
+fi
 
 WORKER_CONFIG="$SHARED_DIR/workers.toml"
 if [[ ! -f "$WORKER_CONFIG" ]]; then
@@ -117,6 +121,9 @@ NICOKARA_FFMPEG_PATH=ffmpeg
 NICOKARA_WHISPER_MODEL=$SHARED_DIR/models/faster-whisper-small
 NICOKARA_WHISPER_DEVICE=cpu
 NICOKARA_WHISPER_COMPUTE_TYPE=int8
+NICOKARA_FA_KARA_ENABLED=true
+NICOKARA_FA_KARA_DEVICE=$FA_KARA_DEVICE
+NICOKARA_FA_KARA_MAX_CONCURRENT_ALIGNMENTS=1
 NICOKARA_VOCAL_REMOVAL_BACKEND=mdx
 NICOKARA_VOCAL_REMOVAL_MODEL=UVR_MDXNET_KARA_2.onnx
 NICOKARA_VOCAL_REMOVAL_MODEL_DIR=$SHARED_DIR/models/audio-separator
