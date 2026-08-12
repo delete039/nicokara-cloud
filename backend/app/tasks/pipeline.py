@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from app.core.database import Database, JobCanceledError
+from app.ai.whisper import transcript_document_from_dict
 from app.lyrics.lrc import parse_lrc, retime_timeline_from_lrc
+from app.lyrics.models import lyric_document_from_dict
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +84,25 @@ class TranscriptionPipeline:
         output_path = job_dir / "final_karaoke.mp4"
 
         stage = "EXTRACTING_AUDIO"
+        resumed_stage: list[str] | None = None
         try:
+            if job.get("stage") == "ALIGNMENT_QUEUED":
+                resumed_stage = ["ALIGNING"]
+                self._resume_reviewed_alignment(
+                    job_id=job_id,
+                    job=job,
+                    video_path=video_path,
+                    audio_path=audio_path,
+                    vocals_path=vocals_path,
+                    instrumental_path=instrumental_path,
+                    transcript_path=transcript_path,
+                    lyrics_processed_path=lyrics_processed_path,
+                    timeline_path=timeline_path,
+                    ass_path=ass_path,
+                    output_path=output_path,
+                    stage_state=resumed_stage,
+                )
+                return
             if job.get("stage") == "CLOUD_RENDER_QUEUED":
                 stage = "RENDERING_VIDEO"
                 if self.video_renderer is None or not ass_path.is_file():
@@ -258,6 +278,27 @@ class TranscriptionPipeline:
                     encoding="utf-8",
                 )
                 if self.aligner is not None:
+                    if bool(
+                        getattr(
+                            self.aligner,
+                            "requires_reading_review",
+                            False,
+                        )
+                    ):
+                        self.database.update_job_state(
+                            job_id,
+                            status="LYRICS_PROCESSED",
+                            stage="READING_REVIEW_REQUIRED",
+                            progress=80,
+                            audio_path=audio_path,
+                            transcript_path=(
+                                transcript_path
+                                if transcript_path.exists()
+                                else None
+                            ),
+                            lyrics_processed_path=lyrics_processed_path,
+                        )
+                        return
                     stage = "ALIGNING"
                     self.database.update_job_state(
                         job_id,
@@ -427,6 +468,8 @@ class TranscriptionPipeline:
             logger.info("Job %s stopped after user cancellation", job_id)
             return
         except Exception as exc:
+            if resumed_stage is not None:
+                stage = resumed_stage[0]
             logger.exception(
                 "Job %s failed during stage %s",
                 job_id,
@@ -475,3 +518,217 @@ class TranscriptionPipeline:
                 error_message=PUBLIC_ERROR_MESSAGES[stage],
             )
             raise
+
+    def _resume_reviewed_alignment(
+        self,
+        *,
+        job_id: str,
+        job: dict[str, Any],
+        video_path: Path,
+        audio_path: Path,
+        vocals_path: Path,
+        instrumental_path: Path,
+        transcript_path: Path,
+        lyrics_processed_path: Path,
+        timeline_path: Path,
+        ass_path: Path,
+        output_path: Path,
+        stage_state: list[str],
+    ) -> None:
+        if self.aligner is None:
+            raise RuntimeError("Lyric alignment is unavailable")
+        if not audio_path.is_file() or not lyrics_processed_path.is_file():
+            raise RuntimeError("Reading review artifacts are incomplete")
+
+        processed_lyrics = lyric_document_from_dict(
+            json.loads(lyrics_processed_path.read_text(encoding="utf-8"))
+        )
+        lyrics_path_value = job.get("lyrics_path")
+        parsed_lrc = parse_lrc(
+            Path(lyrics_path_value).read_text(encoding="utf-8")
+            if lyrics_path_value
+            else processed_lyrics.source_text
+        )
+        transcript = (
+            transcript_document_from_dict(
+                json.loads(transcript_path.read_text(encoding="utf-8"))
+            )
+            if transcript_path.is_file()
+            else None
+        )
+        direct_alignment_job = (
+            job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+            and bool(
+                getattr(
+                    self.aligner,
+                    "supports_transcriptless_alignment",
+                    False,
+                )
+            )
+        )
+        alignment_requires_vocals = bool(
+            getattr(self.aligner, "requires_vocals", False)
+        )
+        alignment_fallback_warning: str | None = None
+        analysis_audio_path = audio_path
+        if alignment_requires_vocals:
+            if vocals_path.is_file():
+                analysis_audio_path = vocals_path
+            else:
+                direct_alignment_job = False
+                alignment_fallback_warning = "uvr_unavailable"
+
+        def load_transcript():
+            nonlocal transcript
+            if transcript is None:
+                transcript = self.transcriber.transcribe(analysis_audio_path)
+                transcript_path.write_text(
+                    json.dumps(
+                        transcript.to_dict(),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            return transcript
+
+        self.database.update_job_state(
+            job_id,
+            status="PROCESSING",
+            stage="ALIGNING",
+            progress=90,
+            audio_path=audio_path,
+            transcript_path=(
+                transcript_path if transcript_path.exists() else None
+            ),
+            lyrics_processed_path=lyrics_processed_path,
+        )
+        if direct_alignment_job:
+            timeline = self.aligner.align(
+                processed_lyrics,
+                None,
+                audio_path=analysis_audio_path,
+                transcript_factory=load_transcript,
+            )
+        else:
+            timeline = self.aligner.align(
+                processed_lyrics,
+                load_transcript(),
+            )
+        if alignment_fallback_warning is not None:
+            timeline = replace(
+                timeline,
+                warnings=[
+                    *timeline.warnings,
+                    alignment_fallback_warning,
+                ],
+            )
+        if parsed_lrc.has_timing:
+            timeline = retime_timeline_from_lrc(
+                timeline,
+                parsed_lrc.line_starts_ms,
+            )
+        timeline_path.write_text(
+            json.dumps(
+                timeline.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        if self.subtitle_generator is None:
+            self.database.update_job_state(
+                job_id,
+                status="ALIGNED",
+                stage="ALIGNMENT_COMPLETE",
+                progress=100,
+                audio_path=audio_path,
+                transcript_path=(
+                    transcript_path if transcript_path.exists() else None
+                ),
+                lyrics_processed_path=lyrics_processed_path,
+                timeline_path=timeline_path,
+            )
+            return
+
+        stage_state[0] = "GENERATING_SUBTITLE"
+        self.database.update_job_state(
+            job_id,
+            status="PROCESSING",
+            stage="GENERATING_SUBTITLE",
+            progress=95,
+            audio_path=audio_path,
+            transcript_path=(
+                transcript_path if transcript_path.exists() else None
+            ),
+            lyrics_processed_path=lyrics_processed_path,
+            timeline_path=timeline_path,
+        )
+        ass_path.write_text(
+            self.subtitle_generator.generate(timeline),
+            encoding="utf-8-sig",
+        )
+        if (
+            self.video_renderer is None
+            or job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+        ):
+            self.database.update_job_state(
+                job_id,
+                status="SUBTITLE_GENERATED",
+                stage="SUBTITLE_GENERATION_COMPLETE",
+                progress=100,
+                audio_path=audio_path,
+                transcript_path=(
+                    transcript_path if transcript_path.exists() else None
+                ),
+                lyrics_processed_path=lyrics_processed_path,
+                timeline_path=timeline_path,
+                ass_path=ass_path,
+            )
+            return
+
+        stage_state[0] = "RENDERING_VIDEO"
+        self.database.update_job_state(
+            job_id,
+            status="PROCESSING",
+            stage="RENDERING_VIDEO",
+            progress=98,
+            audio_path=audio_path,
+            transcript_path=(
+                transcript_path if transcript_path.exists() else None
+            ),
+            lyrics_processed_path=lyrics_processed_path,
+            timeline_path=timeline_path,
+            ass_path=ass_path,
+        )
+        render_vocal_mode = (
+            "off" if job.get("vocal_mode", "on") == "off" else "on"
+        )
+        self.video_renderer.render(
+            video_path,
+            ass_path,
+            output_path,
+            vocal_mode=render_vocal_mode,
+            instrumental_audio_path=(
+                instrumental_path
+                if render_vocal_mode == "off" and instrumental_path.exists()
+                else None
+            ),
+        )
+        self.database.update_job_state(
+            job_id,
+            status="COMPLETED",
+            stage="VIDEO_RENDERING_COMPLETE",
+            progress=100,
+            audio_path=audio_path,
+            transcript_path=(
+                transcript_path if transcript_path.exists() else None
+            ),
+            lyrics_processed_path=lyrics_processed_path,
+            timeline_path=timeline_path,
+            ass_path=ass_path,
+            output_path=output_path,
+        )

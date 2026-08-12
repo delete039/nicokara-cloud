@@ -383,6 +383,150 @@ def test_pipeline_aligns_processed_lyrics_and_persists_timeline(
     assert job["timeline_path"] == str(timeline_path)
 
 
+def test_pipeline_pauses_for_reading_review_before_alignment(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "reading-review"
+    job_id = create_uploaded_job(database, job_dir)
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("物语\n", encoding="utf-8")
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET lyrics_path = ? WHERE id = ?",
+            (str(lyrics_path), job_id),
+        )
+
+    class FakeLyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(
+                provider="local",
+                source_text=text,
+                lines=[
+                    LyricLine(
+                        source="物语",
+                        surface="物语",
+                        reading="ものがたり",
+                        tokens=[
+                            LyricToken(
+                                surface="物语",
+                                reading="ものがたり",
+                            )
+                        ],
+                    )
+                ],
+            )
+
+    class UnexpectedAligner:
+        requires_reading_review = True
+
+        def align(self, *args, **kwargs) -> LyricTimeline:
+            pytest.fail("alignment must wait for reading confirmation")
+
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        lyric_processor=FakeLyricProcessor(),
+        aligner=UnexpectedAligner(),
+    )
+
+    pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "LYRICS_PROCESSED"
+    assert job["stage"] == "READING_REVIEW_REQUIRED"
+    assert job["progress"] == 80
+    assert job["lyrics_processed_path"] == str(
+        job_dir / "lyrics_processed.json"
+    )
+    assert not (job_dir / "timeline.json").exists()
+
+
+def test_pipeline_resumes_with_reviewed_readings_without_repeating_audio_work(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "reviewed-alignment"
+    job_id = create_uploaded_job(database, job_dir)
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("君\n", encoding="utf-8")
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET lyrics_path = ? WHERE id = ?",
+            (str(lyrics_path), job_id),
+        )
+
+    class FakeLyricProcessor:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(
+                provider="local",
+                source_text=text,
+                lines=[
+                    LyricLine(
+                        source="君",
+                        surface="君",
+                        reading="くん",
+                        tokens=[LyricToken(surface="君", reading="くん")],
+                    )
+                ],
+            )
+
+    class RecordingAligner:
+        requires_reading_review = True
+
+        def __init__(self) -> None:
+            self.readings: list[str] = []
+
+        def align(
+            self,
+            lyrics: LyricDocument,
+            transcript: TranscriptDocument,
+        ) -> LyricTimeline:
+            self.readings.append(lyrics.lines[0].tokens[0].reading)
+            return LyricTimeline(confidence=1.0)
+
+    extractor = FakeExtractor()
+    transcriber = FakeTranscriber()
+    aligner = RecordingAligner()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=extractor,
+        transcriber=transcriber,
+        lyric_processor=FakeLyricProcessor(),
+        aligner=aligner,
+    )
+
+    pipeline.process(job_id)
+    assert aligner.readings == []
+
+    processed_path = job_dir / "lyrics_processed.json"
+    reviewed = json.loads(processed_path.read_text(encoding="utf-8"))
+    reviewed["lines"][0]["reading"] = "きみ"
+    reviewed["lines"][0]["tokens"][0]["reading"] = "きみ"
+    processed_path.write_text(
+        json.dumps(reviewed, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert database.claim_reading_review(job_id)
+    assert database.queue_alignment(job_id)
+
+    pipeline.process(job_id)
+
+    assert extractor.calls == [(job_dir / "input.mp4", job_dir / "audio.wav")]
+    assert transcriber.calls == [job_dir / "audio.wav"]
+    assert aligner.readings == ["きみ"]
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "ALIGNED"
+    assert job["stage"] == "ALIGNMENT_COMPLETE"
+
+
 def test_pipeline_uses_existing_lrc_text_and_line_timing(tmp_path: Path) -> None:
     pipeline_module = importlib.import_module("app.tasks.pipeline")
     database = Database(tmp_path / "jobs.sqlite3")

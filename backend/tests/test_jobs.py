@@ -290,6 +290,156 @@ def test_processed_lyrics_can_be_downloaded(tmp_path: Path) -> None:
     assert lyrics_response.json() == processed
 
 
+def test_reviewed_readings_are_saved_before_alignment_is_queued(
+    tmp_path: Path,
+) -> None:
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.job_ids: list[str] = []
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def enqueue(self, job_id: str) -> None:
+            self.job_ids.append(job_id)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+    )
+    runner = RecordingRunner()
+    with TestClient(create_app(settings, runner=runner)) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君は"},
+        )
+        job_id = response.json()["id"]
+        runner.job_ids.clear()
+        lyrics_path = tmp_path / "jobs" / job_id / "lyrics_processed.json"
+        lyrics_path.write_text(
+            json.dumps(
+                {
+                    "provider": "local",
+                    "source_text": "君は",
+                    "lines": [
+                        {
+                            "source": "君は",
+                            "surface": "君は",
+                            "reading": "くんは",
+                            "tokens": [
+                                {"surface": "君", "reading": "くん"},
+                                {
+                                    "surface": "は",
+                                    "reading": "は",
+                                    "alignment_pronunciation": "wa",
+                                },
+                            ],
+                        }
+                    ],
+                    "warnings": ["local_reading_may_be_inaccurate"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        client.app.state.database.update_job_state(
+            job_id,
+            status="LYRICS_PROCESSED",
+            stage="READING_REVIEW_REQUIRED",
+            progress=80,
+            lyrics_processed_path=lyrics_path,
+        )
+
+        confirmed = client.post(
+            f"/api/v1/jobs/{job_id}/readings",
+            json={
+                "lines": [
+                    {
+                        "surface": "君は",
+                        "tokens": [
+                            {"surface": "君", "reading": "きみ"},
+                            {"surface": "は", "reading": "わ"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+        assert confirmed.status_code == 200
+        assert confirmed.json()["status"] == "UPLOADED"
+        assert confirmed.json()["stage"] == "ALIGNMENT_QUEUED"
+        assert runner.job_ids == [job_id]
+        saved = json.loads(lyrics_path.read_text(encoding="utf-8"))
+        assert saved["lines"][0]["reading"] == "きみわ"
+        assert [token["reading"] for token in saved["lines"][0]["tokens"]] == [
+            "きみ",
+            "わ",
+        ]
+        assert saved["lines"][0]["tokens"][1][
+            "alignment_pronunciation"
+        ] is None
+
+
+def test_reading_review_rejects_changed_lyric_structure(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "物语"},
+        )
+        job_id = response.json()["id"]
+        lyrics_path = tmp_path / "jobs" / job_id / "lyrics_processed.json"
+        lyrics_path.write_text(
+            json.dumps(
+                {
+                    "provider": "local",
+                    "source_text": "物语",
+                    "lines": [
+                        {
+                            "source": "物语",
+                            "surface": "物语",
+                            "reading": "ものがたり",
+                            "tokens": [
+                                {"surface": "物语", "reading": "ものがたり"}
+                            ],
+                        }
+                    ],
+                    "warnings": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        client.app.state.database.update_job_state(
+            job_id,
+            status="LYRICS_PROCESSED",
+            stage="READING_REVIEW_REQUIRED",
+            progress=80,
+            lyrics_processed_path=lyrics_path,
+        )
+
+        rejected = client.post(
+            f"/api/v1/jobs/{job_id}/readings",
+            json={
+                "lines": [
+                    {
+                        "surface": "別の歌词",
+                        "tokens": [
+                            {"surface": "別の歌词", "reading": "べつのかし"}
+                        ],
+                    }
+                ]
+            },
+        )
+
+    assert rejected.status_code == 422
+
+
 def test_completed_timeline_can_be_downloaded(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         response = client.post(

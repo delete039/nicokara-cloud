@@ -1,18 +1,18 @@
 export const HOME_COPY = {
   introduction:
-    "上传原版 MV 和日语歌词：支持的浏览器会把视频保留在浏览器，仅上传音频到服务器完成识别、FA-Kara 对齐和字幕生成，再由浏览器预览与导出。",
+    "上传原版 MV 和日语歌词：支持的浏览器会把视频保留在浏览器，仅上传音频到服务器。先确认假名注音，再由 FA-Kara 生成 Mora 时间轴和字幕。",
   steps: [
     {
       title: "提交素材",
       text: "选择 MP4 视频，并粘贴歌词或上传 UTF-8 TXT / LRC 文件。",
     },
     {
-      title: "云端音频处理",
-      text: "服务器使用 UVR 分离人声，并由 FA-Kara / MMS 对齐歌词；模型无法完成时会安全降级到 Whisper 时间轴。",
+      title: "确认假名注音",
+      text: "服务器整理歌词读音后先暂停，确认或修正每个词的假名，再交给 FA-Kara 对齐。",
     },
     {
-      title: "获取结果",
-      text: "处理完成后在浏览器检查注音与时间轴，并使用 Kirakara 逻辑预览、导出视频或下载 KRL 工程。",
+      title: "对齐与导出",
+      text: "FA-Kara / MMS 使用确认后的读音生成 Mora 时间轴，完成后可在浏览器中预览、调整时间并导出。",
     },
   ],
   callToAction: "开始创建",

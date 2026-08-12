@@ -779,6 +779,57 @@ class Database:
             )
         return queued
 
+    def claim_reading_review(self, job_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET stage = 'READING_REVIEW_SAVING',
+                    progress = 80,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'LYRICS_PROCESSED'
+                  AND stage = 'READING_REVIEW_REQUIRED'
+                """,
+                (utc_now(), job_id),
+            )
+        return cursor.rowcount == 1
+
+    def queue_alignment(self, job_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'UPLOADED',
+                    stage = 'ALIGNMENT_QUEUED',
+                    progress = 80,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'LYRICS_PROCESSED'
+                  AND stage = 'READING_REVIEW_SAVING'
+                """,
+                (utc_now(), job_id),
+            )
+        queued = cursor.rowcount == 1
+        if queued:
+            self.record_event_log(
+                level="INFO",
+                category="task",
+                event="job.alignment_queued",
+                message="注音已确认，任务进入对齐队列。",
+                reference_type="job",
+                reference_id=job_id,
+                details={
+                    "status": "UPLOADED",
+                    "stage": "ALIGNMENT_QUEUED",
+                },
+            )
+        return queued
+
     def cancel_job(self, job_id: str) -> bool:
         with self.connect() as connection:
             cursor = connection.execute(
@@ -1091,6 +1142,17 @@ class Database:
     def recover_interrupted_jobs(self) -> list[str]:
         timestamp = utc_now()
         with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET stage = 'READING_REVIEW_REQUIRED',
+                    progress = 80,
+                    updated_at = ?
+                WHERE status = 'LYRICS_PROCESSED'
+                  AND stage = 'READING_REVIEW_SAVING'
+                """,
+                (timestamp,),
+            )
             rows = connection.execute(
                 "SELECT id FROM jobs WHERE status = 'PROCESSING'"
             ).fetchall()

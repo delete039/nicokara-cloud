@@ -191,6 +191,37 @@ def test_restart_marks_interrupted_jobs_failed_and_requeues_uploads(
     assert interrupted["error_code"] == "SERVICE_RESTARTED"
 
 
+def test_restart_restores_interrupted_reading_review_save(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        cleanup_enabled=False,
+    )
+    settings.prepare_directories()
+    database = Database(settings.database_path)
+    database.initialize()
+    job_id = "00000000-0000-0000-0000-000000000005"
+    create_database_job(database, settings.storage_dir, job_id)
+    database.update_job_state(
+        job_id,
+        status="LYRICS_PROCESSED",
+        stage="READING_REVIEW_REQUIRED",
+        progress=80,
+    )
+    assert database.claim_reading_review(job_id) is True
+
+    assert database.recover_interrupted_jobs() == []
+
+    restored = database.get_job(job_id)
+    assert restored is not None
+    assert restored["status"] == "LYRICS_PROCESSED"
+    assert restored["stage"] == "READING_REVIEW_REQUIRED"
+    assert restored["progress"] == 80
+
+
 def test_restart_eventually_requeues_every_uploaded_job(
     tmp_path: Path,
 ) -> None:

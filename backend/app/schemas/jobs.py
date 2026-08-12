@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobResponse(BaseModel):
@@ -27,6 +27,20 @@ class JobResponse(BaseModel):
     queue_size: int | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ReadingTokenReview(BaseModel):
+    surface: str = Field(min_length=1)
+    reading: str = Field(min_length=1)
+
+
+class ReadingLineReview(BaseModel):
+    surface: str = Field(min_length=1)
+    tokens: list[ReadingTokenReview] = Field(min_length=1)
+
+
+class ReadingReviewRequest(BaseModel):
+    lines: list[ReadingLineReview] = Field(min_length=1)
 
 
 class UploadTicketCreate(BaseModel):

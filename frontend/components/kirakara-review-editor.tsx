@@ -14,7 +14,6 @@ import {
   timelineDragOffsetMs,
   updateLineRange,
   updateMoraBoundary,
-  updateUnitReading,
 } from "@/lib/kirakara-review";
 import type {
   KirakaraLine,
@@ -288,7 +287,7 @@ export function KirakaraReviewEditor({
   return (
     <section aria-labelledby="timeline-review-heading">
       <h3 id="timeline-review-heading" className="text-base font-bold">
-        时间轴与注音检查
+        时间轴检查
       </h3>
 
       <label
@@ -309,9 +308,9 @@ export function KirakaraReviewEditor({
 
       <div
         data-review-panels="true"
-        className="mt-4 grid gap-x-5 gap-y-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(16rem,0.75fr)]"
+        className="mt-4"
       >
-        <section data-timing-panel="true" className="min-w-0 border-t pt-4 lg:h-[32rem] lg:overflow-y-auto lg:overscroll-contain lg:border-r lg:pr-5">
+        <section data-timing-panel="true" className="min-w-0 border-t pt-4">
           <div className="flex items-baseline justify-between gap-3">
             <h4 className="text-sm font-bold">设置时间轴</h4>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -471,36 +470,6 @@ export function KirakaraReviewEditor({
               <TimerReset className="size-4" />
               应用偏移
             </button>
-          </div>
-        </section>
-
-        <section data-ruby-panel="true" className="flex min-h-0 min-w-0 flex-col border-t pt-4 lg:h-[32rem]">
-          <h4 className="text-sm font-bold">设置注音</h4>
-          <div
-            data-ruby-scroll="true"
-            className="mt-3 min-h-0 flex-1 divide-y [scrollbar-gutter:stable] lg:overflow-y-auto lg:overscroll-contain lg:pr-2"
-          >
-            {line.units.map((unit, unitIndex) => (
-              <div key={`${unitIndex}-${unit.text}`} className="grid items-center gap-2 py-3 first:pt-0 sm:grid-cols-[minmax(5rem,0.7fr)_minmax(0,1.3fr)] lg:grid-cols-1">
-                <div className="min-w-0">
-                  <span className="block break-all text-sm font-semibold">{unit.text}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {seconds(unit.startMs)} - {seconds(unit.endMs)}
-                  </span>
-                </div>
-                <label className="text-xs font-medium text-muted-foreground">
-                  注音
-                  <input
-                    type="text"
-                    value={unit.reading}
-                    onChange={(event) => onChange(
-                      updateUnitReading(timeline, activeLineIndex, unitIndex, event.target.value),
-                    )}
-                    className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
-                  />
-                </label>
-              </div>
-            ))}
           </div>
         </section>
       </div>

@@ -29,3 +29,31 @@ class LyricDocument:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+
+def lyric_document_from_dict(value: dict[str, Any]) -> LyricDocument:
+    return LyricDocument(
+        provider=str(value["provider"]),
+        source_text=str(value["source_text"]),
+        lines=[
+            LyricLine(
+                source=str(line["source"]),
+                surface=str(line["surface"]),
+                reading=str(line["reading"]),
+                tokens=[
+                    LyricToken(
+                        surface=str(token["surface"]),
+                        reading=str(token["reading"]),
+                        alignment_pronunciation=(
+                            str(token["alignment_pronunciation"])
+                            if token.get("alignment_pronunciation") is not None
+                            else None
+                        ),
+                    )
+                    for token in line.get("tokens", [])
+                ],
+            )
+            for line in value.get("lines", [])
+        ],
+        warnings=[str(warning) for warning in value.get("warnings", [])],
+    )
+

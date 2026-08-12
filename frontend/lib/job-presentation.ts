@@ -71,6 +71,26 @@ export function jobPresentation(
     };
   }
   if (status === "LYRICS_PROCESSED") {
+    if (stage === "READING_REVIEW_SAVING") {
+      return {
+        eyebrow: "正在保存注音",
+        title: "正在保存假名注音",
+        description: "保存完成后将自动开始生成 FA-Kara Mora 时间轴。",
+        progressLabel: "保存注音",
+        terminal: false,
+        tone: "active",
+      };
+    }
+    if (stage === "READING_REVIEW_REQUIRED") {
+      return {
+        eyebrow: "注音待确认",
+        title: "请先确认假名注音",
+        description: "确认后将使用当前读音生成 FA-Kara Mora 时间轴。",
+        progressLabel: "等待注音确认",
+        terminal: true,
+        tone: "pending",
+      };
+    }
     return {
       eyebrow: "歌词已处理",
       title: "歌词与注音已处理",

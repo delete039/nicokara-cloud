@@ -40,6 +40,37 @@ class TranscriptDocument:
         return asdict(self)
 
 
+def transcript_document_from_dict(value: dict[str, Any]) -> TranscriptDocument:
+    return TranscriptDocument(
+        language=str(value["language"]),
+        language_probability=float(value["language_probability"]),
+        duration_seconds=float(value["duration_seconds"]),
+        text=str(value["text"]),
+        segments=[
+            TranscriptSegment(
+                id=int(segment["id"]),
+                text=str(segment["text"]),
+                start_ms=int(segment["start_ms"]),
+                end_ms=int(segment["end_ms"]),
+                confidence=float(segment["confidence"]),
+                no_speech_probability=float(
+                    segment["no_speech_probability"]
+                ),
+                words=[
+                    TranscriptWord(
+                        text=str(word["text"]),
+                        start_ms=int(word["start_ms"]),
+                        end_ms=int(word["end_ms"]),
+                        confidence=float(word["confidence"]),
+                    )
+                    for word in segment.get("words", [])
+                ],
+            )
+            for segment in value.get("segments", [])
+        ],
+    )
+
+
 ModelFactory = Callable[[str, str, str], Any]
 
 

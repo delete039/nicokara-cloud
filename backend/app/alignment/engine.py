@@ -17,6 +17,7 @@ class ResilientAlignmentEngine:
     """Use audio forced alignment when available and preserve the old fallback."""
 
     requires_vocals = True
+    requires_reading_review = True
     supports_transcriptless_alignment = True
 
     def __init__(self, *, primary: Any, fallback: Any) -> None:

@@ -1,4 +1,8 @@
 import type { Job } from "@/types/job";
+import type {
+  ProcessedLyrics,
+  ReadingReviewPayload,
+} from "@/types/job";
 import type { UploadTicket } from "@/types/upload-ticket";
 import type { CloudLyricTimeline } from "@/lib/kirakara-timeline";
 import type { TimelineReviewPayload } from "@/lib/kirakara-review";
@@ -638,6 +642,56 @@ export async function getTimeline(jobId: string): Promise<CloudLyricTimeline> {
     );
   }
   return (await response.json()) as CloudLyricTimeline;
+}
+
+export async function getProcessedLyrics(
+  jobId: string,
+): Promise<ProcessedLyrics> {
+  let response: Response;
+  try {
+    response = await fetch(processedLyricsUrl(jobId), { cache: "no-store" });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return (await response.json()) as ProcessedLyrics;
+}
+
+export async function confirmReadings(
+  jobId: string,
+  review: ReadingReviewPayload,
+): Promise<Job> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/readings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(review),
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return (await response.json()) as Job;
 }
 
 export async function getInstrumentalAudio(jobId: string): Promise<File> {

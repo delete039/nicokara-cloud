@@ -20,3 +20,30 @@ export type Job = {
   updated_at: string;
 };
 
+export type ProcessedLyricToken = {
+  surface: string;
+  reading: string;
+  alignment_pronunciation?: string | null;
+};
+
+export type ProcessedLyricLine = {
+  source: string;
+  surface: string;
+  reading: string;
+  tokens: ProcessedLyricToken[];
+};
+
+export type ProcessedLyrics = {
+  provider: string;
+  source_text: string;
+  lines: ProcessedLyricLine[];
+  warnings: string[];
+};
+
+export type ReadingReviewPayload = {
+  lines: Array<{
+    surface: string;
+    tokens: Array<{ surface: string; reading: string }>;
+  }>;
+};
+

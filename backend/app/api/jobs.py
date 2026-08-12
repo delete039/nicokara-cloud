@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import json
 import logging
 import re
 import shutil
@@ -16,6 +18,7 @@ from app.core.database import Database
 from app.core.rate_limit import resolve_client_key
 from app.schemas.jobs import (
     JobResponse,
+    ReadingReviewRequest,
     UploadChunkResponse,
     UploadChunkSessionCreate,
     UploadChunkSessionResponse,
@@ -33,6 +36,7 @@ from app.services.chunked_uploads import (
     start_chunked_upload,
 )
 from app.services.uploads import save_lyrics, save_mp4
+from app.lyrics.models import lyric_document_from_dict
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -884,6 +888,158 @@ def get_processed_lyrics(request: Request, job_id: str) -> FileResponse:
         media_type="application/json",
         filename="lyrics_processed.json",
     )
+
+
+@router.post("/{job_id}/readings", response_model=JobResponse)
+async def confirm_readings(
+    request: Request,
+    job_id: str,
+    payload: ReadingReviewRequest,
+) -> JobResponse:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    if (
+        job["status"] != "LYRICS_PROCESSED"
+        or job["stage"] != "READING_REVIEW_REQUIRED"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前任务不在注音确认阶段",
+        )
+    lyrics_path_value = job.get("lyrics_processed_path")
+    if not lyrics_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词处理文件尚未生成",
+        )
+    lyrics_path = validated_job_file(
+        settings,
+        job_id,
+        lyrics_path_value,
+    )
+    if not lyrics_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="歌词处理文件不存在",
+        )
+
+    try:
+        document = lyric_document_from_dict(
+            json.loads(lyrics_path.read_text(encoding="utf-8"))
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词处理文件无法读取",
+        ) from exc
+
+    if len(payload.lines) != len(document.lines):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="歌词行数与处理结果不一致",
+        )
+
+    reviewed_lines = []
+    for source_line, reviewed_line in zip(
+        document.lines,
+        payload.lines,
+        strict=True,
+    ):
+        if reviewed_line.surface != source_line.surface:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="歌词表面文字不允许在注音确认阶段修改",
+            )
+        if len(reviewed_line.tokens) != len(source_line.tokens):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="歌词词元数量与处理结果不一致",
+            )
+
+        reviewed_tokens = []
+        for source_token, reviewed_token in zip(
+            source_line.tokens,
+            reviewed_line.tokens,
+            strict=True,
+        ):
+            reading = reviewed_token.reading.strip()
+            if reviewed_token.surface != source_token.surface or not reading:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="只能修改非空的假名读音",
+                )
+            reviewed_tokens.append(
+                replace(
+                    source_token,
+                    reading=reading,
+                    alignment_pronunciation=(
+                        source_token.alignment_pronunciation
+                        if reading == source_token.reading
+                        else None
+                    ),
+                )
+            )
+        reviewed_lines.append(
+            replace(
+                source_line,
+                reading="".join(token.reading for token in reviewed_tokens),
+                tokens=reviewed_tokens,
+            )
+        )
+
+    reviewed_document = replace(document, lines=reviewed_lines)
+    if not database.claim_reading_review(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="注音已由其他请求确认或任务状态已变更",
+        )
+    temporary_path = lyrics_path.with_name(
+        f".{lyrics_path.name}.{uuid4().hex}.reviewed.tmp"
+    )
+    try:
+        temporary_path.write_text(
+            json.dumps(
+                reviewed_document.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(lyrics_path)
+        if not database.queue_alignment(job_id):
+            raise RuntimeError("Reading review state could not be queued")
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        database.update_job_state(
+            job_id,
+            status="LYRICS_PROCESSED",
+            stage="READING_REVIEW_REQUIRED",
+            progress=80,
+            lyrics_processed_path=lyrics_path,
+        )
+        raise
+    await enqueue_created_job(request, job_id)
+    queued_job = database.get_job(job_id)
+    if queued_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    return job_response(database, queued_job)
 
 
 @router.get("/{job_id}/timeline", response_class=FileResponse)

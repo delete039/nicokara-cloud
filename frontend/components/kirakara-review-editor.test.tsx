@@ -31,21 +31,18 @@ const timeline: KirakaraTimeline = {
 };
 
 describe("KirakaraReviewEditor", () => {
-  it("shows a visual timeline, timing controls, and ruby review fields", () => {
+  it("shows only mora timing controls after FA-Kara alignment", () => {
     const html = renderToStaticMarkup(
       <KirakaraReviewEditor timeline={timeline} onChange={vi.fn()} onSeek={vi.fn()} />,
     );
 
-    expect(html).toContain("时间轴与注音检查");
+    expect(html).toContain("时间轴检查");
     expect(html).toContain('data-current-line-selector="true"');
     expect(html).toContain('data-timing-panel="true"');
-    expect(html).toContain('data-ruby-panel="true"');
-    expect(html.match(/lg:h-\[32rem\]/g)).toHaveLength(2);
-    expect(html).toContain('data-ruby-scroll="true"');
-    expect(html).toContain("lg:overflow-y-auto");
-    expect(html).toContain("lg:grid-cols-[minmax(0,1.25fr)_minmax(16rem,0.75fr)]");
+    expect(html).not.toContain('data-ruby-panel="true"');
+    expect(html).not.toContain('data-ruby-scroll="true"');
     expect(html).toContain("设置时间轴");
-    expect(html).toContain("设置注音");
+    expect(html).not.toContain("设置注音");
     expect(html.match(/data-mora-segment=/g)).toHaveLength(2);
     expect(html).toContain('data-mora-boundary="0"');
     expect(html).toContain("きょ");
@@ -59,7 +56,6 @@ describe("KirakaraReviewEditor", () => {
     expect(html).toContain("开始时间");
     expect(html).toContain("结束时间");
     expect(html).toContain("今日");
-    expect(html).toContain("きょう");
   });
 
   it("separates crowded mora boundary handles into visual lanes", () => {

@@ -530,6 +530,42 @@ describe("submitCloudRender", () => {
   });
 });
 
+describe("confirmReadings", () => {
+  it("saves token readings before queueing alignment", async () => {
+    const queued = {
+      id: "job-1",
+      status: "UPLOADED",
+      stage: "ALIGNMENT_QUEUED",
+      progress: 80,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(queued), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { confirmReadings } = await import("./api");
+    const review = {
+      lines: [
+        {
+          surface: "君",
+          tokens: [{ surface: "君", reading: "きみ" }],
+        },
+      ],
+    };
+
+    await expect(confirmReadings("job-1", review)).resolves.toEqual(queued);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/readings",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(review),
+      }),
+    );
+  });
+});
+
 describe("cancelJob", () => {
   it("posts to the task cancellation endpoint", async () => {
     const canceledJob = {

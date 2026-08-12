@@ -71,6 +71,22 @@ describe("jobPresentation", () => {
       terminal: true,
       tone: "success",
     });
+    expect(
+      jobPresentation("LYRICS_PROCESSED", "READING_REVIEW_REQUIRED"),
+    ).toMatchObject({
+      title: "请先确认假名注音",
+      progressLabel: "等待注音确认",
+      terminal: true,
+      tone: "pending",
+    });
+    expect(
+      jobPresentation("LYRICS_PROCESSED", "READING_REVIEW_SAVING"),
+    ).toMatchObject({
+      title: "正在保存假名注音",
+      progressLabel: "保存注音",
+      terminal: false,
+      tone: "active",
+    });
     expect(jobPresentation("FAILED", "TRANSCRIBING")).toMatchObject({
       title: "歌声时间分析失败",
       terminal: true,

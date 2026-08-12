@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
 import { JobMetadata } from "@/components/job-metadata";
+import { ReadingReviewEditor } from "@/components/reading-review-editor";
 import { KirakaraPreview } from "@/components/kirakara-preview";
 import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
 import {
@@ -32,20 +33,25 @@ import { JOB_COPY } from "@/lib/ui-copy";
 import {
   ApiRequestError,
   cancelJob,
+  confirmReadings,
   downloadVideoUrl,
   getJob,
+  getProcessedLyrics,
   processedLyricsUrl,
   resultVideoUrl,
   timelineUrl,
   transcriptUrl,
 } from "@/services/api";
 import type { Job } from "@/types/job";
+import type { ProcessedLyrics } from "@/types/job";
 
 export function JobStatus({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<Job | null>(null);
   const [requestError, setRequestError] = useState<ErrorFeedback | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [canceling, setCanceling] = useState(false);
+  const [processedLyrics, setProcessedLyrics] = useState<ProcessedLyrics | null>(null);
+  const [submittingReadings, setSubmittingReadings] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -91,6 +97,28 @@ export function JobStatus({ jobId }: { jobId: string }) {
       if (timer) clearTimeout(timer);
     };
   }, [jobId, refreshKey]);
+
+  useEffect(() => {
+    if (job?.stage !== "READING_REVIEW_REQUIRED") {
+      return;
+    }
+    let active = true;
+    getProcessedLyrics(job.id)
+      .then((lyrics) => {
+        if (active) setProcessedLyrics(lyrics);
+      })
+      .catch((reason) => {
+        if (!active) return;
+        setRequestError(
+          reason instanceof ApiRequestError
+            ? reason.feedback
+            : networkErrorFeedback("job"),
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, [job?.id, job?.stage]);
 
   if (requestError && !job) {
     return (
@@ -158,6 +186,34 @@ export function JobStatus({ jobId }: { jobId: string }) {
       );
     } finally {
       setCanceling(false);
+    }
+  }
+
+  async function handleConfirmReadings() {
+    if (!processedLyrics) return;
+    setSubmittingReadings(true);
+    setRequestError(null);
+    try {
+      const queued = await confirmReadings(job.id, {
+        lines: processedLyrics.lines.map((line) => ({
+          surface: line.surface,
+          tokens: line.tokens.map((token) => ({
+            surface: token.surface,
+            reading: token.reading.trim(),
+          })),
+        })),
+      });
+      setJob(queued);
+      setProcessedLyrics(null);
+      setRefreshKey((value) => value + 1);
+    } catch (reason) {
+      setRequestError(
+        reason instanceof ApiRequestError
+          ? reason.feedback
+          : networkErrorFeedback("job"),
+      );
+    } finally {
+      setSubmittingReadings(false);
     }
   }
 
@@ -276,6 +332,15 @@ export function JobStatus({ jobId }: { jobId: string }) {
               )}
             />
           </div>
+        )}
+
+        {job.stage === "READING_REVIEW_REQUIRED" && processedLyrics && (
+          <ReadingReviewEditor
+            lyrics={processedLyrics}
+            submitting={submittingReadings}
+            onChange={setProcessedLyrics}
+            onConfirm={handleConfirmReadings}
+          />
         )}
 
         {(job.status === "TRANSCRIBED" ||
