@@ -39,6 +39,7 @@ import {
   getProcessedLyrics,
   processedLyricsUrl,
   resultVideoUrl,
+  subtitleUrl,
   timelineUrl,
   transcriptUrl,
 } from "@/services/api";
@@ -377,6 +378,16 @@ export function JobStatus({ jobId }: { jobId: string }) {
               >
                 <Download className="size-4" />
                 {JOB_COPY.downloadTimeline}
+                </a>
+              )}
+            {(job.status === "SUBTITLE_GENERATED" ||
+              job.status === "COMPLETED") && (
+              <a
+                href={subtitleUrl(job.id)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+              >
+                <Download className="size-4" />
+                {JOB_COPY.downloadAssSubtitle}
               </a>
             )}
             {(job.status === "SUBTITLE_GENERATED" ||

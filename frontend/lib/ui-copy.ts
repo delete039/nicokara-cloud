@@ -82,6 +82,7 @@ export const JOB_COPY = {
   downloadTranscript: "下载歌声识别数据",
   downloadLyrics: "下载歌词处理数据",
   downloadTimeline: "下载歌词时间轴",
+  downloadAssSubtitle: "下载 ASS 字幕",
   downloadSubtitle: "下载 Kirakara 工程 (.krl)",
   unsupportedVideo: "当前浏览器无法播放该视频，请直接下载后查看。",
   downloadVideo: "下载生成的视频",

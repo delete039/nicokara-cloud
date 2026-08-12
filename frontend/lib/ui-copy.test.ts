@@ -42,6 +42,7 @@ describe("server-facing interface copy", () => {
     expect(JOB_COPY.downloadTranscript).toBe("下载歌声识别数据");
     expect(JOB_COPY.downloadLyrics).toBe("下载歌词处理数据");
     expect(JOB_COPY.downloadTimeline).toBe("下载歌词时间轴");
+    expect(JOB_COPY.downloadAssSubtitle).toBe("下载 ASS 字幕");
     expect(JOB_COPY.downloadSubtitle).toBe("下载 Kirakara 工程 (.krl)");
     expect(JOB_COPY.queuePosition).toBe("当前排队位置");
     expect(JOB_COPY.canceling).toBe("正在取消…");
