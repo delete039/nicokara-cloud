@@ -50,6 +50,13 @@ type UploadChunkSession = {
   received_chunks: number;
 };
 
+type AudioUploadChunkSession = UploadChunkSession & {
+  received_chunk_indices: number[];
+  missing_chunk_indices: number[];
+};
+
+const AUDIO_UPLOAD_STORAGE_PREFIX = "nicokara:audio-upload:";
+
 export class ApiRequestError extends Error {
   readonly feedback: ErrorFeedback;
 
@@ -518,88 +525,190 @@ export function createJobDirect(
   });
 }
 
-export function createAudioOnlyJob(
+export async function createAudioOnlyJob(
   input: CreateAudioOnlyJobInput,
   onProgress: (progress: number) => void,
   signal?: AbortSignal,
 ): Promise<Job> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException("音频上传已取消", "AbortError"));
-      return;
+  if (signal?.aborted) throw new DOMException("音频上传已取消", "AbortError");
+  const {
+    id: submissionId,
+    storageKey,
+    resumed,
+  } = audioUploadSubmissionId(input);
+  if (resumed) {
+    const existing = await getJobByClientSubmissionIdOrNull(submissionId);
+    if (existing) {
+      clearAudioUploadSubmission(storageKey);
+      onProgress(100);
+      return existing;
     }
-    const data = new FormData();
-    data.append("audio", input.audio);
-    data.append("original_video_name", input.originalVideoName);
-    data.append(
-      "original_video_size_bytes",
-      String(input.originalVideoSizeBytes),
-    );
-    const clientSubmissionId = createClientSubmissionId();
-    data.append("client_submission_id", clientSubmissionId);
-    if (input.lyricsText?.trim()) {
-      data.append("lyrics_text", input.lyricsText.trim());
-    }
-    if (input.lyricsFile) {
-      data.append("lyrics_file", input.lyricsFile);
-    }
-    if (input.vocalMode) {
-      data.append("vocal_mode", input.vocalMode);
-    }
+  }
 
-    const xhr = new XMLHttpRequest();
-    const cleanup = () => {
-      signal?.removeEventListener("abort", abortUpload);
-    };
-    const abortUpload = () => xhr.abort();
-    xhr.open("POST", `${API_BASE}/browser/audio-jobs`);
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
+  const totalChunks = Math.max(
+    1,
+    Math.ceil(input.audio.size / UPLOAD_CHUNK_SIZE_BYTES),
+  );
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/browser/audio-uploads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        audio_name: input.audio.name,
+        audio_size_bytes: input.audio.size,
+        original_video_name: input.originalVideoName,
+        original_video_size_bytes: input.originalVideoSizeBytes,
+        chunk_size_bytes: UPLOAD_CHUNK_SIZE_BYTES,
+        total_chunks: totalChunks,
+        client_submission_id: submissionId,
+      }),
+      signal,
     });
-    const recoverSubmittedJob = async (): Promise<Job | null> => {
-      if (signal?.aborted) return null;
-      return getJobByClientSubmissionIdOrNull(clientSubmissionId);
-    };
-    xhr.addEventListener("load", async () => {
-      cleanup();
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress(100);
-        resolve(JSON.parse(xhr.responseText) as Job);
-        return;
-      }
-      if (xhr.status >= 500) {
-        const recovered = await recoverSubmittedJob();
-        if (recovered) {
-          onProgress(100);
-          resolve(recovered);
-          return;
-        }
-      }
-      reject(xhrRequestError(xhr));
-    });
-    xhr.addEventListener("error", async () => {
-      cleanup();
-      const recovered = await recoverSubmittedJob();
-      if (recovered) {
-        onProgress(100);
-        resolve(recovered);
-        return;
-      }
-      reject(connectionError("upload"));
-    });
-    xhr.addEventListener("abort", () => {
-      cleanup();
-      reject(
-        signal?.aborted
-          ? new DOMException("音频上传已取消", "AbortError")
-          : connectionError("upload"),
+  } catch {
+    if (signal?.aborted) throw new DOMException("音频上传已取消", "AbortError");
+    throw connectionError("upload");
+  }
+  if (
+    !response.ok &&
+    (response.status === 409 ||
+      response.status === 524 ||
+      response.status >= 500)
+  ) {
+    const recovered = await getJobByClientSubmissionIdOrNull(submissionId);
+    if (recovered) {
+      clearAudioUploadSubmission(storageKey);
+      onProgress(100);
+      return recovered;
+    }
+  }
+  const session = await checkedJson<AudioUploadChunkSession>(response, "upload");
+  const chunkSize = session.chunk_size_bytes;
+  let confirmedBytes = session.received_chunk_indices.reduce(
+    (total, index) =>
+      total +
+      Math.max(0, Math.min(chunkSize, input.audio.size - index * chunkSize)),
+    0,
+  );
+  onProgress(
+    Math.min(99, Math.round((confirmedBytes / input.audio.size) * 100)),
+  );
+
+  const uploadAudioChunk = (
+    index: number,
+    chunk: Blob,
+    onChunkProgress: (loadedBytes: number) => void,
+  ): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const data = new FormData();
+      data.append("chunk", chunk, `chunk-${index}.part`);
+      const xhr = new XMLHttpRequest();
+      const abortUpload = () => xhr.abort();
+      const cleanup = () => signal?.removeEventListener("abort", abortUpload);
+      xhr.open(
+        "POST",
+        `${API_BASE}/browser/audio-uploads/${session.ticket_id}/chunks/part/${index}`,
       );
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) onChunkProgress(event.loaded);
+      });
+      xhr.addEventListener("load", () => {
+        cleanup();
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(xhrRequestError(xhr));
+      });
+      xhr.addEventListener("error", () => {
+        cleanup();
+        reject(connectionError("upload"));
+      });
+      xhr.addEventListener("abort", () => {
+        cleanup();
+        reject(
+          signal?.aborted
+            ? new DOMException("音频上传已取消", "AbortError")
+            : connectionError("upload"),
+        );
+      });
+      signal?.addEventListener("abort", abortUpload, { once: true });
+      xhr.send(data);
     });
-    signal?.addEventListener("abort", abortUpload, { once: true });
-    xhr.send(data);
-  });
+
+  for (const index of session.missing_chunk_indices) {
+    const start = index * chunkSize;
+    const end = Math.min(input.audio.size, start + chunkSize);
+    const chunk = input.audio.slice(start, end);
+    for (let attempt = 1; attempt <= UPLOAD_REQUEST_ATTEMPTS; attempt += 1) {
+      try {
+        await uploadAudioChunk(index, chunk, (loadedBytes) => {
+          onProgress(
+            Math.min(
+              99,
+              Math.round(
+                ((confirmedBytes + loadedBytes) / input.audio.size) * 100,
+              ),
+            ),
+          );
+        });
+        confirmedBytes += chunk.size;
+        onProgress(
+          Math.min(99, Math.round((confirmedBytes / input.audio.size) * 100)),
+        );
+        break;
+      } catch (reason) {
+        if (
+          signal?.aborted ||
+          reason instanceof DOMException ||
+          attempt >= UPLOAD_REQUEST_ATTEMPTS ||
+          !isRetryableUploadError(reason)
+        ) {
+          throw reason;
+        }
+        await wait(1000 * attempt);
+      }
+    }
+  }
+
+  const form = new FormData();
+  if (input.lyricsText?.trim()) form.append("lyrics_text", input.lyricsText.trim());
+  if (input.lyricsFile) form.append("lyrics_file", input.lyricsFile);
+  if (input.vocalMode) form.append("vocal_mode", input.vocalMode);
+  try {
+    response = await fetch(
+      `${API_BASE}/browser/audio-uploads/${session.ticket_id}/complete`,
+      { method: "POST", cache: "no-store", body: form, signal },
+    );
+  } catch {
+    if (signal?.aborted) throw new DOMException("音频上传已取消", "AbortError");
+    const recovered = await recoverAudioJobAfterUnknownCompletion(
+      submissionId,
+      signal,
+    );
+    if (!recovered) throw connectionError("upload");
+    clearAudioUploadSubmission(storageKey);
+    onProgress(100);
+    return recovered;
+  }
+  if (
+    !response.ok &&
+    (response.status === 409 ||
+      response.status === 524 ||
+      response.status >= 500)
+  ) {
+    const recovered = await recoverAudioJobAfterUnknownCompletion(
+      submissionId,
+      signal,
+    );
+    if (recovered) {
+      clearAudioUploadSubmission(storageKey);
+      onProgress(100);
+      return recovered;
+    }
+  }
+  const job = await checkedJson<Job>(response, "upload");
+  clearAudioUploadSubmission(storageKey);
+  onProgress(100);
+  return job;
 }
 
 export async function getJob(jobId: string): Promise<Job> {
@@ -642,6 +751,63 @@ export async function getTimeline(jobId: string): Promise<CloudLyricTimeline> {
     );
   }
   return (await response.json()) as CloudLyricTimeline;
+}
+
+function audioUploadStorageKey(input: CreateAudioOnlyJobInput): string {
+  return `${AUDIO_UPLOAD_STORAGE_PREFIX}${[
+    input.audio.name,
+    input.audio.size,
+    input.audio.lastModified,
+    input.originalVideoName,
+    input.originalVideoSizeBytes,
+  ].join(":")}`;
+}
+
+function audioUploadSubmissionId(input: CreateAudioOnlyJobInput): {
+  id: string;
+  storageKey: string;
+  resumed: boolean;
+} {
+  const storageKey = audioUploadStorageKey(input);
+  let stored: string | null = null;
+  try {
+    stored = globalThis.localStorage?.getItem(storageKey) ?? null;
+  } catch {
+    stored = null;
+  }
+  const id = stored || createClientSubmissionId();
+  if (!stored) {
+    try {
+      globalThis.localStorage?.setItem(storageKey, id);
+    } catch {
+      // The current upload still works when persistent storage is blocked.
+    }
+  }
+  return { id, storageKey, resumed: Boolean(stored) };
+}
+
+function clearAudioUploadSubmission(storageKey: string): void {
+  try {
+    globalThis.localStorage?.removeItem(storageKey);
+  } catch {
+    // A completed task does not depend on clearing browser storage.
+  }
+}
+
+async function recoverAudioJobAfterUnknownCompletion(
+  clientSubmissionId: string,
+  signal?: AbortSignal,
+): Promise<Job | null> {
+  const deadline = Date.now() + UPLOAD_RECOVERY_TIMEOUT_MS;
+  while (true) {
+    const recovered = await getJobByClientSubmissionIdOrNull(clientSubmissionId);
+    if (recovered) return recovered;
+    if (signal?.aborted) {
+      throw new DOMException("音频上传已取消", "AbortError");
+    }
+    if (Date.now() >= deadline) return null;
+    await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS);
+  }
 }
 
 export async function getProcessedLyrics(

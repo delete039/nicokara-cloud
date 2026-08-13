@@ -1361,3 +1361,38 @@ def test_pipeline_does_not_expose_raw_exception_details(tmp_path: Path) -> None:
     assert job["error_message"] == (
         "服务器未能生成歌声时间信息。请使用任务 ID 查询语音分析日志。"
     )
+
+
+def test_pipeline_classifies_missing_ffmpeg_as_server_tool_failure(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    audio_module = importlib.import_module("app.video.audio")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "job"
+    job_id = create_uploaded_job(database, job_dir)
+
+    class MissingFFmpegExtractor:
+        def extract(self, input_path: Path, output_path: Path) -> None:
+            raise audio_module.FFmpegUnavailableError(
+                "FFmpeg command is not available"
+            )
+
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=MissingFFmpegExtractor(),
+        transcriber=FakeTranscriber(),
+    )
+
+    with pytest.raises(audio_module.FFmpegUnavailableError):
+        pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "FAILED"
+    assert job["stage"] == "EXTRACTING_AUDIO"
+    assert job["error_code"] == "FFMPEG_UNAVAILABLE"
+    assert job["error_message"] == (
+        "服务器音视频处理工具不可用，请管理员检查 FFmpeg 安装和配置。"
+    )

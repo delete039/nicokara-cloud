@@ -41,7 +41,7 @@ describe("MobileSubmissionProgress", () => {
     expect(html).not.toContain("取消本地处理");
   });
 
-  it("states that only audio and lyrics are sent during audio upload", async () => {
+  it("explains chunk retries and resume behavior during audio upload", async () => {
     const progress = await loadProgressComponent();
     expect(progress).not.toBeNull();
     if (!progress) return;
@@ -54,7 +54,10 @@ describe("MobileSubmissionProgress", () => {
     );
 
     expect(html).toContain("正在上传音频");
-    expect(html).toContain("只发送音频和歌词");
+    expect(html).toContain("8 MiB 分片");
+    expect(html).toContain("自动重试");
+    expect(html).toContain("继续");
+    expect(html).toContain("原始视频保留在此设备");
     expect(html).toContain("64%");
   });
 });

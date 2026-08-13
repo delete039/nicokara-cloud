@@ -20,6 +20,76 @@ from app.vocal.mdx import MDXNetVocalRemover
 from app.vocal.remover import VocalRemover
 
 
+@pytest.fixture(autouse=True)
+def _assume_processing_runtime_is_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.main.validate_processing_runtime",
+        lambda settings: None,
+    )
+
+
+def test_app_rejects_incomplete_processing_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+    )
+
+    def reject_runtime(settings: Settings) -> None:
+        raise RuntimeError(
+            "Processing runtime is incomplete: missing faster-whisper"
+        )
+
+    monkeypatch.setattr(
+        "app.main.validate_processing_runtime",
+        reject_runtime,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="missing faster-whisper",
+    ):
+        with TestClient(create_app(settings)):
+            pass
+
+
+def test_app_skips_processing_runtime_check_for_injected_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+    )
+
+    def reject_runtime(settings: Settings) -> None:
+        raise AssertionError("runtime check should be skipped")
+
+    monkeypatch.setattr(
+        "app.main.validate_processing_runtime",
+        reject_runtime,
+    )
+
+    class StubRunner:
+        can_accept = True
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def enqueue(self, job_id: str) -> None:
+            return None
+
+    with TestClient(create_app(settings, runner=StubRunner())):
+        pass
+
+
 def test_app_builds_local_runner_when_processing_is_enabled(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",

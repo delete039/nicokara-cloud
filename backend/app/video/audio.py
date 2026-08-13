@@ -9,6 +9,10 @@ class AudioExtractionError(RuntimeError):
     """Raised when FFmpeg cannot produce the analysis audio."""
 
 
+class FFmpegUnavailableError(AudioExtractionError):
+    """Raised when the configured FFmpeg executable cannot be started."""
+
+
 class FFmpegAudioExtractor:
     def __init__(
         self,
@@ -42,6 +46,11 @@ class FFmpegAudioExtractor:
                 text=True,
                 timeout=self.timeout_seconds,
             )
+        except FileNotFoundError as exc:
+            output_path.unlink(missing_ok=True)
+            raise FFmpegUnavailableError(
+                "FFmpeg command is not available. Check NICOKARA_FFMPEG_PATH."
+            ) from exc
         except subprocess.CalledProcessError as exc:
             output_path.unlink(missing_ok=True)
             detail = (exc.stderr or "FFmpeg exited with an error").strip()
@@ -71,6 +80,11 @@ class FFmpegAudioExtractor:
                 text=True,
                 timeout=self.timeout_seconds,
             )
+        except FileNotFoundError as exc:
+            output_path.unlink(missing_ok=True)
+            raise FFmpegUnavailableError(
+                "FFmpeg command is not available. Check NICOKARA_FFMPEG_PATH."
+            ) from exc
         except subprocess.CalledProcessError as exc:
             output_path.unlink(missing_ok=True)
             detail = (exc.stderr or "FFmpeg exited with an error").strip()

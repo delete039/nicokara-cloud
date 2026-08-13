@@ -166,6 +166,186 @@ describe("createJob", () => {
 });
 
 describe("createAudioOnlyJob", () => {
+  it("resumes an audio upload by sending only missing chunks", async () => {
+    const clientSubmissionId = "11111111-2222-4333-8444-555555555555";
+    const audio = new File([new Uint8Array(17 * 1024 * 1024)], "song.audio.m4a", {
+      type: "audio/mp4",
+    });
+    const session = {
+      ticket_id: "audio-ticket-1",
+      status: "UPLOADING",
+      chunk_size_bytes: 8 * 1024 * 1024,
+      total_chunks: 3,
+      received_chunks: 2,
+      received_chunk_indices: [0, 2],
+      missing_chunk_indices: [1],
+    };
+    const completedJob = {
+      id: "job-audio-resumed",
+      status: "UPLOADED",
+      stage: "UPLOAD_COMPLETE",
+      progress: 100,
+      input_mode: "AUDIO_ONLY",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(session), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(completedJob), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    class FakeXMLHttpRequest {
+      static instances: FakeXMLHttpRequest[] = [];
+
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly send = vi.fn(() => {
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      readonly abort = vi.fn();
+      readonly getResponseHeader = vi.fn(() => null);
+      status = 200;
+      responseText = "{}";
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      constructor() {
+        FakeXMLHttpRequest.instances.push(this);
+      }
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => clientSubmissionId),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const { createAudioOnlyJob } = await import("./api");
+
+    await expect(
+      createAudioOnlyJob(
+        {
+          audio,
+          originalVideoName: "song.mp4",
+          originalVideoSizeBytes: 120 * 1024 * 1024,
+          lyricsText: "lyrics",
+        },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject(completedJob);
+
+    expect(FakeXMLHttpRequest.instances).toHaveLength(1);
+    expect(FakeXMLHttpRequest.instances[0].open).toHaveBeenCalledWith(
+      "POST",
+      "/api/v1/browser/audio-uploads/audio-ticket-1/chunks/part/1",
+    );
+  });
+
+  it("retries an interrupted audio chunk up to three attempts", async () => {
+    const clientSubmissionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const session = {
+      ticket_id: clientSubmissionId,
+      status: "UPLOADING",
+      chunk_size_bytes: 8 * 1024 * 1024,
+      total_chunks: 1,
+      received_chunks: 0,
+      received_chunk_indices: [],
+      missing_chunk_indices: [0],
+    };
+    const completedJob = {
+      id: "job-after-retry",
+      status: "UPLOADED",
+      stage: "UPLOAD_COMPLETE",
+      progress: 100,
+      input_mode: "AUDIO_ONLY",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(session), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(completedJob), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    class RetryXMLHttpRequest {
+      static instances: RetryXMLHttpRequest[] = [];
+
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly abort = vi.fn();
+      readonly getResponseHeader = vi.fn(() => null);
+      status = 0;
+      responseText = "";
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      constructor() {
+        RetryXMLHttpRequest.instances.push(this);
+      }
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+
+      send() {
+        if (RetryXMLHttpRequest.instances.length < 3) {
+          this.listeners.error?.forEach((listener) => listener());
+          return;
+        }
+        this.status = 200;
+        this.listeners.load?.forEach((listener) => listener());
+      }
+    }
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => clientSubmissionId),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      RetryXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const { createAudioOnlyJob } = await import("./api");
+
+    await expect(
+      createAudioOnlyJob(
+        {
+          audio: new File(["audio"], "song.audio.m4a", {
+            type: "audio/mp4",
+          }),
+          originalVideoName: "song.mp4",
+          originalVideoSizeBytes: 1024,
+          lyricsText: "lyrics",
+        },
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject(completedJob);
+    expect(RetryXMLHttpRequest.instances).toHaveLength(3);
+  });
+
   it("uploads audio and original video metadata without sending the video", async () => {
     const audioOnlyJob = {
       id: "job-audio-1",
@@ -181,24 +361,45 @@ describe("createAudioOnlyJob", () => {
       created_at: "2026-08-06T00:00:00Z",
       updated_at: "2026-08-06T00:00:00Z",
     };
+    const session = {
+      ticket_id: "audio-ticket-new",
+      status: "UPLOADING",
+      chunk_size_bytes: 8 * 1024 * 1024,
+      total_chunks: 1,
+      received_chunks: 0,
+      received_chunk_indices: [],
+      missing_chunk_indices: [0],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(session), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(audioOnlyJob), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
     class FakeXMLHttpRequest {
       readonly upload = { addEventListener: vi.fn() };
       readonly open = vi.fn((method: string, url: string) => {
         expect(method).toBe("POST");
-        expect(url).toBe("/api/v1/browser/audio-jobs");
+        expect(url).toBe(
+          "/api/v1/browser/audio-uploads/audio-ticket-new/chunks/part/0",
+        );
       });
       readonly getResponseHeader = vi.fn(() => null);
       readonly send = vi.fn((body: FormData) => {
-        expect(body.get("audio")).toBeInstanceOf(File);
-        expect(body.get("original_video_name")).toBe("song.mp4");
-        expect(body.get("original_video_size_bytes")).toBe(
-          String(120 * 1024 * 1024),
-        );
+        expect(body.get("chunk")).toBeInstanceOf(Blob);
         expect(body.has("video")).toBe(false);
         this.listeners.load?.forEach((listener) => listener());
       });
-      status = 201;
-      responseText = JSON.stringify(audioOnlyJob);
+      status = 200;
+      responseText = "{}";
       private readonly listeners: Record<string, Array<() => void>> = {};
 
       addEventListener(type: string, listener: () => void) {
@@ -210,6 +411,7 @@ describe("createAudioOnlyJob", () => {
       "XMLHttpRequest",
       FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
     );
+    vi.stubGlobal("fetch", fetchMock);
     const api = await import("./api");
 
     expect(api.createAudioOnlyJob).toBeTypeOf("function");
@@ -225,6 +427,20 @@ describe("createAudioOnlyJob", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject({ input_mode: "AUDIO_ONLY" });
+
+    const createRequest = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect(createRequest).toMatchObject({
+      audio_name: "song.wav",
+      audio_size_bytes: 5,
+      original_video_name: "song.mp4",
+      original_video_size_bytes: 120 * 1024 * 1024,
+    });
+    const completeBody = (fetchMock.mock.calls[1][1] as RequestInit)
+      .body as FormData;
+    expect(completeBody.get("lyrics_text")).toBe("lyrics");
+    expect(completeBody.has("video")).toBe(false);
   });
 
   it("aborts the audio upload when its signal is canceled", async () => {
@@ -256,6 +472,23 @@ describe("createAudioOnlyJob", () => {
       "XMLHttpRequest",
       FakeXMLHttpRequest as unknown as typeof XMLHttpRequest,
     );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ticket_id: "audio-ticket-abort",
+            status: "UPLOADING",
+            chunk_size_bytes: 8 * 1024 * 1024,
+            total_chunks: 1,
+            received_chunks: 0,
+            received_chunk_indices: [],
+            missing_chunk_indices: [0],
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
     const api = await import("./api");
 
     const request = api.createAudioOnlyJob(
@@ -268,11 +501,15 @@ describe("createAudioOnlyJob", () => {
       vi.fn(),
       controller.signal,
     );
+    const rejection = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => {
+      expect(FakeXMLHttpRequest.instance).toBeDefined();
+    });
     controller.abort();
 
     const xhr = FakeXMLHttpRequest.instance;
     expect(xhr.abort).toHaveBeenCalledOnce();
-    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await rejection;
   });
 
   it("recovers an audio-only task by submission ID after a 524 timeout", async () => {
@@ -284,16 +521,24 @@ describe("createAudioOnlyJob", () => {
       progress: 100,
       input_mode: "AUDIO_ONLY",
     };
+    const session = {
+      ticket_id: clientSubmissionId,
+      status: "UPLOADING",
+      chunk_size_bytes: 8 * 1024 * 1024,
+      total_chunks: 1,
+      received_chunks: 0,
+      received_chunk_indices: [],
+      missing_chunk_indices: [0],
+    };
     class FakeXMLHttpRequest {
       readonly upload = { addEventListener: vi.fn() };
       readonly open = vi.fn();
       readonly getResponseHeader = vi.fn(() => null);
-      readonly send = vi.fn((body: FormData) => {
-        expect(body.get("client_submission_id")).toBe(clientSubmissionId);
+      readonly send = vi.fn(() => {
         this.listeners.load?.forEach((listener) => listener());
       });
-      status = 524;
-      responseText = "<!DOCTYPE html><title>A timeout occurred</title>";
+      status = 200;
+      responseText = "{}";
       private readonly listeners: Record<string, Array<() => void>> = {};
 
       addEventListener(type: string, listener: () => void) {
@@ -304,12 +549,25 @@ describe("createAudioOnlyJob", () => {
     vi.stubGlobal("crypto", { randomUUID: vi.fn(() => clientSubmissionId) });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(recoveredJob), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(session), {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response("<!DOCTYPE html><title>A timeout occurred</title>", {
+            status: 524,
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(recoveredJob), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
     );
     vi.stubGlobal(
       "XMLHttpRequest",

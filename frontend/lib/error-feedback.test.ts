@@ -127,6 +127,36 @@ describe("httpErrorFeedback", () => {
 });
 
 describe("jobFailureFeedback", () => {
+  it("does not blame the video when browser-extracted audio cannot be decoded", () => {
+    const feedback = jobFailureFeedback(
+      "AUDIO_EXTRACTION_FAILED",
+      "EXTRACTING_AUDIO",
+      null,
+      "job-audio-only",
+      "AUDIO_ONLY",
+    );
+
+    expect(feedback.description).toContain("音频");
+    expect(feedback.solutions.join(" ")).toContain("FFmpeg");
+    expect(JSON.stringify(feedback)).not.toContain("H.264");
+    expect(JSON.stringify(feedback)).not.toContain("重新编码视频");
+  });
+
+  it("reports a missing FFmpeg installation as a server configuration error", () => {
+    const feedback = jobFailureFeedback(
+      "FFMPEG_UNAVAILABLE",
+      "EXTRACTING_AUDIO",
+      null,
+      "job-missing-ffmpeg",
+      "AUDIO_ONLY",
+    );
+
+    expect(feedback.title).toBe("服务器音视频处理工具不可用");
+    expect(feedback.description).toContain("FFmpeg");
+    expect(feedback.solutions.join(" ")).toContain("NICOKARA_FFMPEG_PATH");
+    expect(JSON.stringify(feedback)).not.toContain("视频编码");
+  });
+
   it("offers the ON VOCAL fallback when MDX vocal removal fails", () => {
     const feedback = jobFailureFeedback(
       "VOCAL_REMOVAL_FAILED",

@@ -200,7 +200,9 @@ export function JobStatus({ jobId }: { jobId: string }) {
           surface: line.surface,
           tokens: line.tokens.map((token) => ({
             surface: token.surface,
-            reading: token.reading.trim(),
+            reading: token.surface.trim().length === 0
+              ? token.reading
+              : token.reading.trim(),
           })),
         })),
       });
@@ -330,6 +332,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
                 job.stage,
                 job.error_message,
                 job.id,
+                job.input_mode,
               )}
             />
           </div>

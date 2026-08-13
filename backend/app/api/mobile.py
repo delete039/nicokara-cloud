@@ -5,7 +5,16 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from app.api.jobs import (
     client_key_from_request,
@@ -21,7 +30,23 @@ from app.alignment.review import (
     apply_timeline_review,
     lyric_timeline_from_dict,
 )
-from app.schemas.jobs import JobResponse
+from app.schemas.jobs import (
+    AudioUploadSessionCreate,
+    AudioUploadSessionResponse,
+    JobResponse,
+    UploadChunkResponse,
+)
+from app.services.chunked_uploads import (
+    acquire_completion_lock,
+    assemble_chunked_audio,
+    missing_chunk_indices,
+    read_chunked_upload_metadata,
+    received_chunk_indices,
+    remove_chunked_upload,
+    save_upload_chunk,
+    start_chunked_upload,
+    touch_chunked_upload,
+)
 from app.services.uploads import save_audio, save_lyrics, save_mp4
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
 
@@ -29,6 +54,246 @@ from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenera
 router = APIRouter(tags=["browser processing"])
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 MAX_LOCAL_MEDIA_BYTES = 300 * 1024 * 1024
+AUDIO_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def audio_upload_response(
+    settings,
+    ticket_id: str,
+    metadata: dict,
+) -> AudioUploadSessionResponse:
+    received = received_chunk_indices(settings.storage_dir, ticket_id)
+    missing = missing_chunk_indices(settings.storage_dir, ticket_id)
+    return AudioUploadSessionResponse(
+        ticket_id=ticket_id,
+        status="UPLOADING",
+        chunk_size_bytes=int(metadata["chunk_size_bytes"]),
+        total_chunks=int(metadata["total_chunks"]),
+        received_chunks=len(received),
+        received_chunk_indices=received,
+        missing_chunk_indices=missing,
+    )
+
+
+@router.post(
+    "/browser/audio-uploads",
+    response_model=AudioUploadSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_or_resume_audio_upload(
+    request: Request,
+    payload: AudioUploadSessionCreate,
+    response: Response,
+) -> AudioUploadSessionResponse:
+    settings, database = services(request)
+    submission_id = normalized_client_submission_id(payload.client_submission_id)
+    if submission_id is None:
+        raise HTTPException(status_code=400, detail="client_submission_id is required.")
+    if database.get_job_by_client_submission_id(submission_id) is not None:
+        raise HTTPException(status_code=409, detail="Client submission already created a job.")
+
+    original_video_name = safe_display_name(payload.original_video_name)
+    if Path(original_video_name).suffix.lower() != ".mp4":
+        raise HTTPException(status_code=422, detail="original_video_name must identify an MP4 video.")
+    if not 0 < payload.original_video_size_bytes <= MAX_LOCAL_MEDIA_BYTES:
+        raise HTTPException(status_code=413, detail="本地素材必须小于或等于 300 MB")
+
+    audio_name = safe_display_name(payload.audio_name)
+    audio_suffix = Path(audio_name).suffix.lower()
+    if audio_suffix not in SUPPORTED_AUDIO_SUFFIXES:
+        raise HTTPException(status_code=415, detail="仅支持 WAV、MP3、M4A、AAC、FLAC 或 OGG 音频")
+    if not 0 < payload.audio_size_bytes <= settings.max_audio_bytes:
+        raise HTTPException(status_code=413, detail="音频文件超过大小限制")
+    if payload.chunk_size_bytes != AUDIO_UPLOAD_CHUNK_BYTES:
+        raise HTTPException(status_code=400, detail="音频分片大小必须为 8 MiB")
+
+    ticket_id = submission_id
+    try:
+        metadata = read_chunked_upload_metadata(settings.storage_dir, ticket_id)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        metadata = start_chunked_upload(
+            settings.storage_dir,
+            ticket_id,
+            video_name=audio_name,
+            video_size_bytes=payload.audio_size_bytes,
+            chunk_size_bytes=payload.chunk_size_bytes,
+            total_chunks=payload.total_chunks,
+            extra_metadata={
+                "upload_kind": "audio",
+                "original_video_name": original_video_name,
+                "original_video_size_bytes": payload.original_video_size_bytes,
+                "client_key": client_key_from_request(request, settings),
+                "client_submission_id": submission_id,
+            },
+        )
+    else:
+        response.status_code = status.HTTP_200_OK
+        expected = {
+            "upload_kind": "audio",
+            "video_name": audio_name,
+            "video_size_bytes": payload.audio_size_bytes,
+            "chunk_size_bytes": payload.chunk_size_bytes,
+            "total_chunks": payload.total_chunks,
+            "original_video_name": original_video_name,
+            "original_video_size_bytes": payload.original_video_size_bytes,
+            "client_submission_id": submission_id,
+        }
+        if any(metadata.get(key) != value for key, value in expected.items()):
+            raise HTTPException(status_code=409, detail="Audio upload session metadata does not match.")
+        touch_chunked_upload(settings.storage_dir, ticket_id)
+    return audio_upload_response(settings, ticket_id, metadata)
+
+
+@router.post(
+    "/browser/audio-uploads/{ticket_id}/chunks/part/{chunk_index}",
+    response_model=UploadChunkResponse,
+)
+async def upload_audio_chunk(
+    request: Request,
+    ticket_id: str,
+    chunk_index: int,
+    chunk: UploadFile = File(...),
+) -> UploadChunkResponse:
+    try:
+        normalized_client_submission_id(ticket_id)
+    except HTTPException:
+        await chunk.close()
+        raise
+    settings, _ = services(request)
+    try:
+        metadata = read_chunked_upload_metadata(settings.storage_dir, ticket_id)
+    except HTTPException:
+        await chunk.close()
+        raise
+    if metadata.get("upload_kind") != "audio":
+        await chunk.close()
+        raise HTTPException(status_code=404, detail="Audio upload session does not exist.")
+    result = await save_upload_chunk(
+        settings.storage_dir,
+        ticket_id,
+        chunk_index,
+        chunk,
+    )
+    return UploadChunkResponse(
+        ticket_id=ticket_id,
+        chunk_index=chunk_index,
+        received_chunks=result["received_chunks"],
+        total_chunks=result["total_chunks"],
+    )
+
+
+@router.post(
+    "/browser/audio-uploads/{ticket_id}/complete",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_audio_upload(
+    request: Request,
+    ticket_id: str,
+    lyrics_text: str | None = Form(default=None),
+    lyrics_file: UploadFile | None = File(default=None),
+    vocal_mode: str = Form(default="on"),
+) -> JobResponse:
+    try:
+        normalized_client_submission_id(ticket_id)
+    except HTTPException:
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        raise
+    settings, database = services(request)
+    existing = database.get_job_by_client_submission_id(ticket_id)
+    if existing is not None:
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+        return job_response(database, existing)
+    try:
+        metadata = read_chunked_upload_metadata(settings.storage_dir, ticket_id)
+    except HTTPException:
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        raise
+    if metadata.get("upload_kind") != "audio":
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        raise HTTPException(status_code=404, detail="Audio upload session does not exist.")
+    missing = missing_chunk_indices(settings.storage_dir, ticket_id)
+    if missing:
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        raise HTTPException(status_code=409, detail="Audio upload chunks are incomplete.")
+    try:
+        completion_lock = acquire_completion_lock(settings.storage_dir, ticket_id)
+    except Exception:
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        raise
+
+    reservation = None
+    job_id = str(uuid4())
+    job_dir = settings.storage_dir / job_id
+    audio_suffix = Path(str(metadata["video_name"])).suffix.lower()
+    audio_path = job_dir / f"input_audio{audio_suffix}"
+    lyrics_path = job_dir / "lyrics.txt"
+    created = False
+    try:
+        reservation = request.app.state.active_job_limiter.reserve(
+            str(metadata["client_key"])
+        )
+        saved = assemble_chunked_audio(
+            settings.storage_dir,
+            ticket_id,
+            audio_path,
+            max_bytes=settings.max_audio_bytes,
+        )
+        lyrics_source = await save_lyrics(
+            lyrics_text=lyrics_text,
+            lyrics_file=lyrics_file,
+            destination=lyrics_path,
+            max_bytes=settings.max_lyrics_bytes,
+        )
+        if lyrics_source is None:
+            raise HTTPException(status_code=422, detail="音频任务必须提供歌词")
+        job = database.create_job(
+            job_id=job_id,
+            original_video_name=str(metadata["original_video_name"]),
+            video_size_bytes=int(metadata["original_video_size_bytes"]),
+            video_sha256=saved.sha256,
+            video_path=saved.path,
+            client_key=str(metadata["client_key"]),
+            lyrics_source=lyrics_source,
+            lyrics_path=lyrics_path,
+            vocal_mode=vocal_mode,
+            client_submission_id=ticket_id,
+            input_mode="AUDIO_ONLY",
+            source_upload_size_bytes=saved.size_bytes,
+            source_upload_sha256=saved.sha256,
+        )
+        created = True
+        reservation.commit()
+        reservation = None
+        await enqueue_created_job(request, job_id)
+        remove_chunked_upload(settings.storage_dir, ticket_id)
+    except ActiveJobLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many active jobs for this client. Try again later.",
+            headers={"Retry-After": "60"},
+        ) from exc
+    except Exception:
+        if created:
+            database.delete_job(job_id)
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+    finally:
+        if reservation is not None:
+            reservation.release()
+        if lyrics_file is not None:
+            await lyrics_file.close()
+        completion_lock.unlink(missing_ok=True)
+    return job_response(database, database.get_job(job_id) or job)
 
 
 @router.post(

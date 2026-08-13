@@ -89,3 +89,20 @@ raise SystemExit(3)
         extractor.extract(tmp_path / "input.mp4", output_path)
 
     assert not output_path.exists()
+
+
+def test_missing_ffmpeg_is_reported_as_unavailable_tool(tmp_path: Path) -> None:
+    audio_module = importlib.import_module("app.video.audio")
+    output_path = tmp_path / "audio.wav"
+    extractor = audio_module.FFmpegAudioExtractor(
+        command=(str(tmp_path / "missing-ffmpeg.exe"),),
+        timeout_seconds=5,
+    )
+
+    with pytest.raises(
+        audio_module.FFmpegUnavailableError,
+        match="FFmpeg",
+    ):
+        extractor.extract(tmp_path / "input.m4a", output_path)
+
+    assert not output_path.exists()

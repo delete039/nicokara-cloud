@@ -31,7 +31,7 @@ class JobResponse(BaseModel):
 
 class ReadingTokenReview(BaseModel):
     surface: str = Field(min_length=1)
-    reading: str = Field(min_length=1)
+    reading: str
 
 
 class ReadingLineReview(BaseModel):
@@ -82,6 +82,26 @@ class UploadChunkResponse(BaseModel):
     chunk_index: int
     received_chunks: int
     total_chunks: int
+
+
+class AudioUploadSessionCreate(BaseModel):
+    audio_name: str
+    audio_size_bytes: int
+    original_video_name: str
+    original_video_size_bytes: int
+    chunk_size_bytes: int
+    total_chunks: int
+    client_submission_id: str
+
+
+class AudioUploadSessionResponse(BaseModel):
+    ticket_id: str
+    status: str
+    chunk_size_bytes: int
+    total_chunks: int
+    received_chunks: int
+    received_chunk_indices: list[int]
+    missing_chunk_indices: list[int]
 
 
 class HealthResponse(BaseModel):

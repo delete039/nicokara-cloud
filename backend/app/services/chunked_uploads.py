@@ -6,10 +6,16 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
 
-from app.services.uploads import CHUNK_SIZE, SavedUpload, looks_like_mp4
+from app.services.uploads import (
+    CHUNK_SIZE,
+    SavedUpload,
+    looks_like_audio,
+    looks_like_mp4,
+)
 
 
 MAX_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
@@ -35,6 +41,53 @@ def remove_chunked_upload(storage_dir: Path, ticket_id: str) -> None:
     shutil.rmtree(session_dir, ignore_errors=True)
 
 
+def touch_chunked_upload(storage_dir: Path, ticket_id: str) -> None:
+    metadata_path = upload_session_dir(storage_dir, ticket_id) / "metadata.json"
+    try:
+        os.utime(metadata_path, None)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload chunk session does not exist.",
+        ) from exc
+
+
+def remove_stale_audio_uploads(
+    storage_dir: Path,
+    *,
+    cutoff_timestamp: float,
+) -> list[str]:
+    root = upload_sessions_root(storage_dir)
+    if not root.is_dir():
+        return []
+
+    removed: list[str] = []
+    for session_dir in root.iterdir():
+        if not session_dir.is_dir():
+            continue
+        metadata_path = session_dir / "metadata.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        if metadata.get("upload_kind") != "audio":
+            continue
+
+        activity_paths = [metadata_path]
+        chunks_dir = session_dir / "chunks"
+        if chunks_dir.is_dir():
+            activity_paths.extend(chunks_dir.glob("*.part"))
+        try:
+            last_activity = max(path.stat().st_mtime for path in activity_paths)
+        except OSError:
+            continue
+        if last_activity >= cutoff_timestamp:
+            continue
+        shutil.rmtree(session_dir, ignore_errors=True)
+        removed.append(session_dir.name)
+    return removed
+
+
 def acquire_completion_lock(storage_dir: Path, ticket_id: str) -> Path:
     lock_path = upload_session_dir(storage_dir, ticket_id) / "complete.lock"
     try:
@@ -57,6 +110,7 @@ def start_chunked_upload(
     video_size_bytes: int,
     chunk_size_bytes: int,
     total_chunks: int,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if video_size_bytes <= 0:
         raise HTTPException(
@@ -87,6 +141,7 @@ def start_chunked_upload(
         "video_size_bytes": video_size_bytes,
         "chunk_size_bytes": chunk_size_bytes,
         "total_chunks": total_chunks,
+        **(extra_metadata or {}),
     }
     (session_dir / "metadata.json").write_text(
         json.dumps(metadata),
@@ -130,6 +185,15 @@ def received_chunk_count(storage_dir: Path, ticket_id: str) -> int:
     return sum(1 for path in chunks_dir.glob("*.part") if path.is_file())
 
 
+def received_chunk_indices(storage_dir: Path, ticket_id: str) -> list[int]:
+    metadata = read_chunked_upload_metadata(storage_dir, ticket_id)
+    return [
+        index
+        for index in range(int(metadata["total_chunks"]))
+        if chunk_path(storage_dir, ticket_id, index).is_file()
+    ]
+
+
 def missing_chunk_indices(storage_dir: Path, ticket_id: str) -> list[int]:
     metadata = read_chunked_upload_metadata(storage_dir, ticket_id)
     total_chunks = int(metadata["total_chunks"])
@@ -163,9 +227,12 @@ async def save_upload_chunk(
         if chunk_index == total_chunks - 1
         else chunk_size_bytes
     )
+    touch_chunked_upload(storage_dir, ticket_id)
     destination = chunk_path(storage_dir, ticket_id, chunk_index)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(".tmp")
+    temporary = destination.with_name(
+        f"{destination.name}.{uuid4().hex}.tmp"
+    )
     total = 0
 
     try:
@@ -184,6 +251,7 @@ async def save_upload_chunk(
                 detail="Upload chunk size does not match the session.",
             )
         temporary.replace(destination)
+        touch_chunked_upload(storage_dir, ticket_id)
     finally:
         await upload.close()
         if temporary.exists():
@@ -245,6 +313,62 @@ def assemble_chunked_mp4(
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="File content is not a valid MP4 container.",
+            )
+        return SavedUpload(destination, total, digest.hexdigest())
+    except Exception:
+        shutil.rmtree(destination.parent, ignore_errors=True)
+        raise
+
+
+def assemble_chunked_audio(
+    storage_dir: Path,
+    ticket_id: str,
+    destination: Path,
+    *,
+    max_bytes: int,
+) -> SavedUpload:
+    metadata = read_chunked_upload_metadata(storage_dir, ticket_id)
+    missing = missing_chunk_indices(storage_dir, ticket_id)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Audio upload chunks are incomplete.",
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    digest = hashlib.sha256()
+    header = bytearray()
+    total = 0
+    suffix = destination.suffix.lower()
+    try:
+        with destination.open("wb") as output:
+            for index in range(int(metadata["total_chunks"])):
+                with chunk_path(storage_dir, ticket_id, index).open("rb") as chunk:
+                    while data := chunk.read(CHUNK_SIZE):
+                        total += len(data)
+                        if total > max_bytes:
+                            raise HTTPException(
+                                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                                detail="Audio file exceeds the size limit.",
+                            )
+                        if len(header) < 32:
+                            header.extend(data[: 32 - len(header)])
+                        digest.update(data)
+                        output.write(data)
+        if total == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Audio file is empty.",
+            )
+        if total != int(metadata["video_size_bytes"]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Merged audio size does not match the session.",
+            )
+        if not looks_like_audio(bytes(header), suffix):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="File content is not a supported audio format.",
             )
         return SavedUpload(destination, total, digest.hexdigest())
     except Exception:

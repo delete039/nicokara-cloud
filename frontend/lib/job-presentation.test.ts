@@ -191,6 +191,18 @@ describe("jobPresentation", () => {
     });
   });
 
+  it("describes audio-only extraction failures as audio conversion failures", async () => {
+    const { jobPresentation } = await import("./job-presentation");
+
+    expect(
+      jobPresentation("FAILED", "EXTRACTING_AUDIO", "AUDIO_ONLY"),
+    ).toMatchObject({
+      title: "音频转换失败",
+      terminal: true,
+      tone: "error",
+    });
+  });
+
   it("describes failures for a deployed server instead of a local setup", async () => {
     const { jobPresentation } = await import("./job-presentation");
 

@@ -20,6 +20,7 @@ from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
+from app.core.runtime import validate_processing_runtime
 from app.core.worker_config import (
     WorkerConfigReloader,
     load_worker_config,
@@ -140,6 +141,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if runner is None and resolved_settings.processing_enabled:
+            validate_processing_runtime(resolved_settings)
         resolved_settings.prepare_directories()
         database = Database(resolved_settings.database_path)
         database.initialize()

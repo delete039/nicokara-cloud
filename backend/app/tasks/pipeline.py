@@ -10,6 +10,7 @@ from app.core.database import Database, JobCanceledError
 from app.ai.whisper import transcript_document_from_dict
 from app.lyrics.lrc import parse_lrc, retime_timeline_from_lrc
 from app.lyrics.models import lyric_document_from_dict
+from app.video.audio import FFmpegUnavailableError
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ PUBLIC_ERROR_MESSAGES = {
         "服务器未完成最终视频渲染。请使用任务 ID 查询渲染日志。"
     ),
 }
+
+FFMPEG_UNAVAILABLE_MESSAGE = (
+    "服务器音视频处理工具不可用，请管理员检查 FFmpeg 安装和配置。"
+)
 
 
 class TranscriptionPipeline:
@@ -475,7 +480,10 @@ class TranscriptionPipeline:
                 job_id,
                 stage,
             )
-            error_code = {
+            error_code = (
+                "FFMPEG_UNAVAILABLE"
+                if isinstance(exc, FFmpegUnavailableError)
+                else {
                 "REMOVING_VOCALS": "VOCAL_REMOVAL_FAILED",
                 "EXTRACTING_AUDIO": "AUDIO_EXTRACTION_FAILED",
                 "TRANSCRIBING": "TRANSCRIPTION_FAILED",
@@ -483,7 +491,8 @@ class TranscriptionPipeline:
                 "ALIGNING": "ALIGNMENT_FAILED",
                 "GENERATING_SUBTITLE": "SUBTITLE_GENERATION_FAILED",
                 "RENDERING_VIDEO": "VIDEO_RENDERING_FAILED",
-            }[stage]
+                }[stage]
+            )
             progress = {
                 "REMOVING_VOCALS": 25,
                 "EXTRACTING_AUDIO": 15,
@@ -515,7 +524,11 @@ class TranscriptionPipeline:
                     output_path if output_path.exists() else None
                 ),
                 error_code=error_code,
-                error_message=PUBLIC_ERROR_MESSAGES[stage],
+                error_message=(
+                    FFMPEG_UNAVAILABLE_MESSAGE
+                    if error_code == "FFMPEG_UNAVAILABLE"
+                    else PUBLIC_ERROR_MESSAGES[stage]
+                ),
             )
             raise
 

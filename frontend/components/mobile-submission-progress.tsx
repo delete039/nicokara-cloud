@@ -9,7 +9,8 @@ const STAGE_COPY = {
   },
   UPLOADING_AUDIO: {
     title: "正在上传音频",
-    detail: "当前只发送音频和歌词，原始视频保留在此设备。",
+    detail:
+      "音频按 8 MiB 分片发送，单片失败会自动重试；再次选择同一素材可从缺失分片继续。原始视频保留在此设备。",
   },
   FALLBACK_VIDEO: {
     title: "已切换完整视频上传",

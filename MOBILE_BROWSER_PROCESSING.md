@@ -103,28 +103,37 @@ INSPECTING
 
 ## 只上传音频契约
 
-接口：
+浏览器主流程使用可恢复的分片会话：
 
 ```text
-POST /api/v1/browser/audio-jobs
-Content-Type: multipart/form-data
+POST /api/v1/browser/audio-uploads
+POST /api/v1/browser/audio-uploads/{ticket_id}/chunks/part/{chunk_index}
+POST /api/v1/browser/audio-uploads/{ticket_id}/complete
 ```
 
-旧地址 `POST /api/v1/mobile/audio-jobs` 暂时保留为兼容入口，不再作为公开契约使用。
+音频固定按 8 MiB 分片，单片失败最多重试 3 次。创建会话时提交稳定的 `client_submission_id`；相同素材重新进入上传流程时复用该 ID。服务端的会话响应同时返回 `received_chunk_indices` 和 `missing_chunk_indices`，浏览器只发送缺失分片。分片写入使用临时文件后原子替换，因此同一分片可重复提交。
 
-字段：
+创建或恢复会话使用 JSON：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `audio` | 文件 | WAV、MP3、M4A、AAC、FLAC 或 OGG |
+| `audio_name` | 文本 | WAV、MP3、M4A、AAC、FLAC 或 OGG 文件名 |
+| `audio_size_bytes` | 整数 | 浏览器提取后音频的总字节数 |
 | `original_video_name` | 文本 | 本地保留的原 MP4 文件名 |
 | `original_video_size_bytes` | 整数 | 原视频大小，必须不超过 300 MB |
+| `chunk_size_bytes` | 整数 | 当前固定为 8 MiB |
+| `total_chunks` | 整数 | 必须与音频大小和分片大小一致 |
+| `client_submission_id` | UUID | 会话恢复与任务幂等标识 |
+
+上传分片接口使用 `multipart/form-data` 的 `chunk` 文件字段。完成接口使用 `multipart/form-data`：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
 | `lyrics_text` | 文本 | 与 `lyrics_file` 二选一 |
 | `lyrics_file` | UTF-8 TXT | 与 `lyrics_text` 二选一 |
 | `vocal_mode` | `on`/`off` | 沿用现有任务字段 |
-| `client_submission_id` | UUID | 网络中断后的幂等恢复标识 |
 
-响应沿用 `JobResponse`，并增加：
+完成响应沿用 `JobResponse`，并增加：
 
 ```json
 {
@@ -133,6 +142,10 @@ Content-Type: multipart/form-data
   "source_upload_sha256": "..."
 }
 ```
+
+创建会话、分片上传和完成任务都允许安全重试。完成响应因 Cloudflare 524 或网络中断而未知时，浏览器通过 `/api/v1/jobs/by-submission/{client_submission_id}` 找回任务。未完成音频会话按 `NICOKARA_UPLOAD_TICKET_UPLOAD_TIMEOUT_SECONDS` 清理；每次恢复会话或成功写入分片都会刷新活动时间。
+
+旧整文件入口 `POST /api/v1/browser/audio-jobs` 和 `POST /api/v1/mobile/audio-jobs` 暂时保留兼容，不再作为浏览器主流程。
 
 音频任务进入现有后台队列，完成识别、歌词处理、对齐和 Kirakara 字幕产物生成后停在 `SUBTITLE_GENERATED`，服务端不会主动调用视频渲染器。用户可在浏览器中检查并调整逐句时间、整体偏移和注音，然后选择本地导出。
 

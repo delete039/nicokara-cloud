@@ -17,7 +17,8 @@ export function ReadingReviewEditor({
 }) {
   const valid = lyrics.lines.length > 0 && lyrics.lines.every(
     (line) => line.tokens.length > 0 && line.tokens.every(
-      (token) => token.reading.trim().length > 0,
+      (token) => token.surface.trim().length === 0
+        || token.reading.trim().length > 0,
     ),
   );
 
@@ -54,28 +55,42 @@ export function ReadingReviewEditor({
               {lineIndex + 1}. {line.surface}
             </h3>
             <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {line.tokens.map((token, tokenIndex) => (
-                <label
-                  key={`${tokenIndex}-${token.surface}`}
-                  className="min-w-0 text-xs font-medium text-muted-foreground"
-                >
-                  <span className="block break-all text-sm font-semibold text-foreground">
-                    {token.surface}
-                  </span>
-                  <span className="sr-only">假名读音</span>
-                  <input
-                    type="text"
-                    value={token.reading}
-                    disabled={submitting}
-                    onChange={(event) => updateReading(
-                      lineIndex,
-                      tokenIndex,
-                      event.target.value,
-                    )}
-                    className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60"
-                  />
-                </label>
-              ))}
+              {line.tokens.map((token, tokenIndex) => {
+                const isWhitespace = token.surface.trim().length === 0;
+                if (isWhitespace) {
+                  return (
+                    <div
+                      key={`${tokenIndex}-${token.surface}`}
+                      aria-label="空格，无需注音"
+                      className="flex min-h-[4.25rem] min-w-0 items-center justify-center rounded-md border border-dashed bg-muted/40 px-3 text-xs font-medium text-muted-foreground"
+                    >
+                      空格
+                    </div>
+                  );
+                }
+                return (
+                  <label
+                    key={`${tokenIndex}-${token.surface}`}
+                    className="min-w-0 text-xs font-medium text-muted-foreground"
+                  >
+                    <span className="block break-all text-sm font-semibold text-foreground">
+                      {token.surface}
+                    </span>
+                    <span className="sr-only">假名读音</span>
+                    <input
+                      type="text"
+                      value={token.reading}
+                      disabled={submitting}
+                      onChange={(event) => updateReading(
+                        lineIndex,
+                        tokenIndex,
+                        event.target.value,
+                      )}
+                      className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60"
+                    />
+                  </label>
+                );
+              })}
             </div>
           </section>
         ))}

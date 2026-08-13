@@ -975,11 +975,19 @@ async def confirm_readings(
             reviewed_line.tokens,
             strict=True,
         ):
-            reading = reviewed_token.reading.strip()
-            if reviewed_token.surface != source_token.surface or not reading:
+            if reviewed_token.surface != source_token.surface:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="只能修改非空的假名读音",
+                    detail="歌词表面文字不允许在注音确认阶段修改",
+                )
+            if source_token.surface.isspace():
+                reviewed_tokens.append(source_token)
+                continue
+            reading = reviewed_token.reading.strip()
+            if not reading:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="非空歌词字符的假名读音不能为空",
                 )
             reviewed_tokens.append(
                 replace(

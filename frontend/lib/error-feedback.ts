@@ -352,6 +352,15 @@ const JOB_FAILURES: Record<string, JobFailureDefinition> = {
       "管理员应检查 FFmpeg 是否可用，并根据任务 ID 查询后端日志。",
     ],
   },
+  FFMPEG_UNAVAILABLE: {
+    title: "服务器音视频处理工具不可用",
+    description: "服务器无法启动 FFmpeg，因此不能转换已上传的音频或处理视频。",
+    solutions: [
+      "管理员应确认服务器或本地运行环境已经安装 FFmpeg。",
+      "管理员应检查 NICOKARA_FFMPEG_PATH 是否指向可执行的 FFmpeg 程序，并在修改后重启后端服务。",
+      "这是服务器运行环境问题，请修复服务配置后重新提交任务。",
+    ],
+  },
   TRANSCRIPTION_FAILED: {
     title: "歌声时间分析失败",
     description: "服务器未能生成可供歌词对齐使用的歌声时间信息。",
@@ -415,9 +424,24 @@ export function jobFailureFeedback(
   stage: string,
   serverMessage: string | null,
   jobId: string,
+  inputMode?: "VIDEO" | "AUDIO_ONLY",
 ): ErrorFeedback {
-  const definition =
-    (errorCode ? JOB_FAILURES[errorCode] : undefined) ?? {
+  const audioOnlyExtractionFailure: JobFailureDefinition = {
+    title: "音频转换失败",
+    description: "服务器无法将浏览器提取并上传的音频转换为分析所需的格式。",
+    solutions: [
+      "重新提交一次任务，排除音频分片上传后文件不完整的情况。",
+      "管理员应检查 FFmpeg 是否可用，并根据任务 ID 查询后端音频转换日志。",
+      "如果同一素材反复失败，请将任务 ID 提供给管理员检查已上传的音频文件。",
+    ],
+  };
+  const definition = (
+    errorCode === "AUDIO_EXTRACTION_FAILED" && inputMode === "AUDIO_ONLY"
+      ? audioOnlyExtractionFailure
+      : errorCode
+        ? JOB_FAILURES[errorCode]
+        : undefined
+  ) ?? {
       title: "服务器处理任务失败",
       description: "服务器未能完成当前任务，具体原因需要结合任务日志确认。",
       solutions: [
