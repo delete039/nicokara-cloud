@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,10 +22,12 @@ from app.api.jobs import (
     enqueue_created_job,
     job_response,
     normalized_client_submission_id,
+    request_event_logger,
     safe_display_name,
     services,
 )
 from app.core.active_jobs import ActiveJobLimitError
+from app.core.event_logging import exception_details
 from app.alignment.review import (
     TimelineReviewError,
     apply_timeline_review,
@@ -143,6 +146,26 @@ def create_or_resume_audio_upload(
         if any(metadata.get(key) != value for key, value in expected.items()):
             raise HTTPException(status_code=409, detail="Audio upload session metadata does not match.")
         touch_chunked_upload(settings.storage_dir, ticket_id)
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.audio_session_ready",
+            level="INFO",
+            category="upload",
+            message="音频分片上传会话已就绪",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_audio_upload",
+            details={
+                "resumed": response.status_code == status.HTTP_200_OK,
+                "audio_size_bytes": payload.audio_size_bytes,
+                "chunk_size_bytes": payload.chunk_size_bytes,
+                "total_chunks": payload.total_chunks,
+                "original_video_size_bytes": (
+                    payload.original_video_size_bytes
+                ),
+            },
+        )
     return audio_upload_response(settings, ticket_id, metadata)
 
 
@@ -176,6 +199,22 @@ async def upload_audio_chunk(
         chunk_index,
         chunk,
     )
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.audio_chunk_received",
+            level="DEBUG",
+            category="upload",
+            message="音频分片接收完成",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_audio_upload",
+            details={
+                "chunk_index": chunk_index,
+                "received_chunks": result["received_chunks"],
+                "total_chunks": result["total_chunks"],
+            },
+        )
     return UploadChunkResponse(
         ticket_id=ticket_id,
         chunk_index=chunk_index,
@@ -238,6 +277,22 @@ async def complete_audio_upload(
     audio_path = job_dir / f"input_audio{audio_suffix}"
     lyrics_path = job_dir / "lyrics.txt"
     created = False
+    merge_started = time.perf_counter()
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.audio_merge_started",
+            level="INFO",
+            category="upload",
+            message="开始合并并校验音频分片",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_audio_upload",
+            details={
+                "expected_size_bytes": metadata["video_size_bytes"],
+                "total_chunks": metadata["total_chunks"],
+            },
+        )
     try:
         reservation = request.app.state.active_job_limiter.reserve(
             str(metadata["client_key"])
@@ -248,6 +303,25 @@ async def complete_audio_upload(
             audio_path,
             max_bytes=settings.max_audio_bytes,
         )
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.audio_merge_completed",
+                level="INFO",
+                category="upload",
+                message="音频分片合并及大小、哈希校验完成",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                component="chunked_audio_upload",
+                duration_ms=(time.perf_counter() - merge_started) * 1000,
+                details={
+                    "expected_size_bytes": metadata["video_size_bytes"],
+                    "actual_size_bytes": saved.size_bytes,
+                    "sha256": saved.sha256,
+                    "size_verified": (
+                        saved.size_bytes == metadata["video_size_bytes"]
+                    ),
+                },
+            )
         lyrics_source = await save_lyrics(
             lyrics_text=lyrics_text,
             lyrics_file=lyrics_file,
@@ -276,13 +350,41 @@ async def complete_audio_upload(
         reservation = None
         await enqueue_created_job(request, job_id)
         remove_chunked_upload(settings.storage_dir, ticket_id)
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.audio_job_created",
+                level="INFO",
+                category="upload",
+                message="音频上传完成并创建云端分析任务",
+                reference_type="job",
+                reference_id=job_id,
+                component="chunked_audio_upload",
+                details={
+                    "upload_ticket_id": ticket_id,
+                    "audio_size_bytes": saved.size_bytes,
+                    "lyrics_provided": True,
+                    "input_mode": "AUDIO_ONLY",
+                },
+            )
     except ActiveJobLimitError as exc:
         raise HTTPException(
             status_code=429,
             detail="Too many active jobs for this client. Try again later.",
             headers={"Retry-After": "60"},
         ) from exc
-    except Exception:
+    except Exception as exc:
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.audio_failed",
+                level="ERROR",
+                category="upload",
+                message="音频分片合并或任务创建失败",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                component="chunked_audio_upload",
+                duration_ms=(time.perf_counter() - merge_started) * 1000,
+                details=exception_details(exc),
+            )
         if created:
             database.delete_job(job_id)
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -445,7 +547,7 @@ async def queue_audio_job_for_cloud_render(
         raise HTTPException(status_code=404, detail="任务不存在或已经过期")
     if (
         job.get("input_mode") != "AUDIO_ONLY"
-        or job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED"}
+        or job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED", "COMPLETED"}
     ):
         await video.close()
         raise HTTPException(

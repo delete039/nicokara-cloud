@@ -87,8 +87,9 @@ export function saveKirakaraStyle(
 
 export function kirakaraStylePayload(style: KirakaraStyle) {
   const normalized = normalizeKirakaraStyle(style);
+  const firstFontFamily = normalized.fontFamily.split(",")[0].trim();
   return {
-    font_family: normalized.fontFamily.replaceAll('"', "").split(",")[0].trim(),
+    font_family: firstFontFamily.replace(/^(['"])(.*)\1$/u, "$2"),
     font_size: normalized.fontSize,
     ruby_size: normalized.rubySize,
     color_before: normalized.colorBefore,

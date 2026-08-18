@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +24,7 @@ from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
+from app.core.event_logging import StructuredEventLogger, event_context, exception_details
 from app.core.runtime import validate_processing_runtime
 from app.core.worker_config import (
     WorkerConfigReloader,
@@ -54,6 +59,7 @@ def build_alignment_engine(
     settings: Settings,
     *,
     fa_kara_limiter: Any | None = None,
+    event_logger: Any | None = None,
 ):
     fallback = LyricTimelineAligner()
     if not settings.fa_kara_enabled:
@@ -79,6 +85,7 @@ def build_alignment_engine(
             min_confidence=settings.fa_kara_min_confidence,
         ),
         fallback=fallback,
+        event_logger=event_logger,
     )
 
 
@@ -100,6 +107,7 @@ def build_pipeline(
                 )
             ),
             fallback=local_lyric_processor,
+            event_logger=database.event_logger,
         )
     else:
         lyric_processor = local_lyric_processor
@@ -119,6 +127,7 @@ def build_pipeline(
         aligner=build_alignment_engine(
             settings,
             fa_kara_limiter=fa_kara_limiter,
+            event_logger=database.event_logger,
         ),
         subtitle_generator=KirakaraAssGenerator(),
         video_renderer=FFmpegVideoRenderer(
@@ -141,11 +150,29 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        app_log_level = getattr(
+            logging,
+            resolved_settings.log_level.upper(),
+            logging.INFO,
+        )
+        logging.getLogger("app").setLevel(app_log_level)
+        logging.getLogger("nicokara.events").setLevel(app_log_level)
         if runner is None and resolved_settings.processing_enabled:
             validate_processing_runtime(resolved_settings)
         resolved_settings.prepare_directories()
         database = Database(resolved_settings.database_path)
         database.initialize()
+        event_logger = StructuredEventLogger(
+            database=database,
+            event_log_level=resolved_settings.event_log_level,
+            debug_enabled=resolved_settings.event_log_debug,
+            json_console=resolved_settings.json_console_logs,
+            console_level=resolved_settings.log_level,
+            progress_throttle_seconds=(
+                resolved_settings.event_log_progress_throttle_seconds
+            ),
+        )
+        database.configure_event_logger(event_logger)
         database.recover_interrupted_jobs()
         cleanup_runner = None
         if resolved_settings.cleanup_enabled:
@@ -161,6 +188,12 @@ def create_app(
                         resolved_settings.upload_ticket_upload_timeout_seconds
                     ),
                     max_upload_slots=resolved_settings.max_upload_slots,
+                    event_log_retention_days=(
+                        resolved_settings.event_log_retention_days
+                    ),
+                    event_log_max_rows=(
+                        resolved_settings.event_log_max_rows
+                    ),
                 ),
                 interval_seconds=(
                     resolved_settings.cleanup_interval_seconds
@@ -189,6 +222,7 @@ def create_app(
                 heartbeat_interval_seconds=(
                     resolved_settings.worker_heartbeat_interval_seconds
                 ),
+                event_logger=event_logger,
             )
             worker_config_reloader = WorkerConfigReloader(
                 path=resolved_settings.worker_config_path,
@@ -199,6 +233,7 @@ def create_app(
             )
         app.state.settings = resolved_settings
         app.state.database = database
+        app.state.event_logger = event_logger
         app.state.runner = active_runner
         app.state.worker_config_reloader = worker_config_reloader
         app.state.active_job_limiter = ActiveJobLimiter(
@@ -217,6 +252,17 @@ def create_app(
             if enqueue_wait is not None:
                 async def recover_pending_jobs() -> None:
                     for pending_job_id in pending_job_ids:
+                        event_logger.emit(
+                            event="job.recovered_to_queue",
+                            level="INFO",
+                            category="system",
+                            message="服务启动后恢复等待处理的任务。",
+                            job_id=pending_job_id,
+                            component="startup_recovery",
+                            details={
+                                "pending_job_count": len(pending_job_ids)
+                            },
+                        )
                         await enqueue_wait(pending_job_id)
 
                 recovery_task = asyncio.create_task(recover_pending_jobs())
@@ -224,6 +270,17 @@ def create_app(
                 for pending_job_id in pending_job_ids:
                     if not getattr(active_runner, "can_accept", True):
                         break
+                    event_logger.emit(
+                        event="job.recovered_to_queue",
+                        level="INFO",
+                        category="system",
+                        message="服务启动后恢复等待处理的任务。",
+                        job_id=pending_job_id,
+                        component="startup_recovery",
+                        details={
+                            "pending_job_count": len(pending_job_ids)
+                        },
+                    )
                     await active_runner.enqueue(pending_job_id)
         try:
             yield
@@ -254,7 +311,105 @@ def create_app(
 
     @app.middleware("http")
     async def security_headers(request, call_next):
-        response = await call_next(request)
+        supplied_request_id = request.headers.get("X-Request-ID", "")
+        request_id = (
+            supplied_request_id
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_request_id)
+            else str(uuid4())
+        )
+        request.state.request_id = request_id
+        path = request.url.path
+        method = request.method.upper()
+        job_match = re.search(
+            r"/jobs/([0-9a-fA-F-]{36})(?:/|$)",
+            path,
+        )
+        ticket_match = re.search(
+            r"/(?:upload-tickets|audio-uploads)/([^/]+)(?:/|$)",
+            path,
+        )
+        reference_id = (
+            job_match.group(1)
+            if job_match
+            else ticket_match.group(1)
+            if ticket_match
+            else None
+        )
+        reference_type = (
+            "job" if job_match else "upload_ticket" if ticket_match else None
+        )
+        suppress_event = (
+            path in {"/health", "/api/v1/health"}
+            or (
+                method == "GET"
+                and re.fullmatch(r"/api/v1/jobs/[0-9a-fA-F-]{36}", path)
+                is not None
+            )
+            or (
+                method == "GET"
+                and re.fullmatch(
+                    r"/api/v1/upload-tickets/[0-9a-fA-F-]{36}",
+                    path,
+                )
+                is not None
+            )
+            or path in {"/api/v1/admin/overview", "/api/v1/admin/logs"}
+            or (
+                method == "GET"
+                and path.startswith("/api/v1/admin/jobs/")
+                and path.endswith("/timeline")
+            )
+        )
+        event_logger = getattr(app.state, "event_logger", None)
+        started = time.perf_counter()
+        with event_context(request_id=request_id, component="fastapi"):
+            if event_logger is not None and not suppress_event:
+                event_logger.emit(
+                    event="request.started",
+                    level="INFO",
+                    category="request",
+                    message="收到 HTTP 请求",
+                    reference_type=reference_type,
+                    reference_id=reference_id,
+                    details={"method": method, "route": path},
+                )
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                if event_logger is not None and not suppress_event:
+                    event_logger.emit(
+                        event="request.failed",
+                        level="ERROR",
+                        category="request",
+                        message="HTTP 请求处理异常",
+                        reference_type=reference_type,
+                        reference_id=reference_id,
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                        details={
+                            "method": method,
+                            "route": path,
+                            **exception_details(exc),
+                        },
+                    )
+                raise
+            if event_logger is not None and not suppress_event:
+                route = request.scope.get("route")
+                route_path = getattr(route, "path", path)
+                event_logger.emit(
+                    event="request.completed",
+                    level="WARNING" if response.status_code >= 400 else "INFO",
+                    category="request",
+                    message="HTTP 请求处理完成",
+                    reference_type=reference_type,
+                    reference_id=reference_id,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    details={
+                        "method": method,
+                        "route": route_path,
+                        "status_code": response.status_code,
+                    },
+                )
+        response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"

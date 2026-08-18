@@ -91,6 +91,12 @@ export type AdminLogItem = {
   message: string;
   reference_type: string | null;
   reference_id: string | null;
+  run_id?: string | null;
+  stage?: string | null;
+  component?: string | null;
+  duration_ms?: number | null;
+  request_id?: string | null;
+  schema_version?: number;
   details: Record<string, unknown>;
   created_at: string;
 };
@@ -105,8 +111,28 @@ export type AdminLogsResponse = {
 export type AdminLogFilters = {
   level?: string;
   category?: string;
+  event?: string;
+  component?: string;
+  stage?: string;
   referenceId?: string;
+  runId?: string;
+  requestId?: string;
+  createdFrom?: string;
+  createdTo?: string;
   query?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminJobTimelineResponse = AdminLogsResponse & {
+  job_id: string;
+  run_ids: string[];
+};
+
+export type AdminTimelineFilters = {
+  runId?: string;
+  order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 };

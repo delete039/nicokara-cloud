@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS event_logs (
     message TEXT NOT NULL,
     reference_type TEXT,
     reference_id TEXT,
+    run_id TEXT,
+    stage TEXT,
+    component TEXT,
+    duration_ms REAL,
+    request_id TEXT,
+    schema_version INTEGER NOT NULL DEFAULT 1,
     details TEXT,
     created_at TEXT NOT NULL
 );
@@ -90,6 +96,10 @@ class JobCanceledError(RuntimeError):
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.event_logger: Any | None = None
+
+    def configure_event_logger(self, event_logger: Any) -> None:
+        self.event_logger = event_logger
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -146,6 +156,24 @@ class Database:
                 connection.execute(
                     "ALTER TABLE upload_tickets ADD COLUMN client_submission_id TEXT"
                 )
+            event_log_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(event_logs)"
+                ).fetchall()
+            }
+            for name, definition in {
+                "run_id": "TEXT",
+                "stage": "TEXT",
+                "component": "TEXT",
+                "duration_ms": "REAL",
+                "request_id": "TEXT",
+                "schema_version": "INTEGER NOT NULL DEFAULT 1",
+            }.items():
+                if name not in event_log_columns:
+                    connection.execute(
+                        f"ALTER TABLE event_logs ADD COLUMN {name} {definition}"
+                    )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_updated
@@ -193,6 +221,24 @@ class Database:
                 """
                 CREATE INDEX IF NOT EXISTS idx_event_logs_filters
                 ON event_logs(level, category, reference_id, created_at DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_logs_job_timeline
+                ON event_logs(reference_id, run_id, created_at, id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_logs_event_stage_component
+                ON event_logs(event, stage, component, created_at DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_logs_request
+                ON event_logs(request_id, created_at DESC)
                 """
             )
 
@@ -258,6 +304,10 @@ class Database:
             reference_id=job_id,
             details={
                 "input_mode": input_mode,
+                "input_size_bytes": video_size_bytes,
+                "lyrics_source": lyrics_source,
+                "lyrics_provided": lyrics_path is not None,
+                "vocal_mode": vocal_mode,
                 "status": "UPLOADED",
                 "stage": "UPLOAD_COMPLETE",
             },
@@ -519,7 +569,7 @@ class Database:
             )
         return completed
 
-    def cancel_upload_ticket(self, ticket_id: str) -> bool:
+    def cancel_upload_ticket(self, ticket_id: str, *, actor: str = "user") -> bool:
         timestamp = utc_now()
         with self.connect() as connection:
             cursor = connection.execute(
@@ -542,7 +592,7 @@ class Database:
                 message="上传请求已取消。",
                 reference_type="upload_ticket",
                 reference_id=ticket_id,
-                details={"status": "CANCELED"},
+                details={"status": "CANCELED", "actor": actor},
             )
         return canceled
 
@@ -715,6 +765,8 @@ class Database:
             message=message,
             reference_type="job",
             reference_id=job_id,
+            stage=stage,
+            component="state_machine",
             details={
                 "status": status,
                 "stage": stage,
@@ -722,6 +774,17 @@ class Database:
                 "error_code": error_code,
             },
         )
+        if self.event_logger is not None and status == "PROCESSING":
+            self.event_logger.progress(
+                event="stage.progress",
+                category="pipeline",
+                message=f"处理阶段进度更新：{stage}",
+                reference_id=job_id,
+                stage=stage,
+                component="state_machine",
+                progress=progress,
+                details={"status": status},
+            )
 
     def queue_cloud_render(
         self,
@@ -751,7 +814,7 @@ class Database:
                     updated_at = ?
                 WHERE id = ?
                   AND input_mode = 'AUDIO_ONLY'
-                  AND status IN ('ALIGNED', 'SUBTITLE_GENERATED')
+                  AND status IN ('ALIGNED', 'SUBTITLE_GENERATED', 'COMPLETED')
                 """,
                 (
                     str(video_path),
@@ -830,7 +893,7 @@ class Database:
             )
         return queued
 
-    def cancel_job(self, job_id: str) -> bool:
+    def cancel_job(self, job_id: str, *, actor: str = "user") -> bool:
         with self.connect() as connection:
             cursor = connection.execute(
                 """
@@ -854,7 +917,11 @@ class Database:
                 message="任务已取消。",
                 reference_type="job",
                 reference_id=job_id,
-                details={"status": "CANCELED", "stage": "CANCELED_BY_USER"},
+                details={
+                    "status": "CANCELED",
+                    "stage": "CANCELED_BY_USER",
+                    "actor": actor,
+                },
             )
         return canceled
 
@@ -963,6 +1030,36 @@ class Database:
         )
         return self.get_job(job_id)
 
+    def retry_failed_job(self, job_id: str) -> dict | None:
+        timestamp = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'UPLOADED',
+                    stage = 'REQUEUED_BY_USER',
+                    progress = 0,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'FAILED'
+                """,
+                (timestamp, job_id),
+            )
+        if cursor.rowcount != 1:
+            return None
+        self.record_event_log(
+            level="INFO",
+            category="task",
+            event="job.retried",
+            message="失败任务已由用户重新加入处理队列。",
+            reference_type="job",
+            reference_id=job_id,
+            details={"status": "UPLOADED", "stage": "REQUEUED_BY_USER"},
+        )
+        return self.get_job(job_id)
+
     def record_admin_audit(
         self,
         *,
@@ -1008,6 +1105,68 @@ class Database:
         message: str,
         reference_type: str | None = None,
         reference_id: str | None = None,
+        run_id: str | None = None,
+        stage: str | None = None,
+        component: str | None = None,
+        duration_ms: float | None = None,
+        request_id: str | None = None,
+        schema_version: int = 1,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                level=level,
+                category=category,
+                event=event,
+                message=message,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                run_id=run_id,
+                stage=stage,
+                component=component,
+                duration_ms=duration_ms,
+                request_id=request_id,
+                details=details,
+            )
+            return
+        try:
+            self._insert_event_log(
+                level=level,
+                category=category,
+                event=event,
+                message=message,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                run_id=run_id,
+                stage=stage,
+                component=component,
+                duration_ms=duration_ms,
+                request_id=request_id,
+                schema_version=schema_version,
+                details=details,
+            )
+        except Exception as exc:
+            logger.error(
+                "Event log persistence failed for %s (%s)",
+                event,
+                type(exc).__name__,
+            )
+
+    def _insert_event_log(
+        self,
+        *,
+        level: str,
+        category: str,
+        event: str,
+        message: str,
+        reference_type: str | None = None,
+        reference_id: str | None = None,
+        run_id: str | None = None,
+        stage: str | None = None,
+        component: str | None = None,
+        duration_ms: float | None = None,
+        request_id: str | None = None,
+        schema_version: int = 1,
         details: dict[str, Any] | None = None,
     ) -> None:
         serialized_details = (
@@ -1020,9 +1179,10 @@ class Database:
                 """
                 INSERT INTO event_logs (
                     level, category, event, message, reference_type,
-                    reference_id, details, created_at
+                    reference_id, run_id, stage, component, duration_ms,
+                    request_id, schema_version, details, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     level.upper(),
@@ -1031,6 +1191,12 @@ class Database:
                     message,
                     reference_type,
                     reference_id,
+                    run_id,
+                    stage,
+                    component,
+                    duration_ms,
+                    request_id,
+                    schema_version,
                     serialized_details,
                     utc_now(),
                 ),
@@ -1041,10 +1207,18 @@ class Database:
         *,
         level: str | None = None,
         category: str | None = None,
+        event: str | None = None,
+        component: str | None = None,
+        stage: str | None = None,
         reference_id: str | None = None,
+        run_id: str | None = None,
+        request_id: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        order: str = "desc",
     ) -> dict[str, Any]:
         conditions: list[str] = []
         parameters: list[object] = []
@@ -1054,9 +1228,30 @@ class Database:
         if category:
             conditions.append("category = ?")
             parameters.append(category.lower())
+        if event:
+            conditions.append("event = ?")
+            parameters.append(event)
+        if component:
+            conditions.append("component = ?")
+            parameters.append(component)
+        if stage:
+            conditions.append("stage = ?")
+            parameters.append(stage)
         if reference_id:
             conditions.append("reference_id = ?")
             parameters.append(reference_id)
+        if run_id:
+            conditions.append("run_id = ?")
+            parameters.append(run_id)
+        if request_id:
+            conditions.append("request_id = ?")
+            parameters.append(request_id)
+        if created_from:
+            conditions.append("created_at >= ?")
+            parameters.append(created_from)
+        if created_to:
+            conditions.append("created_at <= ?")
+            parameters.append(created_to)
         if query:
             pattern = f"%{query.strip()}%"
             conditions.append(
@@ -1065,6 +1260,7 @@ class Database:
             )
             parameters.extend([pattern, pattern, pattern, pattern])
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sort_order = "ASC" if order.lower() == "asc" else "DESC"
 
         with self.connect() as connection:
             total = int(
@@ -1076,10 +1272,11 @@ class Database:
             rows = connection.execute(
                 f"""
                 SELECT id, level, category, event, message, reference_type,
-                       reference_id, details, created_at
+                       reference_id, run_id, stage, component, duration_ms,
+                       request_id, schema_version, details, created_at
                 FROM event_logs
                 {where_clause}
-                ORDER BY id DESC
+                ORDER BY created_at {sort_order}, id {sort_order}
                 LIMIT ? OFFSET ?
                 """,
                 (*parameters, limit, offset),
@@ -1094,6 +1291,98 @@ class Database:
             )
             items.append(item)
         return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    def cleanup_event_logs(self, *, older_than: str, max_rows: int) -> int:
+        with self.connect() as connection:
+            age_cursor = connection.execute(
+                "DELETE FROM event_logs WHERE created_at < ?",
+                (older_than,),
+            )
+            age_deleted = max(age_cursor.rowcount, 0)
+            count = int(
+                connection.execute("SELECT COUNT(*) FROM event_logs").fetchone()[0]
+            )
+            overflow = max(count - max_rows, 0)
+            row_deleted = 0
+            if overflow:
+                cursor = connection.execute(
+                    """
+                    DELETE FROM event_logs
+                    WHERE id IN (
+                        SELECT id FROM event_logs
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (overflow,),
+                )
+                row_deleted = max(cursor.rowcount, 0)
+        return age_deleted + row_deleted
+
+    def list_job_event_timeline(
+        self,
+        job_id: str,
+        *,
+        run_id: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        order: str = "asc",
+    ) -> dict[str, Any]:
+        conditions = [
+            "(reference_id = ? OR reference_id IN "
+            "(SELECT id FROM upload_tickets WHERE job_id = ?))"
+        ]
+        parameters: list[object] = [job_id, job_id]
+        if run_id:
+            conditions.append("run_id = ?")
+            parameters.append(run_id)
+        where_clause = f"WHERE {' AND '.join(conditions)}"
+        sort_order = "ASC" if order.lower() == "asc" else "DESC"
+        with self.connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM event_logs {where_clause}",
+                    parameters,
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""
+                SELECT id, level, category, event, message, reference_type,
+                       reference_id, run_id, stage, component, duration_ms,
+                       request_id, schema_version, details, created_at
+                FROM event_logs
+                {where_clause}
+                ORDER BY created_at {sort_order}, id {sort_order}
+                LIMIT ? OFFSET ?
+                """,
+                (*parameters, limit, offset),
+            ).fetchall()
+            run_rows = connection.execute(
+                """
+                SELECT run_id, MIN(id) AS first_id
+                FROM event_logs
+                WHERE reference_id = ? AND run_id IS NOT NULL
+                GROUP BY run_id
+                ORDER BY first_id ASC
+                """,
+                (job_id,),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            serialized_details = item.get("details")
+            item["details"] = (
+                json.loads(serialized_details) if serialized_details else {}
+            )
+            items.append(item)
+        return {
+            "job_id": job_id,
+            "run_ids": [row["run_id"] for row in run_rows],
             "items": items,
             "total": total,
             "limit": limit,
@@ -1142,6 +1431,13 @@ class Database:
     def recover_interrupted_jobs(self) -> list[str]:
         timestamp = utc_now()
         with self.connect() as connection:
+            review_rows = connection.execute(
+                """
+                SELECT id FROM jobs
+                WHERE status = 'LYRICS_PROCESSED'
+                  AND stage = 'READING_REVIEW_SAVING'
+                """
+            ).fetchall()
             connection.execute(
                 """
                 UPDATE jobs
@@ -1154,7 +1450,7 @@ class Database:
                 (timestamp,),
             )
             rows = connection.execute(
-                "SELECT id FROM jobs WHERE status = 'PROCESSING'"
+                "SELECT id, stage FROM jobs WHERE status = 'PROCESSING'"
             ).fetchall()
             connection.execute(
                 """
@@ -1171,18 +1467,36 @@ class Database:
                     timestamp,
                 ),
             )
+        for row in review_rows:
+            self.record_event_log(
+                level="WARNING",
+                category="system",
+                event="job.reading_review_recovered",
+                message="服务重启后已恢复未完成的注音确认状态。",
+                reference_type="job",
+                reference_id=row["id"],
+                stage="READING_REVIEW_REQUIRED",
+                component="service_recovery",
+                details={
+                    "previous_stage": "READING_REVIEW_SAVING",
+                    "restored_stage": "READING_REVIEW_REQUIRED",
+                },
+            )
         job_ids = [row["id"] for row in rows]
-        for job_id in job_ids:
+        for row in rows:
             self.record_event_log(
                 level="ERROR",
                 category="system",
                 event="job.interrupted",
                 message="服务重启中断了正在处理的任务。",
                 reference_type="job",
-                reference_id=job_id,
+                reference_id=row["id"],
+                stage=row["stage"],
+                component="service_recovery",
                 details={
                     "status": "FAILED",
                     "error_code": "SERVICE_RESTARTED",
+                    "interrupted_stage": row["stage"],
                 },
             )
         return job_ids

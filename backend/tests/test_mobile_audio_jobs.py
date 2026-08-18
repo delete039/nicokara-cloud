@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.core.config import Settings
 from app.main import create_app
@@ -430,8 +431,10 @@ def test_on_vocal_audio_job_does_not_expose_instrumental(tmp_path: Path) -> None
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("ready_status", ["SUBTITLE_GENERATED", "COMPLETED"])
 def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
     tmp_path: Path,
+    ready_status: str,
 ) -> None:
     video = fake_mp4()
     settings = Settings(
@@ -484,8 +487,12 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         )
         client.app.state.database.update_job_state(
             job_id,
-            status="SUBTITLE_GENERATED",
-            stage="SUBTITLE_GENERATION_COMPLETE",
+            status=ready_status,
+            stage=(
+                "VIDEO_RENDERING_COMPLETE"
+                if ready_status == "COMPLETED"
+                else "SUBTITLE_GENERATION_COMPLETE"
+            ),
             progress=100,
             timeline_path=timeline_path,
             ass_path=job_dir / "lyrics.ass",
@@ -545,7 +552,7 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
             encoding="utf-8-sig"
         )
         assert "Style: KirakaraBase,Yu Gothic,108" in ass_content
-        assert r"\an4\pos(192,615)" in ass_content
+        assert r"\an7\pos(192,615)" in ass_content
         assert "&H00563412" in ass_content
 
 

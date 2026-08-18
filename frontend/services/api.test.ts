@@ -674,6 +674,44 @@ describe("getTimeline", () => {
   });
 });
 
+describe("getReviewedArtifact", () => {
+  it("posts the current editor review instead of downloading the stored file", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("adjusted", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = await import("./api");
+
+    expect(api).toHaveProperty("getReviewedArtifact");
+    if (
+      !("getReviewedArtifact" in api) ||
+      typeof api.getReviewedArtifact !== "function"
+    ) return;
+    const review = {
+      lines: [{ start_ms: 2000, end_ms: 4000, tokens: [] }],
+    };
+
+    const artifact = await api.getReviewedArtifact(
+      "job-1",
+      "timeline",
+      review,
+    );
+
+    expect(await artifact.text()).toBe("adjusted");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/exports/timeline",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(review),
+        cache: "no-store",
+      }),
+    );
+  });
+});
+
 describe("getInstrumentalAudio", () => {
   it("downloads the cloud UVR instrumental for an off-vocal export", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -693,6 +731,70 @@ describe("getInstrumentalAudio", () => {
     );
     expect(audio).toMatchObject({ name: "instrumental.wav", type: "audio/wav" });
     expect(audio.size).toBe(3);
+  });
+
+  it("retries when the instrumental response body is interrupted", async () => {
+    const interruptedResponse = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "Content-Type": "audio/wav" }),
+      blob: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    } as unknown as Response;
+    const completedResponse = new Response(new Uint8Array([1, 2, 3, 4]), {
+      status: 200,
+      headers: { "Content-Type": "audio/wav" },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(interruptedResponse)
+      .mockResolvedValueOnce(completedResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const { getInstrumentalAudio } = await import("./api");
+
+    const audio = await getInstrumentalAudio("job-1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(audio.size).toBe(4);
+  });
+
+  it("turns repeated body interruptions into an actionable export error", async () => {
+    const interruptedResponse = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "Content-Type": "audio/wav" }),
+      blob: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    } as unknown as Response;
+    const fetchMock = vi.fn().mockResolvedValue(interruptedResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const { getInstrumentalAudio } = await import("./api");
+
+    await expect(getInstrumentalAudio("job-1")).rejects.toMatchObject({
+      name: "ApiRequestError",
+      feedback: {
+        title: "OFF VOCAL 伴奏下载失败",
+        retryable: true,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops retrying when the user cancels the off-vocal export", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getInstrumentalAudio } = await import("./api");
+
+    await expect(
+      getInstrumentalAudio("job-1", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/instrumental",
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });
 
@@ -844,6 +946,34 @@ describe("cancelJob", () => {
     await expect(cancelJob("job-1")).resolves.toMatchObject(canceledJob);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/jobs/job-1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
+describe("retryJob", () => {
+  it("posts a failed task to the user retry endpoint", async () => {
+    const queuedJob = {
+      id: "job-1",
+      status: "UPLOADED",
+      stage: "REQUEUED_BY_USER",
+      progress: 0,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(queuedJob), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = await import("./api");
+
+    expect(api).toHaveProperty("retryJob");
+    if (!("retryJob" in api) || typeof api.retryJob !== "function") return;
+
+    await expect(api.retryJob("job-1")).resolves.toMatchObject(queuedJob);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/retry",
       expect.objectContaining({ method: "POST" }),
     );
   });

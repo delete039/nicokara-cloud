@@ -7,6 +7,7 @@ import { createBrowserFileDestination } from "@/lib/browser-file-destination";
 import type { KirakaraExportProfile } from "@/lib/kirakara-capabilities";
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
 import type { KirakaraStyle } from "@/lib/kirakara-style";
+import { exportKirakaraVideo } from "@/lib/kirakara-video-export";
 import { getInstrumentalAudio } from "@/services/api";
 
 type ExportState = "idle" | "exporting" | "completed" | "error";
@@ -15,9 +16,13 @@ type ExportPhase = "audio" | "rendering";
 export async function resolveExportAudio(
   jobId: string,
   vocalMode: string,
-  loader: (jobId: string) => Promise<File> = getInstrumentalAudio,
+  loader: (
+    jobId: string,
+    signal?: AbortSignal,
+  ) => Promise<File> = getInstrumentalAudio,
+  signal?: AbortSignal,
 ): Promise<File | undefined> {
-  return vocalMode === "off" ? loader(jobId) : undefined;
+  return vocalMode === "off" ? loader(jobId, signal) : undefined;
 }
 
 export function KirakaraExportControls({
@@ -65,11 +70,13 @@ export function KirakaraExportControls({
     const suggestedName = `${video.name.replace(/\.mp4$/i, "") || "nicokara"}.nicokara.mp4`;
     try {
       const destination = await createBrowserFileDestination(suggestedName);
-      const replacementAudio = await resolveExportAudio(jobId, vocalMode);
-      setPhase("rendering");
-      const { exportKirakaraVideo } = await import(
-        "@/lib/kirakara-video-export"
+      const replacementAudio = await resolveExportAudio(
+        jobId,
+        vocalMode,
+        getInstrumentalAudio,
+        controller.signal,
       );
+      setPhase("rendering");
       const result = await exportKirakaraVideo({
         video,
         replacementAudio,

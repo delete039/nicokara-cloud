@@ -16,10 +16,7 @@ export function ReadingReviewEditor({
   onConfirm: () => void;
 }) {
   const valid = lyrics.lines.length > 0 && lyrics.lines.every(
-    (line) => line.tokens.length > 0 && line.tokens.every(
-      (token) => token.surface.trim().length === 0
-        || token.reading.trim().length > 0,
-    ),
+    (line) => line.tokens.length > 0,
   );
 
   function updateReading(
@@ -48,6 +45,9 @@ export function ReadingReviewEditor({
       <h2 id="reading-review-heading" className="text-xl font-bold">
         确认假名注音
       </h2>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        只需修改不准确的项目；留空将沿用系统生成的读音。
+      </p>
       <div className="mt-4 max-h-[34rem] divide-y overflow-y-auto overscroll-contain border-y [scrollbar-gutter:stable]">
         {lyrics.lines.map((line, lineIndex) => (
           <section key={`${lineIndex}-${line.surface}`} className="py-4">

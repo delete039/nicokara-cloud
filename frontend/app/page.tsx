@@ -1,6 +1,7 @@
 import { FileUp, Zap, Download } from "lucide-react";
 
 import { UploadForm } from "@/components/upload-form";
+import { AnnouncementButton } from "@/components/announcement-button";
 import { HOME_COPY } from "@/lib/ui-copy";
 
 const steps = [
@@ -50,54 +51,63 @@ export default function Home() {
             ))}
           </ol>
 
-          <a
-            href="#upload-form"
-            className="mt-10 inline-block text-lg font-semibold text-primary hover:underline"
-          >
-            {HOME_COPY.callToAction} →
-          </a>
+          <div className="mt-10">
+            <a
+              href="#upload-form"
+              className="text-lg font-semibold text-primary hover:underline"
+            >
+              {HOME_COPY.callToAction} →
+            </a>
+          </div>
 
           <aside
             aria-label="作者信息"
             className="mt-8 border-t pt-5 text-xs leading-6 text-muted-foreground"
           >
-            <p>qq：{HOME_COPY.author.qq}</p>
-            <p>bilibili：{HOME_COPY.author.bilibili}</p>
-            <p>小红书：{HOME_COPY.author.xiaohongshu}</p>
-            <p className="mt-2 max-w-md">
-              <a
-                href={HOME_COPY.author.repositoryUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline underline-offset-4"
-              >
-                {HOME_COPY.author.repositoryLabel}
-              </a>
-              ，{HOME_COPY.author.message}
-            </p>
-            {HOME_COPY.author.acknowledgements.map((acknowledgement, index) => (
-              <p key={acknowledgement.project} className="mt-2 max-w-md">
-                {index === 0 ? "特别鸣谢：" : ""}
-                <a
-                  href={acknowledgement.developerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium text-foreground underline underline-offset-4"
-                >
-                  {acknowledgement.developer}
-                </a>
-                开发的
-                <a
-                  href={acknowledgement.projectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium text-foreground underline underline-offset-4"
-                >
-                  {acknowledgement.project}
-                </a>
-                。{acknowledgement.description}
-              </p>
-            ))}
+            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+              <div className="min-w-0">
+                <p>qq：{HOME_COPY.author.qq}</p>
+                <p>bilibili：{HOME_COPY.author.bilibili}</p>
+                <p>小红书：{HOME_COPY.author.xiaohongshu}</p>
+                <p className="mt-2 max-w-md">
+                  <a
+                    href={HOME_COPY.author.repositoryUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-foreground underline underline-offset-4"
+                  >
+                    {HOME_COPY.author.repositoryLabel}
+                  </a>
+                  ，{HOME_COPY.author.message}
+                </p>
+                {HOME_COPY.author.acknowledgements.map((acknowledgement, index) => (
+                  <p key={acknowledgement.project} className="mt-2 max-w-md">
+                    {index === 0 ? "特别鸣谢：" : ""}
+                    <a
+                      href={acknowledgement.developerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-foreground underline underline-offset-4"
+                    >
+                      {acknowledgement.developer}
+                    </a>
+                    开发的
+                    <a
+                      href={acknowledgement.projectUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-foreground underline underline-offset-4"
+                    >
+                      {acknowledgement.project}
+                    </a>
+                    。{acknowledgement.description}
+                  </p>
+                ))}
+              </div>
+              <div className="justify-self-start sm:justify-self-end">
+                <AnnouncementButton />
+              </div>
+            </div>
           </aside>
         </div>
 

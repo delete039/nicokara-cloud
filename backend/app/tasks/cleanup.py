@@ -23,6 +23,8 @@ class JobCleanupService:
         upload_ticket_timeout_seconds: int = 120,
         upload_ticket_upload_timeout_seconds: int = 3600,
         max_upload_slots: int = 1,
+        event_log_retention_days: int = 30,
+        event_log_max_rows: int = 100_000,
     ) -> None:
         self.database = database
         self.storage_dir = storage_dir.resolve()
@@ -32,6 +34,8 @@ class JobCleanupService:
             upload_ticket_upload_timeout_seconds
         )
         self.max_upload_slots = max_upload_slots
+        self.event_log_retention_days = event_log_retention_days
+        self.event_log_max_rows = event_log_max_rows
 
     def run_once(self, *, now: datetime | None = None) -> list[str]:
         current = now or datetime.now(UTC)
@@ -61,6 +65,26 @@ class JobCleanupService:
         self.database.activate_upload_tickets(
             max_active_uploads=self.max_upload_slots,
         )
+        event_log_cutoff = (
+            current - timedelta(days=self.event_log_retention_days)
+        ).isoformat()
+        deleted_event_logs = self.database.cleanup_event_logs(
+            older_than=event_log_cutoff,
+            max_rows=self.event_log_max_rows,
+        )
+        if deleted_event_logs:
+            self.database.record_event_log(
+                level="INFO",
+                category="cleanup",
+                event="cleanup.event_logs_deleted",
+                message="过期或超量的管理日志已清理。",
+                component="cleanup_service",
+                details={"deleted_count": deleted_event_logs},
+            )
+            self.database.cleanup_event_logs(
+                older_than=event_log_cutoff,
+                max_rows=self.event_log_max_rows,
+            )
         cutoff = (current - timedelta(hours=self.retention_hours)).isoformat()
         job_ids = self.database.list_expired_terminal_job_ids(
             cutoff=cutoff
@@ -73,6 +97,16 @@ class JobCleanupService:
             shutil.rmtree(job_dir, ignore_errors=True)
             self.database.delete_job(job_id)
             deleted.append(job_id)
+            self.database.record_event_log(
+                level="INFO",
+                category="cleanup",
+                event="cleanup.job_files_deleted",
+                message="过期任务文件及任务记录已清理。",
+                reference_type="job",
+                reference_id=job_id,
+                component="cleanup_service",
+                details={"retention_hours": self.retention_hours},
+            )
         return deleted
 
 

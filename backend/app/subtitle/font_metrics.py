@@ -10,11 +10,19 @@ from PIL import ImageFont
 
 def font_candidates(font_name: str, *, bold: bool) -> list[str]:
     windows_fonts = {
+        "Noto Sans CJK JP": "C:/Windows/Fonts/NotoSansJP-VF.ttf",
+        "Noto Sans JP": "C:/Windows/Fonts/NotoSansJP-VF.ttf",
         "Microsoft YaHei": (
             "C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc"
         ),
+        "Meiryo": (
+            "C:/Windows/Fonts/meiryob.ttc" if bold else "C:/Windows/Fonts/meiryo.ttc"
+        ),
         "Yu Gothic": (
             "C:/Windows/Fonts/YuGothB.ttc" if bold else "C:/Windows/Fonts/YuGothM.ttc"
+        ),
+        "Yu Mincho": (
+            "C:/Windows/Fonts/yumindb.ttf" if bold else "C:/Windows/Fonts/yumin.ttf"
         ),
     }
     noto = (
@@ -22,10 +30,17 @@ def font_candidates(font_name: str, *, bold: bool) -> list[str]:
         if bold
         else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
     )
-    preferred = windows_fonts.get(font_name, noto)
+    windows_preferred = windows_fonts.get(font_name, noto)
+    preferred = (
+        noto
+        if font_name in {"Noto Sans CJK JP", "Noto Sans JP"}
+        else windows_preferred
+    )
     return [
         preferred,
+        windows_preferred,
         noto,
+        "C:/Windows/Fonts/NotoSansJP-VF.ttf",
         "C:/Windows/Fonts/YuGothM.ttc",
         "C:/Windows/Fonts/msyh.ttc",
     ]
@@ -66,3 +81,19 @@ def text_measurer(
 ) -> Callable[[str], float]:
     font = _font(font_name, size, bold)
     return lambda text: float(font.getlength(text))
+
+
+def text_ink_measurer(
+    font_name: str,
+    size: int,
+    *,
+    bold: bool = False,
+) -> Callable[[str], tuple[float, float]]:
+    """Return Canvas-compatible ink distances left and right of the glyph origin."""
+    font = _font(font_name, size, bold)
+
+    def measure(text: str) -> tuple[float, float]:
+        left, _top, right, _bottom = font.getbbox(text)
+        return max(0.0, -float(left)), max(0.0, float(right))
+
+    return measure

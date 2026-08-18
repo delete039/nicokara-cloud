@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelAdminUploadTicket,
   getAdminLogs,
+  getAdminJobTimeline,
   getAdminOverview,
   requeueAdminJob,
 } from "./admin-api";
@@ -100,16 +101,51 @@ describe("admin API", () => {
       level: "ERROR",
       category: "task",
       referenceId: "job / 1",
+      event: "stage.fallback",
+      component: "fa_kara",
+      stage: "ALIGNING",
+      runId: "run-2",
+      requestId: "request-2",
       query: "MMS 失败",
+      order: "asc",
       limit: 50,
       offset: 50,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/admin/logs?level=ERROR&category=task&reference_id=job+%2F+1&query=MMS+%E5%A4%B1%E8%B4%A5&limit=50&offset=50",
+      "/api/v1/admin/logs?level=ERROR&category=task&event=stage.fallback&component=fa_kara&stage=ALIGNING&reference_id=job+%2F+1&run_id=run-2&request_id=request-2&query=MMS+%E5%A4%B1%E8%B4%A5&order=asc&limit=50&offset=50",
       expect.objectContaining({
         headers: { Authorization: "Bearer secret-token" },
         cache: "no-store",
+      }),
+    );
+  });
+
+  it("loads a stable task timeline for one run", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          job_id: "job-1",
+          run_ids: ["run-1"],
+          items: [],
+          total: 0,
+          limit: 200,
+          offset: 0,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAdminJobTimeline("secret-token", "job-1", {
+      runId: "run-1",
+      order: "asc",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/admin/jobs/job-1/timeline?run_id=run-1&order=asc&limit=200&offset=0",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer secret-token" },
       }),
     );
   });

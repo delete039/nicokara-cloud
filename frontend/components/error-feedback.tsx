@@ -5,11 +5,15 @@ import type { ErrorFeedback } from "@/lib/error-feedback";
 type ErrorFeedbackPanelProps = {
   feedback: ErrorFeedback;
   onRetry?: () => void;
+  retryLabel?: string;
+  retrying?: boolean;
 };
 
 export function ErrorFeedbackPanel({
   feedback,
   onRetry,
+  retryLabel,
+  retrying = false,
 }: ErrorFeedbackPanelProps) {
   return (
     <section
@@ -54,14 +58,15 @@ export function ErrorFeedbackPanel({
             </details>
           )}
 
-          {feedback.retryable && onRetry && (
+          {onRetry && (feedback.retryable || retryLabel) && (
             <button
               type="button"
               onClick={onRetry}
-              className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg border border-destructive/25 bg-card px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-muted"
+              disabled={retrying}
+              className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg border border-destructive/25 bg-card px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-muted disabled:cursor-wait disabled:opacity-60"
             >
-              <RefreshCw className="size-4" />
-              重新检查
+              <RefreshCw className={`size-4 ${retrying ? "animate-spin" : ""}`} />
+              {retrying ? "正在重新加入队列…" : retryLabel ?? "重新检查"}
             </button>
           )}
         </div>

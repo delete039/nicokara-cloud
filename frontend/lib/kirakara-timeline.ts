@@ -125,6 +125,21 @@ function normalizeKana(text: string): string {
   );
 }
 
+const SMALL_KANA = new Set([..."ゃゅょぁぃぅぇぉゎゕゖ"]);
+
+export function splitReadingMoras(reading: string): string[] {
+  const moras: string[] = [];
+  for (const character of normalizeKana(reading)) {
+    if (/^[\p{P}\p{S}\s]$/u.test(character)) continue;
+    if (SMALL_KANA.has(character) && moras.length > 0) {
+      moras[moras.length - 1] += character;
+    } else {
+      moras.push(character);
+    }
+  }
+  return moras;
+}
+
 function isKanji(character: string): boolean {
   const codePoint = character.codePointAt(0) ?? 0;
   return (
@@ -136,13 +151,39 @@ function isKanji(character: string): boolean {
 export function kanjiRuby(surface: string, reading: string): KirakaraRuby[] {
   const characters = [...surface];
   if (!characters.some(isKanji) || !reading.trim()) return [];
-  return [
-    {
-      text: normalizeKana(reading),
-      startCharacter: 0,
-      endCharacter: characters.length,
-    },
-  ];
+
+  const runs: Array<{ startCharacter: number; endCharacter: number }> = [];
+  let runStart: number | null = null;
+  characters.forEach((character, index) => {
+    if (isKanji(character)) {
+      runStart ??= index;
+    } else if (runStart !== null) {
+      runs.push({ startCharacter: runStart, endCharacter: index });
+      runStart = null;
+    }
+  });
+  if (runStart !== null) {
+    runs.push({ startCharacter: runStart, endCharacter: characters.length });
+  }
+
+  const escapePattern = (value: string) =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let surfaceCursor = 0;
+  const pattern = runs.map(({ startCharacter, endCharacter }) => {
+    const prefix = normalizeKana(
+      characters.slice(surfaceCursor, startCharacter).join(""),
+    );
+    surfaceCursor = endCharacter;
+    return `${escapePattern(prefix)}(.*?)`;
+  }).join("") + escapePattern(normalizeKana(characters.slice(surfaceCursor).join("")));
+  const match = new RegExp(`^${pattern}$`, "u").exec(normalizeKana(reading));
+
+  return runs.map(({ startCharacter, endCharacter }, index) => ({
+    text: match?.[index + 1]
+      || normalizeKana(characters.slice(startCharacter, endCharacter).join("")),
+    startCharacter,
+    endCharacter,
+  }));
 }
 
 export function closeLineMoraGaps(line: KirakaraLine): KirakaraLine {
@@ -177,28 +218,190 @@ export function closeLineMoraGaps(line: KirakaraLine): KirakaraLine {
     units[next.unitIndex].startMs = boundary;
   }
 
-  return { ...line, units };
+  const normalizedUnits = units.map((unit) => {
+    const expectedReadings = splitReadingMoras(unit.reading);
+    const duration = Math.max(0, unit.endMs - unit.startMs);
+    if (
+      unit.moras.length > 0 &&
+      unit.moras.length !== expectedReadings.length
+    ) {
+      return {
+        ...unit,
+        moras: expectedReadings.map((reading, index) => ({
+          reading,
+          startMs: unit.startMs + Math.floor(
+            duration * index / expectedReadings.length,
+          ),
+          endMs: unit.startMs + Math.floor(
+            duration * (index + 1) / expectedReadings.length,
+          ),
+          matched: true,
+        })),
+      };
+    }
+    if (unit.moras.length === 0) return unit;
+    let previousEnd = unit.startMs;
+    const hasInvalidTiming = unit.moras.some((mora) => {
+      const invalid =
+        mora.startMs < unit.startMs ||
+        mora.endMs > unit.endMs ||
+        mora.endMs <= mora.startMs ||
+        mora.startMs < previousEnd;
+      previousEnd = mora.endMs;
+      return invalid;
+    });
+    if (!hasInvalidTiming) return unit;
+
+    return {
+      ...unit,
+      moras: unit.moras.map((mora, index) => ({
+        ...mora,
+        startMs: unit.startMs + Math.floor(
+          duration * index / unit.moras.length,
+        ),
+        endMs: unit.startMs + Math.floor(
+          duration * (index + 1) / unit.moras.length,
+        ),
+      })),
+    };
+  });
+
+  return { ...line, units: normalizedUnits };
+}
+
+const COLLAPSED_LINE_DURATION_MS = 100;
+
+function distributeCollapsedUnits(
+  units: KirakaraRenderUnit[],
+  startMs: number,
+  endMs: number,
+): KirakaraRenderUnit[] {
+  const weights = units.map((unit) =>
+    Math.max(1, splitReadingMoras(unit.reading).length),
+  );
+  const totalWeight = Math.max(
+    1,
+    weights.reduce((total, weight) => total + weight, 0),
+  );
+  const duration = endMs - startMs;
+  let consumedWeight = 0;
+  return units.map((unit, index) => {
+    const unitStart = startMs + Math.round(
+      duration * consumedWeight / totalWeight,
+    );
+    consumedWeight += weights[index];
+    const unitEnd = startMs + Math.round(
+      duration * consumedWeight / totalWeight,
+    );
+    const moraReadings = splitReadingMoras(unit.reading);
+    return {
+      ...unit,
+      startMs: unitStart,
+      endMs: unitEnd,
+      moras: moraReadings.map((reading, moraIndex) => ({
+        reading,
+        startMs: unitStart + Math.floor(
+          (unitEnd - unitStart) * moraIndex / moraReadings.length,
+        ),
+        endMs: unitStart + Math.floor(
+          (unitEnd - unitStart) * (moraIndex + 1) / moraReadings.length,
+        ),
+        matched: true,
+      })),
+    };
+  });
+}
+
+function repairCollapsedVoicedUnits(
+  units: KirakaraRenderUnit[],
+): KirakaraRenderUnit[] {
+  const repaired = units.map((unit) => ({
+    ...unit,
+    moras: unit.moras.map((mora) => ({ ...mora })),
+  }));
+
+  for (let index = 0; index < repaired.length; index += 1) {
+    const unit = repaired[index];
+    if (
+      unit.endMs > unit.startMs ||
+      splitReadingMoras(unit.reading).length === 0
+    ) continue;
+
+    let rangeStart = index;
+    let rangeEnd = repaired.findIndex(
+      (candidate, candidateIndex) =>
+        candidateIndex > index && candidate.endMs > candidate.startMs,
+    );
+    if (rangeEnd < 0) {
+      rangeStart = index - 1;
+      while (
+        rangeStart >= 0 &&
+        repaired[rangeStart].endMs <= repaired[rangeStart].startMs
+      ) {
+        rangeStart -= 1;
+      }
+      rangeEnd = index;
+    }
+    if (rangeStart < 0 || rangeEnd < rangeStart) {
+      repaired[index] = { ...unit, moras: [] };
+      continue;
+    }
+
+    const redistributed = distributeCollapsedUnits(
+      repaired.slice(rangeStart, rangeEnd + 1),
+      repaired[rangeStart].startMs,
+      repaired[rangeEnd].endMs,
+    );
+    repaired.splice(rangeStart, redistributed.length, ...redistributed);
+    index = Math.max(index, rangeEnd);
+  }
+
+  return repaired;
 }
 
 export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline {
+  let previousEndMs = 0;
   const lines = source.lines.map((line) => {
-    const lineRange = normalizedRange(line.start_ms, line.end_ms);
-    return closeLineMoraGaps({
-      text: line.surface,
-      reading: line.reading,
-      ...lineRange,
-      units: line.tokens.map((token) => ({
+    const sourceLineRange = normalizedRange(line.start_ms, line.end_ms);
+    const sourceDuration = sourceLineRange.endMs - sourceLineRange.startMs;
+    const startMs = Math.max(previousEndMs, sourceLineRange.startMs);
+    const endMs = startMs + (
+      sourceDuration > 0 ? sourceDuration : COLLAPSED_LINE_DURATION_MS
+    );
+    const shiftMs = startMs - sourceLineRange.startMs;
+    let units = line.tokens.map((token) => {
+      const tokenRange = normalizedRange(token.start_ms, token.end_ms);
+      return {
         text: token.surface,
         reading: token.reading,
-        ...normalizedRange(token.start_ms, token.end_ms),
-        moras: token.moras.map((mora) => ({
-          reading: mora.reading,
-          ...normalizedRange(mora.start_ms, mora.end_ms),
-          matched: mora.matched,
-        })),
+        startMs: tokenRange.startMs + shiftMs,
+        endMs: tokenRange.endMs + shiftMs,
+        moras: token.moras.map((mora) => {
+          const moraRange = normalizedRange(mora.start_ms, mora.end_ms);
+          return {
+            reading: mora.reading,
+            startMs: moraRange.startMs + shiftMs,
+            endMs: moraRange.endMs + shiftMs,
+            matched: mora.matched,
+          };
+        }),
         ruby: kanjiRuby(token.surface, token.reading),
-      })),
+      };
     });
+    if (sourceDuration === 0 || !units.some((unit) => unit.endMs > unit.startMs)) {
+      units = distributeCollapsedUnits(units, startMs, endMs);
+    } else {
+      units = repairCollapsedVoicedUnits(units);
+    }
+    const normalized = closeLineMoraGaps({
+      text: line.surface,
+      reading: line.reading,
+      startMs,
+      endMs,
+      units,
+    });
+    previousEndMs = normalized.endMs;
+    return normalized;
   });
 
   return {
@@ -332,7 +535,9 @@ function frameRuby(
 ): KirakaraFrameRuby {
   const segments = moraSegments(unit);
   const segmentText = segments.map(({ text }) => text).join("");
-  if (segments.length <= 1 || segmentText !== ruby.text) {
+  const normalizedRuby = normalizeKana(ruby.text);
+  const matchStart = segmentText.indexOf(normalizedRuby);
+  if (segments.length <= 1 || matchStart < 0) {
     const characters = [...ruby.text];
     const position = fallbackProgress * characters.length;
     return {
@@ -344,25 +549,24 @@ function frameRuby(
     };
   }
 
+  const timedCharacters = segments.flatMap(({ text, startMs, endMs }) => {
+    const characters = [...text];
+    const duration = endMs - startMs;
+    return characters.map((character, index) => ({
+      text: character,
+      startMs: startMs + duration * index / characters.length,
+      endMs: startMs + duration * (index + 1) / characters.length,
+    }));
+  }).slice(matchStart, matchStart + [...normalizedRuby].length);
+
   return {
     ...ruby,
-    characters: segments.flatMap(({ text, startMs, endMs }) => {
-      const characters = [...text];
-      const duration = endMs - startMs;
-      return characters.map((character, index) => {
-        const characterStartMs = startMs + duration * index / characters.length;
-        const characterEndMs = startMs + duration * (index + 1) / characters.length;
-        return {
-          text: character,
-          progress: characterEndMs > characterStartMs
-            ? clampProgress(
-                (playbackMs - characterStartMs) /
-                  (characterEndMs - characterStartMs),
-              )
-            : playbackMs >= characterEndMs ? 1 : 0,
-        };
-      });
-    }),
+    characters: timedCharacters.map(({ text, startMs, endMs }) => ({
+      text,
+      progress: endMs > startMs
+        ? clampProgress((playbackMs - startMs) / (endMs - startMs))
+        : playbackMs >= endMs ? 1 : 0,
+    })),
   };
 }
 

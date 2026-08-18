@@ -1,6 +1,7 @@
 import {
   closeLineMoraGaps,
   kanjiRuby,
+  splitReadingMoras,
   type KirakaraLine,
   type KirakaraMora,
   type KirakaraRenderUnit,
@@ -279,25 +280,6 @@ export function applyLineEdgeOffset(
 }
 
 const MIN_MORA_DURATION_MS = 10;
-const SMALL_KANA = new Set([..."ゃゅょぁぃぅぇぉゎゕゖ"]);
-
-function splitReadingMoras(reading: string): string[] {
-  const normalized = reading.normalize("NFKC").replace(
-    /[\u30a1-\u30f6]/gu,
-    (character) => String.fromCharCode(character.charCodeAt(0) - 0x60),
-  );
-  const moras: string[] = [];
-  for (const character of normalized) {
-    if (/^[\p{P}\p{S}\s]$/u.test(character)) continue;
-    if (SMALL_KANA.has(character) && moras.length > 0) {
-      moras[moras.length - 1] += character;
-    } else {
-      moras.push(character);
-    }
-  }
-  return moras;
-}
-
 type MoraReference = {
   unitIndex: number;
   moraIndex: number;

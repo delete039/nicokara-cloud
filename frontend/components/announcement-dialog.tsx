@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ANNOUNCEMENT_CONFIG_URL,
+  ANNOUNCEMENT_OPEN_EVENT,
   hasSeenAnnouncement,
   markAnnouncementSeen,
   parseAnnouncement,
@@ -14,6 +15,7 @@ import type { Announcement } from "@/types/announcement";
 export function AnnouncementDialog() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [openRequested, setOpenRequested] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -28,12 +30,14 @@ export function AnnouncementDialog() {
         const parsed = parseAnnouncement(await response.json());
         if (!parsed) return;
 
+        let seen = false;
         try {
-          if (hasSeenAnnouncement(window.localStorage, parsed.id)) return;
+          seen = hasSeenAnnouncement(window.localStorage, parsed.id);
         } catch {
           // Storage can be unavailable in strict privacy modes; still show it.
         }
         setAnnouncement(parsed);
+        if (!seen) setOpenRequested(true);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
       }
@@ -44,7 +48,13 @@ export function AnnouncementDialog() {
   }, []);
 
   useEffect(() => {
-    if (!announcement) return;
+    const handleOpen = () => setOpenRequested(true);
+    window.addEventListener(ANNOUNCEMENT_OPEN_EVENT, handleOpen);
+    return () => window.removeEventListener(ANNOUNCEMENT_OPEN_EVENT, handleOpen);
+  }, []);
+
+  useEffect(() => {
+    if (!announcement || !openRequested) return;
     const dialog = dialogRef.current;
     if (!dialog) return;
 
@@ -56,7 +66,7 @@ export function AnnouncementDialog() {
       document.body.style.overflow = previousOverflow;
       if (dialog.open) dialog.close();
     };
-  }, [announcement]);
+  }, [announcement, openRequested]);
 
   const dismiss = useCallback(() => {
     if (!announcement) return;
@@ -66,7 +76,7 @@ export function AnnouncementDialog() {
       // Closing the announcement should not depend on storage availability.
     }
     dialogRef.current?.close();
-    setAnnouncement(null);
+    setOpenRequested(false);
   }, [announcement]);
 
   if (!announcement) return null;

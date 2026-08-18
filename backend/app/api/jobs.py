@@ -5,16 +5,25 @@ import json
 import logging
 import re
 import shutil
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
+from app.alignment.review import (
+    TimelineReviewError,
+    apply_timeline_review,
+    lyric_timeline_from_dict,
+)
+from app.alignment.models import LyricTimeline
 from app.core.active_jobs import ActiveJobLimitError
 from app.core.config import Settings
 from app.core.database import Database
+from app.core.event_logging import exception_details
 from app.core.rate_limit import resolve_client_key
 from app.schemas.jobs import (
     JobResponse,
@@ -36,7 +45,8 @@ from app.services.chunked_uploads import (
     start_chunked_upload,
 )
 from app.services.uploads import save_lyrics, save_mp4
-from app.lyrics.models import lyric_document_from_dict
+from app.lyrics.models import LyricDocument, lyric_document_from_dict
+from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -71,6 +81,10 @@ def normalized_client_submission_id(value: str | None) -> str | None:
 
 def services(request: Request) -> tuple[Settings, Database]:
     return request.app.state.settings, request.app.state.database
+
+
+def request_event_logger(request: Request):
+    return getattr(request.app.state, "event_logger", None)
 
 
 def client_key_from_request(request: Request, settings: Settings) -> str:
@@ -138,10 +152,13 @@ async def enqueue_created_job(request: Request, job_id: str) -> None:
         return
     try:
         await enqueue(job_id)
-    except Exception:
-        logger.exception(
-            "Job %s was stored but could not be added to the runner queue",
+    except Exception as exc:
+        safe_error = exception_details(exc, include_traceback=False)
+        logger.error(
+            "Job %s was stored but could not be added to the runner queue (%s: %s)",
             job_id,
+            safe_error["exception_type"],
+            safe_error["error_summary"],
         )
 
 
@@ -207,6 +224,24 @@ def create_upload_ticket(
     )
     refresh_upload_queue(settings, database)
     refreshed = database.get_upload_ticket(ticket["id"]) or ticket
+    queue_position, queue_size = database.upload_ticket_metrics(ticket["id"])
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.ticket_created",
+            level="INFO",
+            category="upload",
+            message="上传票据创建完成",
+            reference_type="upload_ticket",
+            reference_id=ticket["id"],
+            component="upload_queue",
+            details={
+                "file_size_bytes": payload.video_size_bytes,
+                "queue_position": queue_position,
+                "queue_size": queue_size,
+                "status": refreshed["status"],
+            },
+        )
     return upload_ticket_response(database, refreshed)
 
 
@@ -284,7 +319,7 @@ def start_upload_chunks(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         ) from exc
     settings, database = services(request)
     refresh_upload_queue(settings, database)
@@ -292,7 +327,7 @@ def start_upload_chunks(
     if ticket is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         )
 
     if not ticket.get("_upload_started"):
@@ -356,6 +391,22 @@ def start_upload_chunks(
         refresh_upload_queue(settings, database)
         raise
     database.touch_uploading_ticket(ticket_id)
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.session_started",
+            level="INFO",
+            category="upload",
+            message="视频分片上传会话已建立",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_upload",
+            details={
+                "file_size_bytes": payload.video_size_bytes,
+                "chunk_size_bytes": payload.chunk_size_bytes,
+                "total_chunks": payload.total_chunks,
+            },
+        )
     return UploadChunkSessionResponse(
         ticket_id=ticket_id,
         status="UPLOADING",
@@ -381,7 +432,7 @@ async def upload_video_chunk(
         await chunk.close()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         ) from exc
     settings, database = services(request)
     refresh_upload_queue(settings, database)
@@ -390,7 +441,7 @@ async def upload_video_chunk(
         await chunk.close()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         )
     if ticket["status"] != "UPLOADING":
         await chunk.close()
@@ -411,6 +462,22 @@ async def upload_video_chunk(
         chunk,
     )
     database.touch_uploading_ticket(ticket_id)
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.chunk_received",
+            level="DEBUG",
+            category="upload",
+            message="视频分片接收完成",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_upload",
+            details={
+                "chunk_index": chunk_index,
+                "received_chunks": result["received_chunks"],
+                "total_chunks": result["total_chunks"],
+            },
+        )
     return UploadChunkResponse(
         ticket_id=ticket_id,
         chunk_index=chunk_index,
@@ -438,7 +505,7 @@ async def complete_upload_chunks(
             await lyrics_file.close()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         ) from exc
     settings, database = services(request)
     refresh_upload_queue(settings, database)
@@ -448,7 +515,7 @@ async def complete_upload_chunks(
             await lyrics_file.close()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="涓婁紶鎺掗槦鍙蜂笉瀛樺湪",
+            detail="上传排队号不存在",
         )
     if ticket["status"] == "COMPLETED" and ticket.get("job_id"):
         if lyrics_file:
@@ -495,6 +562,19 @@ async def complete_upload_chunks(
     lyrics_path = job_dir / "lyrics.txt"
     original_name = ticket["video_name"]
     created = False
+    merge_started = time.perf_counter()
+    event_logger = request_event_logger(request)
+    if event_logger is not None:
+        event_logger.emit(
+            event="upload.merge_started",
+            level="INFO",
+            category="upload",
+            message="开始合并并校验视频分片",
+            reference_type="upload_ticket",
+            reference_id=ticket_id,
+            component="chunked_upload",
+            details={"expected_size_bytes": ticket["video_size_bytes"]},
+        )
     try:
         saved = assemble_chunked_mp4(
             settings.storage_dir,
@@ -502,6 +582,25 @@ async def complete_upload_chunks(
             video_path,
             max_bytes=settings.max_video_bytes,
         )
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.merge_completed",
+                level="INFO",
+                category="upload",
+                message="视频分片合并及大小、哈希校验完成",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                component="chunked_upload",
+                duration_ms=(time.perf_counter() - merge_started) * 1000,
+                details={
+                    "expected_size_bytes": ticket["video_size_bytes"],
+                    "actual_size_bytes": saved.size_bytes,
+                    "sha256": saved.sha256,
+                    "size_verified": (
+                        saved.size_bytes == ticket["video_size_bytes"]
+                    ),
+                },
+            )
         lyrics_source = await save_lyrics(
             lyrics_text=lyrics_text,
             lyrics_file=lyrics_file,
@@ -529,7 +628,35 @@ async def complete_upload_chunks(
         remove_chunked_upload(settings.storage_dir, ticket_id)
         refresh_upload_queue(settings, database)
         await enqueue_created_job(request, job_id)
-    except Exception:
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.job_created",
+                level="INFO",
+                category="upload",
+                message="上传完成并创建处理任务",
+                reference_type="job",
+                reference_id=job_id,
+                component="chunked_upload",
+                details={
+                    "upload_ticket_id": ticket_id,
+                    "file_size_bytes": saved.size_bytes,
+                    "lyrics_provided": lyrics_source is not None,
+                    "vocal_mode": vocal_mode,
+                },
+            )
+    except Exception as exc:
+        if event_logger is not None:
+            event_logger.emit(
+                event="upload.failed",
+                level="ERROR",
+                category="upload",
+                message="视频分片合并或任务创建失败",
+                reference_type="upload_ticket",
+                reference_id=ticket_id,
+                component="chunked_upload",
+                duration_ms=(time.perf_counter() - merge_started) * 1000,
+                details=exception_details(exc),
+            )
         if created:
             database.delete_job(job_id)
         database.cancel_upload_ticket(ticket_id)
@@ -816,6 +943,78 @@ async def cancel_job(request: Request, job_id: str) -> JobResponse:
     return job_response(database, canceled_job)
 
 
+@router.post("/{job_id}/retry", response_model=JobResponse)
+async def retry_failed_job(request: Request, job_id: str) -> JobResponse:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+
+    _, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    reservation = None
+    try:
+        reservation = request.app.state.active_job_limiter.reserve(
+            job["client_key"]
+        )
+    except ActiveJobLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="当前用户已有任务正在处理，请等待任务完成后再重试。",
+            headers={"Retry-After": "60"},
+        ) from exc
+
+    try:
+        retried_job = database.retry_failed_job(job_id)
+        if retried_job is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="只有处理失败的任务可以重新加入队列。",
+            )
+        reservation.commit()
+        reservation = None
+    finally:
+        if reservation is not None:
+            reservation.release()
+
+    runner = getattr(request.app.state, "runner", None)
+    enqueue = getattr(runner, "enqueue", None) if runner is not None else None
+    if enqueue is not None:
+        try:
+            await enqueue(job_id)
+        except Exception as exc:
+            safe_error = exception_details(exc, include_traceback=False)
+            logger.error(
+                "Retried job %s could not be enqueued (%s: %s)",
+                job_id,
+                safe_error["exception_type"],
+                safe_error["error_summary"],
+            )
+            database.update_job_state(
+                job_id,
+                status="FAILED",
+                stage="RETRY_QUEUE_FAILED",
+                progress=0,
+                error_code="RETRY_QUEUE_FAILED",
+                error_message="服务器暂时无法将任务重新加入处理队列。",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="任务重新入队失败，请稍后重试。",
+            ) from exc
+
+    current_job = database.get_job(job_id) or retried_job
+    return job_response(database, current_job)
+
+
 @router.get("/{job_id}/transcript", response_class=FileResponse)
 def get_transcript(request: Request, job_id: str) -> FileResponse:
     try:
@@ -983,12 +1182,7 @@ async def confirm_readings(
             if source_token.surface.isspace():
                 reviewed_tokens.append(source_token)
                 continue
-            reading = reviewed_token.reading.strip()
-            if not reading:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="非空歌词字符的假名读音不能为空",
-                )
+            reading = reviewed_token.reading.strip() or source_token.reading
             reviewed_tokens.append(
                 replace(
                     source_token,
@@ -1121,6 +1315,174 @@ def get_subtitle(request: Request, job_id: str) -> FileResponse:
         ass_path,
         media_type="text/x-ssa; charset=utf-8",
         filename="lyrics.ass",
+    )
+
+
+def _reviewed_lyrics_document(
+    document: LyricDocument,
+    reviewed_timeline: LyricTimeline,
+) -> LyricDocument:
+    if len(document.lines) != len(reviewed_timeline.lines):
+        raise TimelineReviewError("processed lyric lines do not match timeline")
+
+    reviewed_lines = []
+    for document_line, timeline_line in zip(
+        document.lines,
+        reviewed_timeline.lines,
+        strict=True,
+    ):
+        if (
+            document_line.surface != timeline_line.surface
+            or len(document_line.tokens) != len(timeline_line.tokens)
+        ):
+            raise TimelineReviewError("processed lyrics do not match timeline")
+        reviewed_tokens = []
+        for document_token, timeline_token in zip(
+            document_line.tokens,
+            timeline_line.tokens,
+            strict=True,
+        ):
+            if document_token.surface != timeline_token.surface:
+                raise TimelineReviewError("processed lyrics do not match timeline")
+            reviewed_tokens.append(
+                replace(
+                    document_token,
+                    reading=timeline_token.reading,
+                    alignment_pronunciation=(
+                        document_token.alignment_pronunciation
+                        if timeline_token.reading == document_token.reading
+                        else None
+                    ),
+                )
+            )
+        reviewed_lines.append(
+            replace(
+                document_line,
+                reading="".join(token.reading for token in reviewed_tokens),
+                tokens=reviewed_tokens,
+            )
+        )
+
+    warnings = list(document.warnings)
+    if "browser_reviewed" not in warnings:
+        warnings.append("browser_reviewed")
+    return replace(document, lines=reviewed_lines, warnings=warnings)
+
+
+@router.post("/{job_id}/exports/{artifact}", response_class=Response)
+def export_reviewed_artifact(
+    request: Request,
+    job_id: str,
+    artifact: str,
+    review: dict[str, Any],
+) -> Response:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+    if artifact not in {"lyrics", "timeline", "subtitle"}:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="不支持的导出格式",
+        )
+
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    timeline_path_value = job.get("timeline_path")
+    if not timeline_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词时间轴尚未完成",
+        )
+    timeline_path = validated_job_file(settings, job_id, timeline_path_value)
+
+    try:
+        source_timeline = lyric_timeline_from_dict(
+            json.loads(timeline_path.read_text(encoding="utf-8"))
+        )
+        reviewed_timeline = apply_timeline_review(source_timeline, review)
+    except (json.JSONDecodeError, TimelineReviewError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"时间轴校正数据无效：{exc}",
+        ) from exc
+
+    if artifact == "timeline":
+        content = json.dumps(
+            reviewed_timeline.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="timeline.reviewed.json"'
+                )
+            },
+        )
+
+    if artifact == "subtitle":
+        content = KirakaraAssGenerator(
+            config=KirakaraAssConfig.from_browser_style(review.get("style"))
+        ).generate(reviewed_timeline)
+        return Response(
+            content=content.encode("utf-8-sig"),
+            media_type="text/x-ssa",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="lyrics.reviewed.ass"'
+                )
+            },
+        )
+
+    lyrics_path_value = job.get("lyrics_processed_path")
+    if not lyrics_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词处理尚未完成",
+        )
+    lyrics_path = validated_job_file(settings, job_id, lyrics_path_value)
+    try:
+        document = lyric_document_from_dict(
+            json.loads(lyrics_path.read_text(encoding="utf-8"))
+        )
+        reviewed_document = _reviewed_lyrics_document(
+            document,
+            reviewed_timeline,
+        )
+    except TimelineReviewError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"注音校正数据无效：{exc}",
+        ) from exc
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词处理文件无法读取",
+        ) from exc
+    content = json.dumps(
+        reviewed_document.to_dict(),
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="lyrics_processed.reviewed.json"'
+            )
+        },
     )
 
 

@@ -1,6 +1,7 @@
 import type { Announcement } from "@/types/announcement";
 
 export const ANNOUNCEMENT_CONFIG_URL = "/announcement.json";
+export const ANNOUNCEMENT_OPEN_EVENT = "nicokara:announcement:open";
 const STORAGE_PREFIX = "nicokara:announcement:seen:";
 
 function isRecord(value: unknown): value is Record<string, unknown> {

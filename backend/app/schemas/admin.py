@@ -36,6 +36,12 @@ class AdminLogItem(BaseModel):
     message: str
     reference_type: str | None
     reference_id: str | None
+    run_id: str | None = None
+    stage: str | None = None
+    component: str | None = None
+    duration_ms: float | None = None
+    request_id: str | None = None
+    schema_version: int = 1
     details: dict[str, Any]
     created_at: str
 
@@ -45,3 +51,8 @@ class AdminLogsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AdminJobTimelineResponse(AdminLogsResponse):
+    job_id: str
+    run_ids: list[str]

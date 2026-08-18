@@ -68,7 +68,7 @@ describe("ReadingReviewEditor", () => {
     expect(html).not.toContain('<button type="button" disabled=""');
   });
 
-  it("still blocks confirmation when a non-whitespace reading is empty", () => {
+  it("allows confirmation when a generated reading is left empty", () => {
     const html = renderToStaticMarkup(
       <ReadingReviewEditor
         lyrics={{
@@ -90,6 +90,7 @@ describe("ReadingReviewEditor", () => {
       />,
     );
 
-    expect(html).toContain('<button type="button" disabled=""');
+    expect(html).toContain("留空将沿用系统生成的读音");
+    expect(html).not.toContain('<button type="button" disabled=""');
   });
 });

@@ -2,6 +2,8 @@ import type {
   AdminAction,
   AdminLogFilters,
   AdminLogsResponse,
+  AdminJobTimelineResponse,
+  AdminTimelineFilters,
   AdminOverview,
 } from "@/types/admin";
 
@@ -73,13 +75,38 @@ export function getAdminLogs(
   const search = new URLSearchParams();
   if (filters.level) search.set("level", filters.level);
   if (filters.category) search.set("category", filters.category);
+  if (filters.event) search.set("event", filters.event);
+  if (filters.component) search.set("component", filters.component);
+  if (filters.stage) search.set("stage", filters.stage);
   if (filters.referenceId) search.set("reference_id", filters.referenceId);
+  if (filters.runId) search.set("run_id", filters.runId);
+  if (filters.requestId) search.set("request_id", filters.requestId);
+  if (filters.createdFrom) search.set("created_from", filters.createdFrom);
+  if (filters.createdTo) search.set("created_to", filters.createdTo);
   if (filters.query) search.set("query", filters.query);
+  if (filters.order) search.set("order", filters.order);
   search.set("limit", String(filters.limit ?? 50));
   search.set("offset", String(filters.offset ?? 0));
   return adminRequest<AdminLogsResponse>(
     token,
     `/admin/logs?${search.toString()}`,
+  );
+}
+
+
+export function getAdminJobTimeline(
+  token: string,
+  jobId: string,
+  filters: AdminTimelineFilters = {},
+): Promise<AdminJobTimelineResponse> {
+  const search = new URLSearchParams();
+  if (filters.runId) search.set("run_id", filters.runId);
+  search.set("order", filters.order ?? "asc");
+  search.set("limit", String(filters.limit ?? 200));
+  search.set("offset", String(filters.offset ?? 0));
+  return adminRequest<AdminJobTimelineResponse>(
+    token,
+    `/admin/jobs/${encodeURIComponent(jobId)}/timeline?${search.toString()}`,
   );
 }
 

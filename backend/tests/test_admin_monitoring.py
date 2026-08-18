@@ -200,6 +200,31 @@ def test_admin_can_cancel_upload_and_requeue_failed_job_with_audit(
         "job.requeue",
         "upload_ticket.cancel",
     ]
+    upload_event = database.list_event_logs(
+        event="upload.canceled", reference_id=ticket["id"]
+    )["items"][0]
+    assert upload_event["details"]["actor"] == "administrator"
+
+
+def test_admin_cancel_job_is_distinguishable_from_user_cancel(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path)
+    runner = MonitoringRunner()
+
+    with TestClient(create_app(settings, runner=runner)) as client:
+        database = client.app.state.database
+        job_id = "41000000-0000-0000-0000-000000000001"
+        create_job(database, settings.storage_dir, job_id)
+        response = client.post(
+            f"/api/v1/admin/jobs/{job_id}/cancel",
+            headers=auth_headers(),
+        )
+        event = database.list_event_logs(
+            event="job.canceled", reference_id=job_id
+        )["items"][0]
+
+    assert response.status_code == 200
+    assert event["details"]["actor"] == "administrator"
+    assert event["details"]["stage"] == "CANCELED_BY_USER"
 
 
 def test_admin_queue_health_is_probeable_and_fails_when_workers_are_unhealthy(
@@ -292,6 +317,12 @@ def test_admin_logs_are_protected_filterable_and_paginated(tmp_path: Path) -> No
         "message": "任务处理失败：TRANSCRIPTION_FAILED",
         "reference_type": "job",
         "reference_id": job_id,
+        "run_id": None,
+        "stage": "TRANSCRIBING",
+        "component": "state_machine",
+        "duration_ms": None,
+        "request_id": None,
+        "schema_version": 1,
         "details": {
             "error_code": "TRANSCRIPTION_FAILED",
             "progress": 40,
@@ -304,3 +335,91 @@ def test_admin_logs_are_protected_filterable_and_paginated(tmp_path: Path) -> No
     assert second_page.json()["total"] >= 3
     assert len(second_page.json()["items"]) == 1
     assert "Audio transcription failed" not in filtered.text
+
+
+def test_admin_logs_support_structured_filters_and_stable_job_timeline(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        database = client.app.state.database
+        ticket = database.create_upload_ticket(
+            ticket_id="60000000-0000-0000-0000-000000000001",
+            client_key="private-client",
+            video_name="song.mp4",
+            video_size_bytes=123,
+        )
+        database.activate_upload_tickets(max_active_uploads=1)
+        database.begin_upload_ticket(ticket["id"])
+        job_id = "70000000-0000-0000-0000-000000000001"
+        create_job(database, settings.storage_dir, job_id)
+        assert database.complete_upload_ticket(ticket["id"], job_id)
+        database.record_event_log(
+            level="INFO",
+            category="pipeline",
+            event="stage.started",
+            message="开始歌词对齐",
+            reference_type="job",
+            reference_id=job_id,
+            run_id="run-a",
+            stage="ALIGNING",
+            component="fa_kara",
+            request_id="request-a",
+            details={"model": "mms"},
+        )
+        database.record_event_log(
+            level="WARNING",
+            category="pipeline",
+            event="stage.fallback",
+            message="切换普通对齐器",
+            reference_type="job",
+            reference_id=job_id,
+            run_id="run-b",
+            stage="ALIGNING",
+            component="fa_kara",
+            request_id="request-b",
+            details={"reason": "low confidence"},
+        )
+
+        filtered = client.get(
+            "/api/v1/admin/logs",
+            headers=auth_headers(),
+            params={
+                "event": "stage.fallback",
+                "component": "fa_kara",
+                "stage": "ALIGNING",
+                "run_id": "run-b",
+                "request_id": "request-b",
+                "order": "asc",
+            },
+        )
+        timeline = client.get(
+            f"/api/v1/admin/jobs/{job_id}/timeline",
+            headers=auth_headers(),
+            params={"order": "asc", "limit": 200},
+        )
+        run_timeline = client.get(
+            f"/api/v1/admin/jobs/{job_id}/timeline",
+            headers=auth_headers(),
+            params={"run_id": "run-a", "order": "asc"},
+        )
+
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["run_id"] == "run-b"
+    assert timeline.status_code == 200
+    body = timeline.json()
+    assert body["job_id"] == job_id
+    assert body["run_ids"] == ["run-a", "run-b"]
+    assert any(
+        item["reference_id"] == ticket["id"]
+        and item["event"] == "upload.queued"
+        for item in body["items"]
+    )
+    ordering = [(item["created_at"], item["id"]) for item in body["items"]]
+    assert ordering == sorted(ordering)
+    assert run_timeline.status_code == 200
+    assert {item["run_id"] for item in run_timeline.json()["items"]} == {
+        "run-a"
+    }

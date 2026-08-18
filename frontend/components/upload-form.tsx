@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
 
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
+import { LyricsOverflowDialog } from "@/components/lyrics-overflow-dialog";
 import { MobileRouteStatus } from "@/components/mobile-route-status";
 import { MobileSubmissionProgress } from "@/components/mobile-submission-progress";
 import {
@@ -33,6 +34,12 @@ import {
 } from "@/lib/mobile-submission";
 import { rememberLocalVideo } from "@/lib/local-media-session";
 import {
+  detectLyricsWidthOverflow,
+  readLyricsValidationSource,
+  type LyricsValidationSource,
+  type LyricsWidthOverflowReport,
+} from "@/lib/lyrics-width-validation";
+import {
   ApiRequestError,
   createAudioOnlyJob,
   createJob,
@@ -41,6 +48,12 @@ import type { UploadTicket } from "@/types/upload-ticket";
 
 const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 
+type PendingLyricsWarning = {
+  report: LyricsWidthOverflowReport;
+  source: LyricsValidationSource;
+  resumeSubmit: boolean;
+};
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
@@ -48,10 +61,13 @@ function formatBytes(bytes: number): string {
 
 export function UploadForm() {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
   const lyricsInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const mobileAbortController = useRef<AbortController | null>(null);
+  const ignoredLyricsSignature = useRef<string | null>(null);
+  const lyricsValidationSequence = useRef(0);
   const [video, setVideo] = useState<File | null>(null);
   const [lyricsText, setLyricsText] = useState("");
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
@@ -65,6 +81,8 @@ export function UploadForm() {
     useState<MobileProcessingRoute | null>(null);
   const [mobileSubmission, setMobileSubmission] =
     useState<MobileSubmissionState | null>(null);
+  const [lyricsWarning, setLyricsWarning] =
+    useState<PendingLyricsWarning | null>(null);
 
   useEffect(() => {
     if (!video) return;
@@ -132,6 +150,50 @@ export function UploadForm() {
     if (videoInput.current) videoInput.current.value = "";
   }
 
+  function lyricsFileReadError(fileName: string): ErrorFeedback {
+    return {
+      title: "歌词文件读取失败",
+      description: "浏览器无法读取所选歌词文件，当前文件尚未上传。",
+      solutions: [
+        "确认文件仍然存在且没有被其他程序独占，然后重新选择。",
+        "将歌词另存为 UTF-8 编码的 TXT 或 LRC 文件后重试。",
+        "也可以直接将歌词粘贴到文本框中。",
+      ],
+      technicalDetails: [`文件名：${fileName}`],
+      retryable: false,
+    };
+  }
+
+  async function checkLyricsWidth(
+    nextLyricsText: string,
+    nextLyricsFile: File | null,
+    resumeSubmit: boolean,
+  ): Promise<boolean> {
+    const validationSequence = ++lyricsValidationSequence.current;
+    let source: LyricsValidationSource;
+    try {
+      source = await readLyricsValidationSource(nextLyricsText, nextLyricsFile);
+    } catch {
+      if (validationSequence !== lyricsValidationSequence.current) return true;
+      setError(lyricsFileReadError(nextLyricsFile?.name ?? "未知文件"));
+      return false;
+    }
+    if (validationSequence !== lyricsValidationSequence.current) return true;
+    if (!source.text.trim()) return true;
+
+    try {
+      await document.fonts?.ready;
+    } catch {
+      // Font readiness is an optimization; canvas still provides a safe fallback.
+    }
+    if (validationSequence !== lyricsValidationSequence.current) return true;
+    const report = detectLyricsWidthOverflow(source.text);
+    if (!report || ignoredLyricsSignature.current === source.signature) return true;
+
+    setLyricsWarning({ report, source, resumeSubmit });
+    return false;
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
@@ -154,6 +216,9 @@ export function UploadForm() {
     }
     if (video.size > MAX_VIDEO_BYTES) {
       setError(validationErrorFeedback("video_too_large"));
+      return;
+    }
+    if (!(await checkLyricsWidth(lyricsText, lyricsFile, true))) {
       return;
     }
 
@@ -221,7 +286,7 @@ export function UploadForm() {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-7">
+    <form ref={formRef} onSubmit={submit} className="space-y-7">
       <section aria-labelledby="video-heading">
         <h2 id="video-heading" className="mb-3 text-lg font-semibold">
           {UPLOAD_COPY.videoSectionTitle}
@@ -287,7 +352,18 @@ export function UploadForm() {
         <textarea
           value={lyricsText}
           disabled={Boolean(lyricsFile) || uploading}
-          onChange={(event) => setLyricsText(event.target.value)}
+          onChange={(event) => {
+            lyricsValidationSequence.current += 1;
+            ignoredLyricsSignature.current = null;
+            const nextText = event.target.value;
+            setLyricsText(nextText);
+            if ((event.nativeEvent as InputEvent).inputType === "insertFromPaste") {
+              void checkLyricsWidth(nextText, null, false);
+            }
+          }}
+          onBlur={(event) => {
+            void checkLyricsWidth(event.currentTarget.value, null, false);
+          }}
           rows={7}
           placeholder={"君の知らない物語\nいつも通りのある日の事"}
           className="focus-ring w-full resize-y rounded-2xl border bg-card px-4 py-3 text-sm leading-7 placeholder:text-muted-foreground/60 disabled:cursor-not-allowed disabled:bg-muted"
@@ -299,9 +375,14 @@ export function UploadForm() {
             accept=".txt,.lrc,text/plain,application/x-subrip"
             className="sr-only"
             onChange={(event) => {
-              setLyricsFile(event.target.files?.[0] ?? null);
+              const nextFile = event.target.files?.[0] ?? null;
+              lyricsValidationSequence.current += 1;
+              ignoredLyricsSignature.current = null;
+              setLyricsWarning(null);
+              setLyricsFile(nextFile);
               setLyricsText("");
               setError(null);
+              if (nextFile) void checkLyricsWidth("", nextFile, false);
             }}
           />
           <button
@@ -317,6 +398,9 @@ export function UploadForm() {
             <button
               type="button"
               onClick={() => {
+                lyricsValidationSequence.current += 1;
+                ignoredLyricsSignature.current = null;
+                setLyricsWarning(null);
                 setLyricsFile(null);
                 if (lyricsInput.current) lyricsInput.current.value = "";
               }}
@@ -442,6 +526,22 @@ export function UploadForm() {
       <p className="text-center text-xs text-muted-foreground">
         {UPLOAD_COPY.footer}
       </p>
+
+      {lyricsWarning && (
+        <LyricsOverflowDialog
+          report={lyricsWarning.report}
+          sourceLabel={lyricsWarning.source.label}
+          onCancel={() => setLyricsWarning(null)}
+          onContinue={() => {
+            const shouldResumeSubmit = lyricsWarning.resumeSubmit;
+            ignoredLyricsSignature.current = lyricsWarning.source.signature;
+            setLyricsWarning(null);
+            if (shouldResumeSubmit) {
+              queueMicrotask(() => formRef.current?.requestSubmit());
+            }
+          }}
+        />
+      )}
     </form>
   );
 }

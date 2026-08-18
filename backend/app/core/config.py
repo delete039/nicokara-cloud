@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     cleanup_enabled: bool = True
     job_retention_hours: int = 24
     cleanup_interval_seconds: int = 3600
+    log_level: str = "INFO"
+    event_log_level: str = "INFO"
+    json_console_logs: bool = False
+    event_log_debug: bool = False
+    event_log_retention_days: int = 30
+    event_log_max_rows: int = 100_000
+    event_log_progress_throttle_seconds: float = 5.0
     allowed_origins: str = DEFAULT_ALLOWED_ORIGINS
     trusted_proxy_hosts: str = "127.0.0.1,::1"
     processing_enabled: bool = True
@@ -93,6 +100,8 @@ class Settings(BaseSettings):
         "upload_ticket_upload_timeout_seconds",
         "job_retention_hours",
         "cleanup_interval_seconds",
+        "event_log_retention_days",
+        "event_log_max_rows",
         "video_render_timeout_seconds",
         "fa_kara_timeout_seconds",
         "fa_kara_max_concurrent_alignments",
@@ -109,6 +118,7 @@ class Settings(BaseSettings):
         "fa_kara_silence_window_seconds",
         "fa_kara_silence_threshold_ratio",
         "fa_kara_tail_window_seconds",
+        "event_log_progress_throttle_seconds",
     )
     @classmethod
     def positive_heartbeat_interval(cls, value: float) -> float:
@@ -136,6 +146,14 @@ class Settings(BaseSettings):
         if not 0 <= value <= 51:
             raise ValueError("must be between 0 and 51")
         return value
+
+    @field_validator("log_level", "event_log_level")
+    @classmethod
+    def valid_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("must be DEBUG, INFO, WARNING, ERROR or CRITICAL")
+        return normalized
 
     @field_validator("video_render_preset")
     @classmethod

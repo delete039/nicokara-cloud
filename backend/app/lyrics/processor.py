@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 import re
+import time
 from typing import Any
 
 from janome.tokenizer import Tokenizer
 from pykakasi import kakasi
 
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
+from app.core.event_logging import exception_details
 
 
 SYSTEM_PROMPT = """
@@ -362,14 +364,66 @@ class LocalJapaneseLyricProcessor:
 
 
 class ResilientLyricProcessor:
-    def __init__(self, *, primary: Any, fallback: Any) -> None:
+    def __init__(
+        self,
+        *,
+        primary: Any,
+        fallback: Any,
+        event_logger: Any | None = None,
+    ) -> None:
         self.primary = primary
         self.fallback = fallback
+        self.event_logger = event_logger
 
     def process(self, text: str) -> LyricDocument:
+        source_lines = normalized_lines(text)
+        client = getattr(self.primary, "client", None)
+        call_details = {
+            "attempt": 1,
+            "character_count": sum(len(line) for line in source_lines),
+            "line_count": len(source_lines),
+            "model": getattr(client, "model", None),
+            "timeout_seconds": getattr(client, "timeout_seconds", None),
+        }
+        started = time.perf_counter()
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                event="external.started",
+                level="INFO",
+                category="external",
+                message="开始调用 DeepSeek 处理歌词注音",
+                component="deepseek",
+                details=call_details,
+            )
         try:
-            return self.primary.process(text)
+            document = self.primary.process(text)
         except Exception as exc:
+            if self.event_logger is not None:
+                self.event_logger.emit(
+                    event="external.failed",
+                    level="WARNING",
+                    category="external",
+                    message="DeepSeek 歌词处理失败，将使用本地处理器",
+                    component="deepseek",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    details={
+                        "attempt": 1,
+                        "retry_count": 0,
+                        "fallback_component": type(self.fallback).__name__,
+                        **exception_details(exc),
+                    },
+                )
+                self.event_logger.emit(
+                    event="stage.fallback",
+                    level="WARNING",
+                    category="pipeline",
+                    message="歌词处理切换到本地注音处理器",
+                    component="deepseek",
+                    details={
+                        "reason": "deepseek_unavailable",
+                        "fallback_component": type(self.fallback).__name__,
+                    },
+                )
             document = self.fallback.process(text)
             return replace(
                 document,
@@ -378,3 +432,19 @@ class ResilientLyricProcessor:
                     f"deepseek_fallback:{type(exc).__name__}",
                 ],
             )
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                event="external.completed",
+                level="INFO",
+                category="external",
+                message="DeepSeek 歌词注音处理完成",
+                component="deepseek",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                details={
+                    "attempt": 1,
+                    "provider": document.provider,
+                    "result_line_count": len(document.lines),
+                    "warning_count": len(document.warnings),
+                },
+            )
+        return document

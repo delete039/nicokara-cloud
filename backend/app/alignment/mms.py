@@ -35,6 +35,21 @@ _CONVERTER = kakasi()
 class ForcedAlignmentError(RuntimeError):
     """Raised when MMS_FA cannot produce a complete, usable alignment."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int | None = None,
+        timeout_seconds: float | None = None,
+        stderr_tail: str | None = None,
+        command: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.timeout_seconds = timeout_seconds
+        self.stderr_tail = stderr_tail
+        self.command = command
+
 
 @dataclass(frozen=True)
 class MMSMoraSpan:
@@ -126,16 +141,26 @@ class SubprocessMMSRuntime:
                 for span in payload["spans"]
             ]
         except subprocess.TimeoutExpired as exc:
-            raise ForcedAlignmentError("MMS_FA alignment timed out") from exc
+            raise ForcedAlignmentError(
+                "MMS_FA alignment timed out",
+                timeout_seconds=timeout_seconds,
+                stderr_tail=str(exc.stderr or "")[-1200:],
+                command=command,
+            ) from exc
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or "").strip()
             if detail:
                 detail = detail[-1200:]
                 raise ForcedAlignmentError(
-                    f"MMS_FA worker failed: {detail}"
+                    f"MMS_FA worker failed: {detail}",
+                    exit_code=exc.returncode,
+                    stderr_tail=detail,
+                    command=command,
                 ) from exc
             raise ForcedAlignmentError(
-                f"MMS_FA worker exited with code {exc.returncode}"
+                f"MMS_FA worker exited with code {exc.returncode}",
+                exit_code=exc.returncode,
+                command=command,
             ) from exc
         except Exception as exc:
             raise ForcedAlignmentError("MMS_FA worker failed") from exc

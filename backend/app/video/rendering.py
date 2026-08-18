@@ -8,6 +8,21 @@ from typing import Sequence
 class VideoRenderingError(RuntimeError):
     """Raised when FFmpeg cannot render the karaoke video."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int | None = None,
+        timeout_seconds: float | None = None,
+        stderr_tail: str | None = None,
+        command: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.timeout_seconds = timeout_seconds
+        self.stderr_tail = stderr_tail
+        self.command = list(command) if command is not None else None
+
 
 class FFmpegVideoRenderer:
     def __init__(
@@ -110,7 +125,20 @@ class FFmpegVideoRenderer:
                 raise VideoRenderingError(
                     "FFmpeg did not produce a non-empty output video"
                 )
+        except subprocess.TimeoutExpired as exc:
+            output_path.unlink(missing_ok=True)
+            raise VideoRenderingError(
+                "FFmpeg video rendering timed out",
+                timeout_seconds=self.timeout_seconds,
+                stderr_tail=str(exc.stderr or "")[-2000:],
+                command=cmd,
+            ) from exc
         except subprocess.CalledProcessError as exc:
             output_path.unlink(missing_ok=True)
             detail = (exc.stderr or "FFmpeg exited with an error").strip()
-            raise VideoRenderingError(detail[-2000:]) from exc
+            raise VideoRenderingError(
+                detail[-2000:],
+                exit_code=exc.returncode,
+                stderr_tail=detail[-2000:],
+                command=cmd,
+            ) from exc

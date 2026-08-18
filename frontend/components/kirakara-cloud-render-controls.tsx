@@ -17,6 +17,7 @@ export function KirakaraCloudRenderControls({
   timeline,
   style,
   emphasized = false,
+  rerender = false,
   onQueued,
 }: {
   jobId: string;
@@ -24,6 +25,7 @@ export function KirakaraCloudRenderControls({
   timeline: KirakaraTimeline;
   style?: KirakaraStyle;
   emphasized?: boolean;
+  rerender?: boolean;
   onQueued: (job: Job) => void;
 }) {
   const [state, setState] = useState<CloudRenderState>("idle");
@@ -71,7 +73,9 @@ export function KirakaraCloudRenderControls({
         )}
         {state === "uploading"
           ? `正在上传原视频 ${progress}%`
-          : "进入云端渲染队列"}
+          : rerender
+            ? "按当前设置重新云端渲染"
+            : "进入云端渲染队列"}
       </button>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
         云端只使用已校正的时间轴和注音进行 Kirakara 视频嵌字，不会重新识别或对齐歌词。

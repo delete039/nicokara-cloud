@@ -6,10 +6,13 @@
 .codegraph/
 .pytest_cache/
 .pytest-tmp-*/
+.tmp/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+*.out.log
+*.err.log
 
 outputs/
 work/
@@ -28,8 +31,13 @@ models/
 
 # Generated deployment bundles stay local; keep release scripts tracked.
 release/*.tar.gz
+release/*.tar.gz.sha256
 release/SHA256SUMS
 release/_stage-*/
+release/.staging-*/
+release/_archive-list-*.txt
+release/deploy-nicokara-cloud-v*-*-*.sh
+release/部署说明-v*-*-*.md
 *.zip
 
 backend/data/

@@ -18,4 +18,18 @@ describe("inkAwareProgress", () => {
     expect(result.percentage).toBeCloseTo(16.2162, 4);
     expect(result.canvasWidth).toBeCloseTo(71, 4);
   });
+
+  it("keeps Kirakara's over-100 end coverage for the right ink edge", () => {
+    const result = inkAwareProgress({
+      rawProgress: 1,
+      fontSize: 64,
+      strokeWidth: 5,
+      width: 64,
+      inkLeft: 0,
+      inkRight: 64,
+      layoutWidth: 64,
+    });
+
+    expect(result.percentage).toBeGreaterThan(100);
+  });
 });

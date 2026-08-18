@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_KIRAKARA_STYLE,
+  kirakaraStylePayload,
   loadKirakaraStyle,
   normalizeKirakaraStyle,
 } from "./kirakara-style";
@@ -60,5 +61,14 @@ describe("Kirakara style", () => {
     expect(
       normalizeKirakaraStyle({ fontFamily: "Broken\nFont" }).fontFamily,
     ).toBe(DEFAULT_KIRAKARA_STYLE.fontFamily);
+  });
+
+  it("sends the first CSS font family without CSS quotes", () => {
+    expect(
+      kirakaraStylePayload({
+        ...DEFAULT_KIRAKARA_STYLE,
+        fontFamily: "'Yu Mincho', serif",
+      }).font_family,
+    ).toBe("Yu Mincho");
   });
 });

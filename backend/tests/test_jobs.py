@@ -443,7 +443,7 @@ def test_reading_review_rejects_changed_lyric_structure(tmp_path: Path) -> None:
     assert rejected.status_code == 422
 
 
-def test_reading_review_rejects_empty_reading_for_non_whitespace_token(
+def test_reading_review_uses_generated_reading_when_review_is_empty(
     tmp_path: Path,
 ) -> None:
     with build_client(tmp_path) as client:
@@ -481,7 +481,7 @@ def test_reading_review_rejects_empty_reading_for_non_whitespace_token(
             lyrics_processed_path=lyrics_path,
         )
 
-        rejected = client.post(
+        confirmed = client.post(
             f"/api/v1/jobs/{job_id}/readings",
             json={
                 "lines": [
@@ -493,8 +493,97 @@ def test_reading_review_rejects_empty_reading_for_non_whitespace_token(
             },
         )
 
-    assert rejected.status_code == 422
-    assert rejected.json()["detail"] == "非空歌词字符的假名读音不能为空"
+        saved = json.loads(lyrics_path.read_text(encoding="utf-8"))
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "UPLOADED"
+    assert confirmed.json()["stage"] == "ALIGNMENT_QUEUED"
+    assert saved["lines"][0]["reading"] == "きみ"
+    assert saved["lines"][0]["tokens"][0]["reading"] == "きみ"
+
+
+def test_failed_job_can_be_retried_from_its_status_page(tmp_path: Path) -> None:
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.job_ids: list[str] = []
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def enqueue(self, job_id: str) -> None:
+            self.job_ids.append(job_id)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+    )
+    runner = RecordingRunner()
+    with TestClient(create_app(settings, runner=runner)) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君"},
+        )
+        job_id = response.json()["id"]
+        runner.job_ids.clear()
+        client.app.state.database.update_job_state(
+            job_id,
+            status="FAILED",
+            stage="TRANSCRIBING",
+            progress=40,
+            error_code="TRANSCRIPTION_FAILED",
+            error_message="failed",
+        )
+
+        retried = client.post(f"/api/v1/jobs/{job_id}/retry")
+
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "UPLOADED"
+    assert retried.json()["stage"] == "REQUEUED_BY_USER"
+    assert retried.json()["progress"] == 0
+    assert retried.json()["error_code"] is None
+    assert runner.job_ids == [job_id]
+
+
+def test_failed_job_retry_respects_the_clients_active_job_limit(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        max_active_jobs_per_client=1,
+        processing_enabled=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        failed_response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("failed.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君"},
+        )
+        failed_job_id = failed_response.json()["id"]
+        client.app.state.database.update_job_state(
+            failed_job_id,
+            status="FAILED",
+            stage="TRANSCRIBING",
+            progress=40,
+            error_code="TRANSCRIPTION_FAILED",
+            error_message="failed",
+        )
+        active_response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("active.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君"},
+        )
+
+        retried = client.post(f"/api/v1/jobs/{failed_job_id}/retry")
+
+    assert active_response.status_code == 201
+    assert retried.status_code == 429
+    assert retried.headers["Retry-After"] == "60"
 
 
 def test_completed_timeline_can_be_downloaded(tmp_path: Path) -> None:
@@ -555,6 +644,175 @@ def test_generated_ass_can_be_downloaded(tmp_path: Path) -> None:
         content.splitlines()
     )
     assert "lyrics.ass" in subtitle_response.headers["content-disposition"]
+
+
+def _prepare_reviewable_job(client: TestClient, tmp_path: Path) -> tuple[str, dict]:
+    response = client.post(
+        "/api/v1/jobs",
+        files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+        data={"lyrics_text": "物語"},
+    )
+    job_id = response.json()["id"]
+    job_dir = tmp_path / "jobs" / job_id
+    timeline_path = job_dir / "timeline.json"
+    timeline = {
+        "confidence": 0.82,
+        "alignment_engine": "mms_fa_kara",
+        "alignment_model": "test-model",
+        "warnings": [],
+        "lines": [
+            {
+                "surface": "物語",
+                "reading": "ものがたり",
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "confidence": 0.8,
+                "tokens": [
+                    {
+                        "surface": "物語",
+                        "reading": "ものがたり",
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "confidence": 0.8,
+                        "moras": [
+                            {
+                                "reading": reading,
+                                "start_ms": 1000 + index * 400,
+                                "end_ms": 1400 + index * 400,
+                                "matched": True,
+                                "confidence": 0.8,
+                            }
+                            for index, reading in enumerate("ものがたり")
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    timeline_path.write_text(
+        json.dumps(timeline, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    lyrics_path = job_dir / "lyrics_processed.json"
+    lyrics_path.write_text(
+        json.dumps(
+            {
+                "provider": "local",
+                "source_text": "物語",
+                "lines": [
+                    {
+                        "source": "物語",
+                        "surface": "物語",
+                        "reading": "ものがたり",
+                        "tokens": [
+                            {
+                                "surface": "物語",
+                                "reading": "ものがたり",
+                                "alignment_pronunciation": "monogatari",
+                            }
+                        ],
+                    }
+                ],
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    client.app.state.database.update_job_state(
+        job_id,
+        status="SUBTITLE_GENERATED",
+        stage="SUBTITLE_GENERATION_COMPLETE",
+        progress=100,
+        timeline_path=timeline_path,
+        lyrics_processed_path=lyrics_path,
+    )
+    review = {
+        "lines": [
+            {
+                "start_ms": 2000,
+                "end_ms": 4000,
+                "tokens": [
+                    {
+                        "reading": "ものかたり",
+                        "start_ms": 2000,
+                        "end_ms": 4000,
+                        "moras": [
+                            {
+                                "reading": reading,
+                                "start_ms": 2000 + index * 400,
+                                "end_ms": 2400 + index * 400,
+                            }
+                            for index, reading in enumerate("ものかたり")
+                        ],
+                    }
+                ],
+            }
+        ],
+        "style": {"font_size": 70, "color_after": "#112233"},
+    }
+    return job_id, review
+
+
+def test_reviewed_timeline_export_uses_current_user_adjustments(
+    tmp_path: Path,
+) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+        original_path = tmp_path / "jobs" / job_id / "timeline.json"
+        original_content = original_path.read_text(encoding="utf-8")
+
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/exports/timeline",
+            json=review,
+        )
+
+    assert response.status_code == 200
+    exported = response.json()
+    assert exported["lines"][0]["start_ms"] == 2000
+    assert exported["lines"][0]["tokens"][0]["reading"] == "ものかたり"
+    assert exported["lines"][0]["tokens"][0]["moras"][0] == {
+        "reading": "も",
+        "start_ms": 2000,
+        "end_ms": 2400,
+        "matched": True,
+        "confidence": 1.0,
+    }
+    assert "browser_reviewed" in exported["warnings"]
+    assert original_path.read_text(encoding="utf-8") == original_content
+
+
+def test_reviewed_lyrics_export_uses_current_user_readings(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/exports/lyrics",
+            json=review,
+        )
+
+    assert response.status_code == 200
+    exported = response.json()
+    assert exported["lines"][0]["reading"] == "ものかたり"
+    assert exported["lines"][0]["tokens"][0]["reading"] == "ものかたり"
+    assert exported["lines"][0]["tokens"][0]["alignment_pronunciation"] is None
+
+
+def test_reviewed_ass_export_uses_current_timing_and_style(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/exports/subtitle",
+            json=review,
+        )
+
+    assert response.status_code == 200
+    content = response.content.decode("utf-8-sig")
+    assert "Dialogue: 3,0:00:02.00" in content
+    assert "Style: KirakaraBase,Noto Sans CJK JP,105" in content
+    assert "&H00332211" in content
+    assert "lyrics.reviewed.ass" in response.headers["content-disposition"]
 
 
 def test_final_video_can_be_streamed_and_downloaded(tmp_path: Path) -> None:

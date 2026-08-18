@@ -13,6 +13,7 @@ from app.ai.whisper import (
 )
 from app.alignment.models import AlignedLine, AlignedToken, LyricTimeline
 from app.core.database import Database
+from app.core.event_logging import StructuredEventLogger
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
 
 
@@ -1396,3 +1397,84 @@ def test_pipeline_classifies_missing_ffmpeg_as_server_tool_failure(
     assert job["error_message"] == (
         "服务器音视频处理工具不可用，请管理员检查 FFmpeg 安装和配置。"
     )
+
+
+def test_pipeline_records_stage_summaries_and_completion_timeline(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    recorder = StructuredEventLogger(database=database)
+    database.configure_event_logger(recorder)
+    job_dir = tmp_path / "storage" / "job"
+    job_id = create_uploaded_job(database, job_dir)
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        event_logger=recorder,
+    )
+
+    pipeline.process(job_id)
+
+    events = database.list_event_logs(reference_id=job_id, order="asc", limit=50)[
+        "items"
+    ]
+    named = [item["event"] for item in events]
+    assert named.count("pipeline.started") == 1
+    assert named.count("pipeline.completed") == 1
+    completed = [item for item in events if item["event"] == "stage.completed"]
+    assert [item["stage"] for item in completed] == [
+        "EXTRACTING_AUDIO",
+        "TRANSCRIBING",
+    ]
+    transcription = completed[1]
+    assert transcription["component"] == "whisper"
+    assert transcription["details"] == {
+        "duration_seconds": 12.0,
+        "language": "ja",
+        "language_confidence": 0.98,
+        "segment_count": 1,
+        "word_count": 1,
+        "output_size_bytes": (job_dir / "transcript.json").stat().st_size,
+    }
+    assert len({item["run_id"] for item in events if item["run_id"]}) == 1
+
+
+def test_pipeline_internal_failure_trace_is_admin_only_and_structured(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    recorder = StructuredEventLogger(database=database)
+    database.configure_event_logger(recorder)
+    job_dir = tmp_path / "storage" / "job"
+    job_id = create_uploaded_job(database, job_dir)
+
+    class FailingTranscriber:
+        def transcribe(self, audio_path: Path) -> TranscriptDocument:
+            raise RuntimeError("token=private-value model failed")
+
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FailingTranscriber(),
+        event_logger=recorder,
+    )
+
+    with pytest.raises(RuntimeError):
+        pipeline.process(job_id)
+
+    failed = database.list_event_logs(
+        reference_id=job_id,
+        event="pipeline.failed",
+    )["items"][0]
+    assert failed["stage"] == "TRANSCRIBING"
+    assert failed["details"]["exception_type"] == "RuntimeError"
+    assert "traceback" in failed["details"]
+    assert "private-value" not in str(failed["details"])
+    job = database.get_job(job_id)
+    assert job is not None
+    assert "traceback" not in job["error_message"]

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeKirakaraFrame,
+  kanjiRuby,
   toKirakaraTimeline,
   type CloudAlignedLine,
   type CloudLyricTimeline,
@@ -91,6 +92,50 @@ const cloudTimeline: CloudLyricTimeline = {
 };
 
 describe("toKirakaraTimeline", () => {
+  it("isolates ruby to kanji runs inside mixed kana tokens", () => {
+    expect(kanjiRuby("お願い", "おねがい")).toEqual([
+      { text: "ねが", startCharacter: 1, endCharacter: 2 },
+    ]);
+  });
+
+  it("starts mixed-token ruby at the matching mora instead of the token start", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("お願い", "おねがい", 1_000, 1_400, [
+          {
+            surface: "お願い",
+            reading: "おねがい",
+            start_ms: 1_000,
+            end_ms: 1_400,
+            confidence: 1,
+            moras: [
+              { reading: "お", start_ms: 1_000, end_ms: 1_100, matched: true, confidence: 1 },
+              { reading: "ね", start_ms: 1_100, end_ms: 1_200, matched: true, confidence: 1 },
+              { reading: "が", start_ms: 1_200, end_ms: 1_300, matched: true, confidence: 1 },
+              { reading: "い", start_ms: 1_300, end_ms: 1_400, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const beforeRuby = activeKirakaraFrame(toKirakaraTimeline(source), 1_050)
+      ?.lines[0].units[0].ruby[0];
+    const duringRuby = activeKirakaraFrame(toKirakaraTimeline(source), 1_150)
+      ?.lines[0].units[0].ruby[0];
+
+    expect(beforeRuby?.characters).toEqual([
+      { text: "ね", progress: 0 },
+      { text: "が", progress: 0 },
+    ]);
+    expect(duringRuby?.characters).toEqual([
+      { text: "ね", progress: 0.5 },
+      { text: "が", progress: 0 },
+    ]);
+  });
+
   it("keeps mora timing and creates ruby only for kanji groups", () => {
     const timeline = toKirakaraTimeline(cloudTimeline);
 
@@ -162,6 +207,187 @@ describe("toKirakaraTimeline", () => {
       startMs: 2_200,
       endMs: 2_400,
     });
+  });
+
+  it("repairs zero-duration source moras before review and export", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("今日", "きょう", 23_429, 23_580, [
+          {
+            surface: "今日",
+            reading: "きょう",
+            start_ms: 23_429,
+            end_ms: 23_580,
+            confidence: 1,
+            moras: [
+              {
+                reading: "きょ",
+                start_ms: 23_429,
+                end_ms: 23_429,
+                matched: false,
+                confidence: 0,
+              },
+              {
+                reading: "う",
+                start_ms: 23_429,
+                end_ms: 23_580,
+                matched: true,
+                confidence: 1,
+              },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const moras = toKirakaraTimeline(source).lines[0].units[0].moras;
+
+    expect(moras).toEqual([
+      { reading: "きょ", startMs: 23_429, endMs: 23_504, matched: false },
+      { reading: "う", startMs: 23_504, endMs: 23_580, matched: true },
+    ]);
+  });
+
+  it("rebuilds source moras when their count does not match the reading", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("今日", "きょう", 1000, 1400, [
+          {
+            surface: "今日",
+            reading: "きょう",
+            start_ms: 1000,
+            end_ms: 1400,
+            confidence: 1,
+            moras: [
+              {
+                reading: "きょう",
+                start_ms: 1000,
+                end_ms: 1400,
+                matched: false,
+                confidence: 0,
+              },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    expect(toKirakaraTimeline(source).lines[0].units[0].moras).toEqual([
+      { reading: "きょ", startMs: 1000, endMs: 1200, matched: true },
+      { reading: "う", startMs: 1200, endMs: 1400, matched: true },
+    ]);
+  });
+
+  it("repairs a collapsed line and shifts following lines without overlap", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("君と", "きみと", 1000, 1000, [
+          {
+            surface: "君",
+            reading: "きみ",
+            start_ms: 1000,
+            end_ms: 1000,
+            confidence: 0,
+            moras: [],
+          },
+          {
+            surface: "と",
+            reading: "と",
+            start_ms: 1000,
+            end_ms: 1000,
+            confidence: 0,
+            moras: [],
+          },
+        ]),
+        line("歌う", "うたう", 1000, 1400, [
+          {
+            surface: "歌う",
+            reading: "うたう",
+            start_ms: 1000,
+            end_ms: 1400,
+            confidence: 1,
+            moras: [],
+          },
+        ]),
+      ],
+    };
+
+    const timeline = toKirakaraTimeline(source);
+
+    expect(timeline.lines[0]).toMatchObject({ startMs: 1000, endMs: 1100 });
+    expect(timeline.lines[0].units.map((unit) => [unit.startMs, unit.endMs]))
+      .toEqual([[1000, 1067], [1067, 1100]]);
+    expect(timeline.lines[1]).toMatchObject({ startMs: 1100, endMs: 1500 });
+    expect(timeline.lines[1].units[0]).toMatchObject({
+      startMs: 1100,
+      endMs: 1500,
+    });
+    expect(timeline.durationMs).toBe(1500);
+  });
+
+  it("allocates time to a collapsed voiced token from its following range", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("火の歌", "ひのうた", 1000, 1600, [
+          {
+            surface: "火",
+            reading: "ひ",
+            start_ms: 1000,
+            end_ms: 1200,
+            confidence: 1,
+            moras: [],
+          },
+          {
+            surface: "の",
+            reading: "の",
+            start_ms: 1200,
+            end_ms: 1200,
+            confidence: 0,
+            moras: [
+              { reading: "の", start_ms: 1200, end_ms: 1200, matched: false, confidence: 0 },
+            ],
+          },
+          {
+            surface: "歌",
+            reading: "うた",
+            start_ms: 1200,
+            end_ms: 1200,
+            confidence: 0,
+            moras: [
+              { reading: "う", start_ms: 1200, end_ms: 1200, matched: false, confidence: 0 },
+              { reading: "た", start_ms: 1200, end_ms: 1200, matched: false, confidence: 0 },
+            ],
+          },
+          {
+            surface: "へ",
+            reading: "へ",
+            start_ms: 1200,
+            end_ms: 1600,
+            confidence: 1,
+            moras: [],
+          },
+        ]),
+      ],
+    };
+
+    const units = toKirakaraTimeline(source).lines[0].units;
+
+    expect(units.map((unit) => [unit.startMs, unit.endMs])).toEqual([
+      [1000, 1200],
+      [1200, 1300],
+      [1300, 1500],
+      [1500, 1600],
+    ]);
+    expect(units[2].moras.map((mora) => [mora.startMs, mora.endMs]))
+      .toEqual([[1300, 1400], [1400, 1500]]);
   });
 });
 

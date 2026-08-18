@@ -4,10 +4,10 @@ import { Film, FolderOpen, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
-import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
+import { ReviewedDataDownloads } from "@/components/reviewed-data-downloads";
 import {
   detectKirakaraCapabilities,
   kirakaraSupportMessage,
@@ -33,12 +33,16 @@ export function KirakaraPreview({
   jobId,
   expectedVideoName,
   vocalMode = "on",
+  hasCloudResult = false,
   onCloudRenderQueued = () => undefined,
+  onVideoElementChange,
 }: {
   jobId: string;
   expectedVideoName: string;
   vocalMode?: string;
+  hasCloudResult?: boolean;
   onCloudRenderQueued?: (job: Job) => void;
+  onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const animationFrame = useRef<number | null>(null);
@@ -55,6 +59,11 @@ export function KirakaraPreview({
       ? DEFAULT_KIRAKARA_STYLE
       : loadKirakaraStyle(window.localStorage),
   );
+
+  const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+    onVideoElementChange?.(element);
+  }, [onVideoElementChange]);
 
   useEffect(() => {
     let active = true;
@@ -196,7 +205,7 @@ export function KirakaraPreview({
             <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
               {videoUrl && (
                 <video
-                  ref={videoRef}
+                  ref={assignVideoElement}
                   src={videoUrl}
                   controls
                   playsInline
@@ -270,7 +279,7 @@ export function KirakaraPreview({
             )}
             {timeline && capabilities && (
               <div className="mt-4 min-w-0 space-y-3 border-t pt-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
-                <KirakaraProjectDownload
+                <ReviewedDataDownloads
                   jobId={jobId}
                   videoName={expectedVideoName}
                   timeline={timeline}
@@ -283,6 +292,7 @@ export function KirakaraPreview({
                   style={style}
                   jobId={jobId}
                   vocalMode={vocalMode}
+                  rerender={hasCloudResult}
                   onCloudRenderQueued={onCloudRenderQueued}
                 />
               </div>

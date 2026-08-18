@@ -25,4 +25,24 @@ describe("KirakaraCloudRenderControls", () => {
     expect(html).toContain("进入云端渲染队列");
     expect(html).toContain("不会重新识别");
   });
+
+  it("labels a completed cloud result as a rerender", () => {
+    const timeline: KirakaraTimeline = {
+      confidence: 1,
+      warnings: [],
+      durationMs: 0,
+      lines: [],
+    };
+    const html = renderToStaticMarkup(
+      <KirakaraCloudRenderControls
+        jobId="job-1"
+        video={new File(["video"], "song.mp4", { type: "video/mp4" })}
+        timeline={timeline}
+        rerender
+        onQueued={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("按当前设置重新云端渲染");
+  });
 });

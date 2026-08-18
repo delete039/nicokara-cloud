@@ -29,8 +29,25 @@ describe("announcement configuration", () => {
     const announcement = parseAnnouncement(config);
 
     expect(announcement).not.toBeNull();
-    expect(announcement?.id).toBe("2026-08-12-update-v1");
-    expect(announcement?.title).toBe("2026-08-12 更新日志");
+    expect(announcement).toMatchObject({
+      id: "2026-08-18-update-v1",
+      title: "2026-08-18 更新日志",
+      publishedAt: "2026-08-18",
+      buttonLabel: "わかった",
+    });
+    expect(announcement?.content).toEqual([
+      "2026-08-18",
+      "新增功能",
+      "1. 处理失败时可重新入队。",
+      "2. 歌词导入时可自动检测长度是否可能超出幕布。",
+      "问题修复",
+      "1. 修复了云端渲染的一些问题。",
+      "2. 修复了 ASS 文件导出错误的问题。",
+      "3. 修复了 OFF VOCAL 导出失败的问题。",
+      "QQ 交流群",
+      "欢迎加入ニコカラ自动生成器 QQ 交流群：1101583605。",
+      "群内可交流使用问题、反馈建议和获取项目更新。",
+    ]);
   });
 
   it("parses enabled plain-text announcements", () => {

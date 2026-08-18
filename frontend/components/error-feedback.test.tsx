@@ -26,4 +26,22 @@ describe("ErrorFeedbackPanel", () => {
     expect(html).toContain("任务 ID：job-123");
     expect(html).toContain("重新检查");
   });
+
+  it("renders a task-specific retry action", () => {
+    const html = renderToStaticMarkup(
+      <ErrorFeedbackPanel
+        feedback={{
+          title: "处理失败",
+          description: "任务未完成。",
+          solutions: ["重新加入队列。"],
+          technicalDetails: ["任务 ID：job-123"],
+          retryable: false,
+        }}
+        onRetry={() => undefined}
+        retryLabel="重新加入队列"
+      />,
+    );
+
+    expect(html).toContain("重新加入队列");
+  });
 });

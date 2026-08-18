@@ -216,3 +216,85 @@ def test_resilient_processor_falls_back_when_deepseek_fails() -> None:
         "local_reading_may_be_inaccurate",
         "deepseek_fallback:RuntimeError",
     ]
+
+
+def test_resilient_processor_records_deepseek_call_lifecycle_without_lyrics() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class RecordingEvents:
+        def __init__(self) -> None:
+            self.items: list[dict] = []
+
+        def emit(self, **event) -> bool:
+            self.items.append(event)
+            return True
+
+    class Primary:
+        class Client:
+            model = "deepseek-test"
+            timeout_seconds = 12
+
+        client = Client()
+
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(provider="deepseek", source_text=text, lines=[])
+
+    events = RecordingEvents()
+    processor = processor_module.ResilientLyricProcessor(
+        primary=Primary(),
+        fallback=object(),
+        event_logger=events,
+    )
+
+    processor.process("秘密の歌詞")
+
+    assert [item["event"] for item in events.items] == [
+        "external.started",
+        "external.completed",
+    ]
+    assert events.items[0]["details"] == {
+        "attempt": 1,
+        "character_count": 5,
+        "line_count": 1,
+        "model": "deepseek-test",
+        "timeout_seconds": 12,
+    }
+    assert events.items[1]["duration_ms"] >= 0
+    assert "秘密の歌詞" not in str(events.items)
+
+
+def test_resilient_processor_records_deepseek_failure_and_fallback() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class RecordingEvents:
+        def __init__(self) -> None:
+            self.items: list[dict] = []
+
+        def emit(self, **event) -> bool:
+            self.items.append(event)
+            return True
+
+    class FailingPrimary:
+        def process(self, text: str) -> LyricDocument:
+            raise RuntimeError("temporary upstream failure")
+
+    class Fallback:
+        def process(self, text: str) -> LyricDocument:
+            return LyricDocument(provider="local", source_text=text, lines=[])
+
+    events = RecordingEvents()
+    processor = processor_module.ResilientLyricProcessor(
+        primary=FailingPrimary(),
+        fallback=Fallback(),
+        event_logger=events,
+    )
+
+    processor.process("東京")
+
+    assert [item["event"] for item in events.items] == [
+        "external.started",
+        "external.failed",
+        "stage.fallback",
+    ]
+    assert events.items[1]["details"]["retry_count"] == 0
+    assert events.items[2]["details"]["reason"] == "deepseek_unavailable"

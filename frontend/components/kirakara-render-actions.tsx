@@ -14,6 +14,7 @@ export function KirakaraRenderActions({
   style,
   jobId,
   vocalMode = "on",
+  rerender = false,
   onCloudRenderQueued,
 }: {
   capabilities: KirakaraCapabilities;
@@ -22,6 +23,7 @@ export function KirakaraRenderActions({
   style: KirakaraStyle;
   jobId: string;
   vocalMode?: string;
+  rerender?: boolean;
   onCloudRenderQueued: (job: Job) => void;
 }) {
   if (capabilities.export && capabilities.profile) {
@@ -44,6 +46,7 @@ export function KirakaraRenderActions({
       timeline={timeline}
       style={style}
       emphasized
+      rerender={rerender}
       onQueued={onCloudRenderQueued}
     />
   );

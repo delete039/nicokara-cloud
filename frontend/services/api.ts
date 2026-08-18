@@ -19,6 +19,7 @@ const UPLOAD_RECOVERY_POLL_INTERVAL_MS = 3_000;
 const UNKNOWN_UPLOAD_RESULT_STATUSES = new Set([0, 524]);
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 const UPLOAD_REQUEST_ATTEMPTS = 3;
+const INSTRUMENTAL_DOWNLOAD_ATTEMPTS = 3;
 
 export type CreateJobInput = {
   video: File;
@@ -753,6 +754,37 @@ export async function getTimeline(jobId: string): Promise<CloudLyricTimeline> {
   return (await response.json()) as CloudLyricTimeline;
 }
 
+export type ReviewedArtifact = "lyrics" | "timeline" | "subtitle";
+
+export async function getReviewedArtifact(
+  jobId: string,
+  artifact: ReviewedArtifact,
+  review: TimelineReviewPayload,
+): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/exports/${artifact}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(review),
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return response.blob();
+}
+
 function audioUploadStorageKey(input: CreateAudioOnlyJobInput): string {
   return `${AUDIO_UPLOAD_STORAGE_PREFIX}${[
     input.audio.name,
@@ -860,29 +892,68 @@ export async function confirmReadings(
   return (await response.json()) as Job;
 }
 
-export async function getInstrumentalAudio(jobId: string): Promise<File> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}/jobs/${jobId}/instrumental`, {
-      cache: "no-store",
-    });
-  } catch {
-    throw connectionError("job");
+export async function getInstrumentalAudio(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<File> {
+  for (
+    let attempt = 1;
+    attempt <= INSTRUMENTAL_DOWNLOAD_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      const request: RequestInit = { cache: "no-store" };
+      if (signal) request.signal = signal;
+      const response = await fetch(
+        `${API_BASE}/jobs/${jobId}/instrumental`,
+        request,
+      );
+      if (!response.ok) {
+        throw new ApiRequestError(
+          httpErrorFeedback(
+            "job",
+            response.status,
+            await fetchResponseDetail(response),
+            retryAfterSeconds(response.headers.get("Retry-After")),
+          ),
+        );
+      }
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new TypeError("Instrumental response body is empty");
+      }
+      return new File([blob], "instrumental.wav", {
+        type: blob.type || "audio/wav",
+      });
+    } catch (reason) {
+      if (signal?.aborted) {
+        throw new DOMException("OFF VOCAL 伴奏下载已取消", "AbortError");
+      }
+      if (reason instanceof DOMException && reason.name === "AbortError") {
+        throw reason;
+      }
+      if (reason instanceof ApiRequestError) throw reason;
+      if (attempt < INSTRUMENTAL_DOWNLOAD_ATTEMPTS) {
+        await wait(250 * attempt);
+        continue;
+      }
+      throw new ApiRequestError({
+        title: "OFF VOCAL 伴奏下载失败",
+        description: "服务器已生成伴奏，但浏览器未能完整接收音频，导出尚未开始。",
+        solutions: [
+          "确认网络稳定后点击“重新导出”。",
+          "如果仍然失败，请刷新任务页面后重试。",
+          "问题持续出现时，请管理员检查反向代理或隧道的大文件传输日志。",
+        ],
+        technicalDetails: [
+          `任务 ID：${jobId}`,
+          `伴奏下载已自动尝试 ${INSTRUMENTAL_DOWNLOAD_ATTEMPTS} 次。`,
+        ],
+        retryable: true,
+      });
+    }
   }
-  if (!response.ok) {
-    throw new ApiRequestError(
-      httpErrorFeedback(
-        "job",
-        response.status,
-        await fetchResponseDetail(response),
-        retryAfterSeconds(response.headers.get("Retry-After")),
-      ),
-    );
-  }
-  const blob = await response.blob();
-  return new File([blob], "instrumental.wav", {
-    type: blob.type || "audio/wav",
-  });
+  throw connectionError("job");
 }
 
 export function submitCloudRender(
@@ -939,6 +1010,29 @@ export async function cancelJob(jobId: string): Promise<Job> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}/jobs/${jobId}/cancel`, {
+      method: "POST",
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return (await response.json()) as Job;
+}
+
+export async function retryJob(jobId: string): Promise<Job> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/retry`, {
       method: "POST",
       cache: "no-store",
     });

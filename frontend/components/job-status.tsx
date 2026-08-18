@@ -30,6 +30,7 @@ import {
   queueStatusLabel,
 } from "@/lib/job-queue";
 import { JOB_COPY } from "@/lib/ui-copy";
+import { synchronizeMediaPair } from "@/lib/synchronized-media";
 import {
   ApiRequestError,
   cancelJob,
@@ -39,6 +40,7 @@ import {
   getProcessedLyrics,
   processedLyricsUrl,
   resultVideoUrl,
+  retryJob,
   subtitleUrl,
   timelineUrl,
   transcriptUrl,
@@ -53,6 +55,16 @@ export function JobStatus({ jobId }: { jobId: string }) {
   const [canceling, setCanceling] = useState(false);
   const [processedLyrics, setProcessedLyrics] = useState<ProcessedLyrics | null>(null);
   const [submittingReadings, setSubmittingReadings] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [resultVideoElement, setResultVideoElement] =
+    useState<HTMLVideoElement | null>(null);
+  const [previewVideoElement, setPreviewVideoElement] =
+    useState<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!resultVideoElement || !previewVideoElement) return;
+    return synchronizeMediaPair(resultVideoElement, previewVideoElement);
+  }, [previewVideoElement, resultVideoElement]);
 
   useEffect(() => {
     let active = true;
@@ -220,6 +232,24 @@ export function JobStatus({ jobId }: { jobId: string }) {
     }
   }
 
+  async function handleRetry() {
+    setRetrying(true);
+    setRequestError(null);
+    try {
+      const queued = await retryJob(job.id);
+      setJob(queued);
+      setRefreshKey((value) => value + 1);
+    } catch (reason) {
+      setRequestError(
+        reason instanceof ApiRequestError
+          ? reason.feedback
+          : networkErrorFeedback("job"),
+      );
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {requestError && (
@@ -334,6 +364,9 @@ export function JobStatus({ jobId }: { jobId: string }) {
                 job.id,
                 job.input_mode,
               )}
+              onRetry={handleRetry}
+              retryLabel={JOB_COPY.retryFailed}
+              retrying={retrying}
             />
           </div>
         )}
@@ -363,7 +396,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
             {(job.status === "LYRICS_PROCESSED" ||
               job.status === "ALIGNED" ||
               job.status === "SUBTITLE_GENERATED" ||
-              job.status === "COMPLETED") && (
+              job.status === "COMPLETED") &&
+              job.input_mode !== "AUDIO_ONLY" && (
               <a
                 href={processedLyricsUrl(job.id)}
                 className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
@@ -374,7 +408,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
             )}
             {(job.status === "ALIGNED" ||
               job.status === "SUBTITLE_GENERATED" ||
-              job.status === "COMPLETED") && (
+              job.status === "COMPLETED") &&
+              job.input_mode !== "AUDIO_ONLY" && (
               <a
                 href={timelineUrl(job.id)}
                 className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
@@ -384,7 +419,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
                 </a>
               )}
             {(job.status === "SUBTITLE_GENERATED" ||
-              job.status === "COMPLETED") && (
+              job.status === "COMPLETED") &&
+              job.input_mode !== "AUDIO_ONLY" && (
               <a
                 href={subtitleUrl(job.id)}
                 className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
@@ -413,6 +449,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
               {JOB_COPY.resultHeading}
             </h2>
             <video
+              ref={setResultVideoElement}
               className="mt-4 aspect-video w-full rounded-2xl bg-black"
               controls
               playsInline
@@ -439,6 +476,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
               jobId={job.id}
               expectedVideoName={job.original_video_name}
               vocalMode={job.vocal_mode ?? "on"}
+              hasCloudResult={job.status === "COMPLETED"}
+              onVideoElementChange={setPreviewVideoElement}
               onCloudRenderQueued={(queuedJob) => {
                 setJob(queuedJob);
                 setRefreshKey((value) => value + 1);

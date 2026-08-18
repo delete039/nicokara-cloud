@@ -121,6 +121,50 @@ nicokara-cloud/
 
 Kirakara 与 FA-Kara 适配逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
+### 管理员处理日志
+
+后端会把上传、排队、worker 分配、流水线阶段、降级、失败、完成、服务恢复和定期清理记录为结构化事件。管理页面位于 `/admin/logs`，需要先配置 `NICOKARA_ADMIN_TOKEN`。普通用户看到的错误信息仍然只包含安全的处理建议；异常类型、脱敏后的 traceback 和外部程序诊断只在管理员日志中显示。
+
+每条事件使用稳定的英文事件名，主要规范如下：
+
+| 事件 | 含义 |
+|---|---|
+| `request.started` / `request.completed` / `request.failed` | HTTP 请求开始、结束或异常 |
+| `upload.*` | 上传票据、排队、分片、合并、校验和任务创建 |
+| `job.queued` / `worker.assigned` / `worker.released` | 处理排队、worker 领取与释放 |
+| `pipeline.started` / `pipeline.completed` | 一次任务运行开始或完成 |
+| `stage.started` / `stage.progress` / `stage.completed` | 处理阶段开始、节流后的进度和完成 |
+| `stage.skipped` / `stage.fallback` / `stage.failed` | 跳过、降级或阶段失败 |
+| `pipeline.paused` / `pipeline.canceled` / `pipeline.failed` | 等待注音确认、取消或最终失败 |
+| `cleanup.*` / `job.interrupted` | 文件和日志清理、服务重启恢复 |
+
+常用字段包括 `event`、`level`、`category`、`job_id/reference_id`、`run_id`、`request_id`、`stage`、`component`、`duration_ms`、`details`、`created_at` 和 `schema_version`。同一任务每次重新入队都会获得新的 `run_id`，可避免把多次尝试混在一起。响应头 `X-Request-ID` 可用于关联浏览器报错与后端请求。
+
+日志不会保存完整歌词、完整转录文本、上传内容、API Key、管理员 Token、Cookie、Authorization、签名 URL 或完整本地路径。子进程输出只在失败时保存脱敏后的尾部摘要，并有长度上限。
+
+日志环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `NICOKARA_LOG_LEVEL` | `INFO` | 控制台结构化事件最低级别 |
+| `NICOKARA_EVENT_LOG_LEVEL` | `INFO` | SQLite 管理日志最低级别 |
+| `NICOKARA_JSON_CONSOLE_LOGS` | `false` | 是否以单行 JSON 输出结构化控制台事件 |
+| `NICOKARA_EVENT_LOG_DEBUG` | `false` | 是否允许记录 DEBUG 处理细节 |
+| `NICOKARA_EVENT_LOG_RETENTION_DAYS` | `30` | 管理日志保留天数 |
+| `NICOKARA_EVENT_LOG_MAX_ROWS` | `100000` | SQLite 最多保留的事件数 |
+| `NICOKARA_EVENT_LOG_PROGRESS_THROTTLE_SECONDS` | `5` | 同一任务同一阶段进度事件最短间隔 |
+
+生产环境建议保持 INFO。临时排障可同时设置 `NICOKARA_EVENT_LOG_LEVEL=DEBUG` 和 `NICOKARA_EVENT_LOG_DEBUG=true`，问题结束后恢复默认值并重启后端。DEBUG 也不会逐音频帧、逐字或逐 Whisper token 写入 SQLite。
+
+按任务 ID 查看完整时间线：
+
+```bash
+curl -H "Authorization: Bearer $NICOKARA_ADMIN_TOKEN" \
+  "http://127.0.0.1:8000/api/v1/admin/jobs/JOB_ID/timeline?order=asc"
+```
+
+在管理页面输入任务 ID 后点击“任务时间线”，可继续按 `run_id` 查看某次重试。日志列表还支持级别、分类、事件、阶段、组件、任务/票据 ID、run ID、request ID、时间范围、关键词和正倒序筛选。
+
 本地默认访问关系：
 
 ```text

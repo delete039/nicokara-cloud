@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from hmac import compare_digest
-import json
-import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -13,6 +11,7 @@ from app.core.monitoring import collect_system_resources
 from app.schemas.admin import (
     AdminActionResponse,
     AdminLogsResponse,
+    AdminJobTimelineResponse,
     AdminOverviewResponse,
     AdminQueueHealthResponse,
 )
@@ -20,7 +19,6 @@ from app.services.chunked_uploads import remove_chunked_upload
 
 
 router = APIRouter(prefix="/admin", tags=["admin monitoring"])
-logger = logging.getLogger(__name__)
 
 
 def require_admin(request: Request) -> None:
@@ -86,18 +84,6 @@ def _audit(
         target_id=target_id,
         outcome=outcome,
         details=details,
-    )
-    logger.info(
-        json.dumps(
-            {
-                "event": "admin_action",
-                "action": action,
-                "target_type": target_type,
-                "target_id": target_id,
-                "outcome": outcome,
-            },
-            ensure_ascii=True,
-        )
     )
 
 
@@ -169,20 +155,63 @@ def logs(
     request: Request,
     level: str | None = Query(default=None, max_length=16),
     category: str | None = Query(default=None, max_length=32),
+    event: str | None = Query(default=None, max_length=128),
+    component: str | None = Query(default=None, max_length=128),
+    stage: str | None = Query(default=None, max_length=128),
     reference_id: str | None = Query(default=None, max_length=128),
+    run_id: str | None = Query(default=None, max_length=128),
+    request_id: str | None = Query(default=None, max_length=128),
+    created_from: str | None = Query(default=None, max_length=64),
+    created_to: str | None = Query(default=None, max_length=64),
     query: str | None = Query(default=None, max_length=128),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ) -> AdminLogsResponse:
     result = request.app.state.database.list_event_logs(
         level=level,
         category=category,
+        event=event,
+        component=component,
+        stage=stage,
         reference_id=reference_id,
+        run_id=run_id,
+        request_id=request_id,
+        created_from=created_from,
+        created_to=created_to,
         query=query,
         limit=limit,
         offset=offset,
+        order=order,
     )
     return AdminLogsResponse(**result)
+
+
+@router.get(
+    "/jobs/{job_id}/timeline",
+    response_model=AdminJobTimelineResponse,
+    dependencies=[Depends(require_admin)],
+)
+def job_timeline(
+    request: Request,
+    job_id: str,
+    run_id: str | None = Query(default=None, max_length=128),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    order: str = Query(default="asc", pattern="^(asc|desc)$"),
+) -> AdminJobTimelineResponse:
+    database = request.app.state.database
+    if database.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return AdminJobTimelineResponse(
+        **database.list_job_event_timeline(
+            job_id,
+            run_id=run_id,
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
+    )
 
 
 @router.post(
@@ -199,7 +228,7 @@ def cancel_upload_ticket(
     ticket = database.get_upload_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Upload ticket not found.")
-    if not database.cancel_upload_ticket(ticket_id):
+    if not database.cancel_upload_ticket(ticket_id, actor="administrator"):
         raise HTTPException(status_code=409, detail="Upload ticket is not active.")
     remove_chunked_upload(settings.storage_dir, ticket_id)
     refresh_upload_queue(settings, database)
@@ -222,7 +251,7 @@ async def cancel_job(request: Request, job_id: str) -> AdminActionResponse:
     database = request.app.state.database
     if database.get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if not database.cancel_job(job_id):
+    if not database.cancel_job(job_id, actor="administrator"):
         raise HTTPException(status_code=409, detail="Job is not active.")
     runner = getattr(request.app.state, "runner", None)
     cancel = getattr(runner, "cancel", None)

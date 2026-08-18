@@ -11,12 +11,16 @@ def test_font_candidates_prefer_the_selected_windows_font_and_weight() -> None:
     assert font_candidates("Yu Gothic", bold=False)[0].endswith(
         "YuGothM.ttc"
     )
+    assert font_candidates("Yu Mincho", bold=False)[0].endswith("yumin.ttf")
+    assert font_candidates("Meiryo", bold=True)[0].endswith("meiryob.ttc")
 
 
 def test_font_candidates_prefer_matching_noto_weight_on_linux() -> None:
-    assert font_candidates("Noto Sans CJK JP", bold=True)[0].endswith(
+    candidates = font_candidates("Noto Sans CJK JP", bold=True)
+    assert candidates[0].endswith(
         "NotoSansCJK-Bold.ttc"
     )
+    assert candidates[1].endswith("NotoSansJP-VF.ttf")
 
 
 def test_fontconfig_query_requests_the_rendered_weight(monkeypatch) -> None:
