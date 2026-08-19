@@ -46,6 +46,7 @@ from app.services.chunked_uploads import (
 )
 from app.services.uploads import save_lyrics, save_mp4
 from app.lyrics.models import LyricDocument, lyric_document_from_dict
+from app.lyrics.processor import normalize_unconverted_foreign_readings
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
 
 
@@ -1052,8 +1053,8 @@ def get_transcript(request: Request, job_id: str) -> FileResponse:
     )
 
 
-@router.get("/{job_id}/lyrics", response_class=FileResponse)
-def get_processed_lyrics(request: Request, job_id: str) -> FileResponse:
+@router.get("/{job_id}/lyrics")
+def get_processed_lyrics(request: Request, job_id: str) -> Response:
     try:
         UUID(job_id)
     except ValueError as exc:
@@ -1082,10 +1083,28 @@ def get_processed_lyrics(request: Request, job_id: str) -> FileResponse:
             status_code=status.HTTP_410_GONE,
             detail="歌词处理文件不存在",
         )
-    return FileResponse(
-        lyrics_path,
+    try:
+        document = lyric_document_from_dict(
+            json.loads(lyrics_path.read_text(encoding="utf-8"))
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词处理文件无法读取",
+        ) from exc
+    normalized = normalize_unconverted_foreign_readings(document)
+    if normalized is document:
+        return FileResponse(
+            lyrics_path,
+            media_type="application/json",
+            filename="lyrics_processed.json",
+        )
+    return Response(
+        content=json.dumps(normalized.to_dict(), ensure_ascii=False),
         media_type="application/json",
-        filename="lyrics_processed.json",
+        headers={
+            "Content-Disposition": 'attachment; filename="lyrics_processed.json"'
+        },
     )
 
 

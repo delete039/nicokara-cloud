@@ -290,6 +290,64 @@ def test_processed_lyrics_can_be_downloaded(tmp_path: Path) -> None:
     assert lyrics_response.json() == processed
 
 
+def test_old_unconverted_foreign_readings_are_normalized_for_review(
+    tmp_path: Path,
+) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "Darling LOVE 2"},
+        )
+        job_id = response.json()["id"]
+        lyrics_path = tmp_path / "jobs" / job_id / "lyrics_processed.json"
+        lyrics_path.write_text(
+            json.dumps(
+                {
+                    "provider": "local",
+                    "source_text": "Darling LOVE 2",
+                    "lines": [
+                        {
+                            "source": "Darling LOVE 2",
+                            "surface": "Darling LOVE 2",
+                            "reading": "Darling らぶ 2",
+                            "tokens": [
+                                {"surface": "Darling", "reading": "Darling"},
+                                {"surface": " ", "reading": " "},
+                                {"surface": "LOVE", "reading": "らぶ"},
+                                {"surface": " ", "reading": " "},
+                                {"surface": "2", "reading": "2"},
+                            ],
+                        }
+                    ],
+                    "warnings": ["local_reading_may_be_inaccurate"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        client.app.state.database.update_job_state(
+            job_id,
+            status="LYRICS_PROCESSED",
+            stage="READING_REVIEW_REQUIRED",
+            progress=80,
+            lyrics_processed_path=lyrics_path,
+        )
+
+        lyrics_response = client.get(f"/api/v1/jobs/{job_id}/lyrics")
+
+    assert lyrics_response.status_code == 200
+    line = lyrics_response.json()["lines"][0]
+    assert line["reading"] == "だーりんぐ らぶ に"
+    assert [token["reading"] for token in line["tokens"]] == [
+        "だーりんぐ",
+        " ",
+        "らぶ",
+        " ",
+        "に",
+    ]
+
+
 def test_reviewed_readings_preserve_whitespace_before_alignment_is_queued(
     tmp_path: Path,
 ) -> None:

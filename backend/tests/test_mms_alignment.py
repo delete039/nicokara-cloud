@@ -336,6 +336,74 @@ def test_mms_aligner_falls_back_for_unannotated_latin_lyrics(
         )
 
 
+@pytest.mark.parametrize(
+    ("surface", "reading", "expected_tokens"),
+    [
+        ("LOVE", "らぶ", ["ra", "bu"]),
+        ("39", "さんきゅー", ["sa", "n", "kyu", "u"]),
+    ],
+)
+def test_mms_aligner_accepts_latin_or_digits_with_reviewed_kana_reading(
+    tmp_path: Path,
+    surface: str,
+    reading: str,
+    expected_tokens: list[str],
+) -> None:
+    from app.alignment.japanese import normalize_reading, split_moras
+    from app.alignment.mms import MMSForcedAligner, MMSMoraSpan
+
+    lyrics = LyricDocument(
+        provider="local",
+        source_text=surface,
+        lines=[
+            LyricLine(
+                source=surface,
+                surface=surface,
+                reading=reading,
+                tokens=[LyricToken(surface=surface, reading=reading)],
+            )
+        ],
+    )
+
+    class RecordingRuntime:
+        def __init__(self) -> None:
+            self.tokens: list[str] = []
+
+        def align(
+            self,
+            audio_path,
+            tokens,
+            timeout_seconds,
+            *,
+            line_token_counts,
+        ):
+            self.tokens = tokens
+            assert line_token_counts == [len(expected_tokens)]
+            return [
+                MMSMoraSpan(
+                    start_ms=100 + index * 100,
+                    end_ms=200 + index * 100,
+                    score=0.9,
+                )
+                for index in range(len(tokens))
+            ]
+
+    runtime = RecordingRuntime()
+    timeline = MMSForcedAligner(runtime=runtime).align(
+        lyrics,
+        empty_transcript(),
+        audio_path=tmp_path / "vocals.wav",
+    )
+
+    assert runtime.tokens == expected_tokens
+    assert timeline.lines[0].surface == surface
+    assert [
+        mora.reading
+        for token in timeline.lines[0].tokens
+        for mora in token.moras
+    ] == list(split_moras(normalize_reading(reading)))
+
+
 def test_subprocess_runtime_parses_worker_output(tmp_path: Path) -> None:
     from app.alignment.mms import SubprocessMMSRuntime
 

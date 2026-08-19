@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 
 import pytest
 
@@ -62,6 +63,112 @@ def test_deepseek_processor_returns_ruby_ready_lyrics() -> None:
     assert client.calls
     assert "JSON" in client.calls[0][0]
     assert "每个汉字" in client.calls[0][0]
+
+
+def test_deepseek_processor_requests_kana_readings_for_latin_and_digits() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    client = FakeJsonClient(
+        {
+            "lines": [
+                {
+                    "surface": "LOVE 39",
+                    "reading": "らぶ さんきゅー",
+                    "tokens": [
+                        {"surface": "LOVE", "reading": "らぶ"},
+                        {"surface": " ", "reading": " "},
+                        {"surface": "39", "reading": "さんきゅー"},
+                    ],
+                }
+            ]
+        }
+    )
+
+    document = processor_module.DeepSeekLyricProcessor(client=client).process(
+        "LOVE 39"
+    )
+
+    prompt = client.calls[0][0]
+    assert "英文或数字" in prompt
+    assert "实际唱法" in prompt
+    assert "平假名" in prompt
+    assert document.lines[0].reading == "らぶ さんきゅー"
+
+
+def test_deepseek_processor_retries_unconverted_latin_reading_once() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class SequenceJsonClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+            self.responses = [
+                {
+                    "lines": [
+                        {
+                            "surface": "LOVE",
+                            "reading": "LOVE",
+                            "tokens": [
+                                {"surface": "LOVE", "reading": "LOVE"}
+                            ],
+                        }
+                    ]
+                },
+                {
+                    "lines": [
+                        {
+                            "surface": "LOVE",
+                            "reading": "らぶ",
+                            "tokens": [
+                                {"surface": "LOVE", "reading": "らぶ"}
+                            ],
+                        }
+                    ]
+                },
+            ]
+
+        def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict:
+            self.calls.append((system_prompt, user_prompt))
+            return self.responses[len(self.calls) - 1]
+
+    client = SequenceJsonClient()
+    document = processor_module.DeepSeekLyricProcessor(client=client).process(
+        "LOVE"
+    )
+
+    assert len(client.calls) == 2
+    assert "纠正" in client.calls[1][1]
+    assert document.lines[0].reading == "らぶ"
+    assert document.lines[0].tokens[0].reading == "らぶ"
+
+
+def test_deepseek_processor_rejects_unconverted_reading_after_retry() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class InvalidJsonClient:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict:
+            self.call_count += 1
+            return {
+                "lines": [
+                    {
+                        "surface": "LOVE",
+                        "reading": "LOVE",
+                        "tokens": [
+                            {"surface": "LOVE", "reading": "LOVE"}
+                        ],
+                    }
+                ]
+            }
+
+    client = InvalidJsonClient()
+    with pytest.raises(
+        processor_module.LyricProcessingError,
+        match="kana reading",
+    ):
+        processor_module.DeepSeekLyricProcessor(client=client).process("LOVE")
+
+    assert client.call_count == 2
 
 
 def test_deepseek_processor_rejects_tokens_that_change_surface() -> None:
@@ -134,6 +241,30 @@ def test_local_processor_uses_kana_suffix_as_reading_anchor() -> None:
         ("しい", "しい"),
     ]
     assert "".join(token.reading for token in tokens) == "おとなしい"
+
+
+def test_local_processor_generates_editable_kana_for_latin_words_and_digits() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("Darling Mother Get you Die for 2")
+
+    line = document.lines[0]
+    foreign_tokens = [
+        token
+        for token in line.tokens
+        if re.search(r"[A-Za-z0-9]", token.surface)
+    ]
+    assert [(token.surface, token.reading) for token in foreign_tokens] == [
+        ("Darling", "だーりんぐ"),
+        ("Mother", "まざー"),
+        ("Get", "げっと"),
+        ("you", "ゆー"),
+        ("Die", "だい"),
+        ("for", "ふぉー"),
+        ("2", "に"),
+    ]
+    assert re.search(r"[A-Za-z0-9]", line.reading) is None
 
 
 def test_local_processor_parses_fa_kara_explicit_annotations() -> None:

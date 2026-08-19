@@ -409,6 +409,138 @@ def test_request_id_header_and_request_events_skip_health_polling(tmp_path: Path
     )
 
 
+def test_audio_chunk_upload_skips_blocking_request_logs_but_keeps_business_event(
+    tmp_path: Path,
+) -> None:
+    audio = b"audio-chunk"
+    submission_id = "10000000-0000-4000-8000-000000000101"
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        cleanup_enabled=False,
+        event_log_level="DEBUG",
+        event_log_debug=True,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        session = client.post(
+            "/api/v1/browser/audio-uploads",
+            json={
+                "audio_name": "song.wav",
+                "audio_size_bytes": len(audio),
+                "original_video_name": "song.mp4",
+                "original_video_size_bytes": 1024,
+                "chunk_size_bytes": 8 * 1024 * 1024,
+                "total_chunks": 1,
+                "client_submission_id": submission_id,
+            },
+        )
+        uploaded = client.post(
+            f"/api/v1/browser/audio-uploads/{submission_id}/chunks/part/0",
+            files={
+                "chunk": (
+                    "chunk-0.part",
+                    audio,
+                    "application/octet-stream",
+                )
+            },
+        )
+        database = client.app.state.database
+        request_events = database.list_event_logs(
+            category="request",
+            reference_id=submission_id,
+            order="asc",
+        )["items"]
+        business_events = database.list_event_logs(
+            event="upload.audio_chunk_received",
+            reference_id=submission_id,
+            order="asc",
+        )["items"]
+
+    assert session.status_code == 201
+    assert uploaded.status_code == 200
+    assert uploaded.headers.get("X-Request-ID")
+    assert request_events == []
+    assert len(business_events) == 1
+    assert business_events[0]["details"] == {
+        "chunk_index": 0,
+        "received_chunks": 1,
+        "total_chunks": 1,
+    }
+
+
+def test_video_chunk_upload_skips_blocking_request_logs_but_keeps_business_event(
+    tmp_path: Path,
+) -> None:
+    video = b"video-chunk"
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        cleanup_enabled=False,
+        event_log_level="DEBUG",
+        event_log_debug=True,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        ticket_response = client.post(
+            "/api/v1/upload-tickets",
+            json={
+                "video_name": "song.mp4",
+                "video_size_bytes": len(video),
+            },
+        )
+        ticket_id = ticket_response.json()["id"]
+        session = client.post(
+            f"/api/v1/upload-tickets/{ticket_id}/chunks/start",
+            json={
+                "video_name": "song.mp4",
+                "video_size_bytes": len(video),
+                "chunk_size_bytes": len(video),
+                "total_chunks": 1,
+            },
+        )
+        uploaded = client.post(
+            f"/api/v1/upload-tickets/{ticket_id}/chunks/part/0",
+            files={
+                "chunk": (
+                    "chunk-0.part",
+                    video,
+                    "application/octet-stream",
+                )
+            },
+        )
+        database = client.app.state.database
+        request_events = database.list_event_logs(
+            category="request",
+            reference_id=ticket_id,
+            order="asc",
+        )["items"]
+        chunk_request_events = [
+            item
+            for item in request_events
+            if item["details"].get("route", "").endswith("/chunks/part/0")
+        ]
+        business_events = database.list_event_logs(
+            event="upload.chunk_received",
+            reference_id=ticket_id,
+            order="asc",
+        )["items"]
+
+    assert ticket_response.status_code == 201
+    assert session.status_code == 200
+    assert uploaded.status_code == 200
+    assert uploaded.headers.get("X-Request-ID")
+    assert chunk_request_events == []
+    assert len(business_events) == 1
+    assert business_events[0]["details"] == {
+        "chunk_index": 0,
+        "received_chunks": 1,
+        "total_chunks": 1,
+    }
+
+
 def test_periodic_cleanup_applies_event_log_retention(tmp_path: Path) -> None:
     database = Database(tmp_path / "events.sqlite3")
     database.initialize()

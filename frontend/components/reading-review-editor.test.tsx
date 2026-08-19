@@ -68,6 +68,70 @@ describe("ReadingReviewEditor", () => {
     expect(html).not.toContain('<button type="button" disabled=""');
   });
 
+  it("warns when a foreign word still has an unconverted reading", () => {
+    const html = renderToStaticMarkup(
+      <ReadingReviewEditor
+        lyrics={{
+          provider: "local",
+          source_text: "LOVEを歌う",
+          warnings: [],
+          lines: [
+            {
+              source: "LOVEを歌う",
+              surface: "LOVEを歌う",
+              reading: "LOVEをうたう",
+              tokens: [
+                { surface: "LOVE", reading: "LOVE" },
+                { surface: "を", reading: "を" },
+                { surface: "歌", reading: "うた" },
+                { surface: "う", reading: "う" },
+              ],
+            },
+          ],
+        }}
+        submitting={false}
+        onChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("请确认将外来语注音为假名");
+    expect(html).toContain('aria-invalid="true"');
+    expect(html).toContain("LOVE → らぶ");
+  });
+
+  it("asks for confirmation when a foreign word has generated kana", () => {
+    const html = renderToStaticMarkup(
+      <ReadingReviewEditor
+        lyrics={{
+          provider: "local",
+          source_text: "LOVEを歌う",
+          warnings: ["local_reading_may_be_inaccurate"],
+          lines: [
+            {
+              source: "LOVEを歌う",
+              surface: "LOVEを歌う",
+              reading: "らぶをうたう",
+              tokens: [
+                { surface: "LOVE", reading: "らぶ" },
+                { surface: "を", reading: "を" },
+                { surface: "歌", reading: "うた" },
+                { surface: "う", reading: "う" },
+              ],
+            },
+          ],
+        }}
+        submitting={false}
+        onChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("请确认将外来语注音为假名");
+    expect(html).toContain("系统已提供默认读音");
+  });
+
   it("allows confirmation when a generated reading is left empty", () => {
     const html = renderToStaticMarkup(
       <ReadingReviewEditor

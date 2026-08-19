@@ -338,8 +338,19 @@ def create_app(
         reference_type = (
             "job" if job_match else "upload_ticket" if ticket_match else None
         )
+        chunk_upload_request = (
+            method == "POST"
+            and re.fullmatch(
+                rf"{re.escape(resolved_settings.api_prefix)}"
+                r"/(?:upload-tickets|browser/audio-uploads)"
+                r"/[^/]+/chunks/part/\d+",
+                path,
+            )
+            is not None
+        )
         suppress_event = (
-            path in {"/health", "/api/v1/health"}
+            chunk_upload_request
+            or path in {"/health", "/api/v1/health"}
             or (
                 method == "GET"
                 and re.fullmatch(r"/api/v1/jobs/[0-9a-fA-F-]{36}", path)

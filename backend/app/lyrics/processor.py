@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any
 
+import alkana
 from janome.tokenizer import Tokenizer
 from pykakasi import kakasi
 
@@ -22,13 +23,59 @@ SYSTEM_PROMPT = """
   后续连续假名可以合并为一个 token，不得把多个汉字放在同一个 token 中
   例如「物語」拆成「物/もの」「語/がたり」，
   「知らない」拆成「知/し」「らない/らない」
+- surface 中的英文或数字必须保留原表记；对应的整行 reading 和 token reading
+  必须根据歌词中的实际唱法改写为平假名，不得保留英文字母或数字，
+  例如「LOVE 39」可写为「LOVE/らぶ」「39/さんきゅー」
 tokens 的 surface 拼接必须严格等于该行 surface。
 输出格式：{"lines":[{"surface":"...","reading":"...","tokens":[...]}]}
 """.strip()
 
 _FA_KARA_ROMAJI = re.compile(r"[A-Za-z']+")
+_LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")
 _SMALL_KANA = frozenset("ゃゅょぁぃぅぇぉゎゕゖっー")
 _READING_CONVERTER = kakasi()
+_FOREIGN_READING_PARTS = re.compile(r"[A-Za-z]+|[0-9]+|[^A-Za-z0-9]+")
+_FOREIGN_SEPARATORS = frozenset("-'’_")
+_DIGIT_READINGS = {
+    "0": "ぜろ",
+    "1": "いち",
+    "2": "に",
+    "3": "さん",
+    "4": "よん",
+    "5": "ご",
+    "6": "ろく",
+    "7": "なな",
+    "8": "はち",
+    "9": "きゅう",
+}
+_LETTER_READINGS = {
+    "a": "えー",
+    "b": "びー",
+    "c": "しー",
+    "d": "でぃー",
+    "e": "いー",
+    "f": "えふ",
+    "g": "じー",
+    "h": "えいち",
+    "i": "あい",
+    "j": "じぇー",
+    "k": "けー",
+    "l": "える",
+    "m": "えむ",
+    "n": "えぬ",
+    "o": "おー",
+    "p": "ぴー",
+    "q": "きゅー",
+    "r": "あーる",
+    "s": "えす",
+    "t": "てぃー",
+    "u": "ゆー",
+    "v": "ぶい",
+    "w": "だぶりゅー",
+    "x": "えっくす",
+    "y": "わい",
+    "z": "ぜっと",
+}
 
 
 def _is_kanji(character: str) -> bool:
@@ -210,6 +257,22 @@ def normalized_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def has_unconverted_latin_or_digits(response: dict[str, Any]) -> bool:
+    for line in response.get("lines", []):
+        if (
+            _LATIN_OR_DIGIT.search(str(line.get("surface", "")))
+            and _LATIN_OR_DIGIT.search(str(line.get("reading", "")))
+        ):
+            return True
+        for token in line.get("tokens", []):
+            if (
+                _LATIN_OR_DIGIT.search(str(token.get("surface", "")))
+                and _LATIN_OR_DIGIT.search(str(token.get("reading", "")))
+            ):
+                return True
+    return False
+
+
 class LyricProcessingError(ValueError):
     """Raised when an AI lyric response cannot be safely consumed."""
 
@@ -223,10 +286,24 @@ class DeepSeekLyricProcessor:
             return LocalJapaneseLyricProcessor().process(text)
         source_lines = normalized_lines(text)
         source_text = "\n".join(source_lines)
+        request_payload: dict[str, Any] = {"lines": source_lines}
         response = self.client.complete_json(
             system_prompt=SYSTEM_PROMPT,
-            user_prompt=json.dumps({"lines": source_lines}, ensure_ascii=False),
+            user_prompt=json.dumps(request_payload, ensure_ascii=False),
         )
+        if has_unconverted_latin_or_digits(response):
+            request_payload["纠正"] = (
+                "上一次结果仍在 reading 中保留了英文或数字。请保持 surface "
+                "不变，并按实际唱法把对应 reading 全部改为平假名。"
+            )
+            response = self.client.complete_json(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=json.dumps(request_payload, ensure_ascii=False),
+            )
+            if has_unconverted_latin_or_digits(response):
+                raise LyricProcessingError(
+                    "automatic English or numeric kana reading was not generated"
+                )
         lines: list[LyricLine] = []
         for source, result in zip(source_lines, response["lines"], strict=True):
             tokens = [
@@ -262,6 +339,31 @@ class LocalJapaneseLyricProcessor:
     def _hiragana(self, text: str) -> str:
         return "".join(item["hira"] for item in self.converter.convert(text))
 
+    def _foreign_reading(self, surface: str) -> str:
+        reading_parts: list[str] = []
+        for part in _FOREIGN_READING_PARTS.findall(surface):
+            if part.isascii() and part.isalpha():
+                katakana = alkana.get_kana(part)
+                reading_parts.append(
+                    self._hiragana(katakana)
+                    if katakana is not None
+                    else "".join(_LETTER_READINGS[letter] for letter in part.lower())
+                )
+            elif part.isascii() and part.isdigit():
+                reading_parts.append(
+                    "".join(_DIGIT_READINGS[digit] for digit in part)
+                )
+            elif all(character in _FOREIGN_SEPARATORS for character in part):
+                continue
+            else:
+                reading_parts.append(self._hiragana(part))
+        return "".join(reading_parts)
+
+    def _surface_reading(self, surface: str) -> str:
+        if _LATIN_OR_DIGIT.search(surface):
+            return self._foreign_reading(surface)
+        return self._hiragana(surface)
+
     def _plain_tokens(self, text: str) -> list[LyricToken]:
         tokens: list[LyricToken] = []
         for item in self.tokenizer.tokenize(text):
@@ -275,7 +377,7 @@ class LocalJapaneseLyricProcessor:
             tokens.append(
                 LyricToken(
                     surface=surface,
-                    reading=self._hiragana(surface),
+                    reading=self._surface_reading(surface),
                     alignment_pronunciation=alignment_pronunciation,
                 )
             )
@@ -361,6 +463,45 @@ class LocalJapaneseLyricProcessor:
             lines=lines,
             warnings=["local_reading_may_be_inaccurate"],
         )
+
+
+def normalize_unconverted_foreign_readings(
+    document: LyricDocument,
+) -> LyricDocument:
+    processor = LocalJapaneseLyricProcessor()
+    changed = False
+    normalized_lines: list[LyricLine] = []
+    for line in document.lines:
+        normalized_tokens: list[LyricToken] = []
+        for token in line.tokens:
+            should_generate = (
+                token.alignment_pronunciation is None
+                and _LATIN_OR_DIGIT.search(token.surface) is not None
+                and (
+                    not token.reading.strip()
+                    or _LATIN_OR_DIGIT.search(token.reading) is not None
+                )
+            )
+            if should_generate:
+                normalized_tokens.append(
+                    replace(
+                        token,
+                        reading=processor._surface_reading(token.surface),
+                    )
+                )
+                changed = True
+            else:
+                normalized_tokens.append(token)
+        normalized_lines.append(
+            replace(
+                line,
+                reading="".join(token.reading for token in normalized_tokens),
+                tokens=normalized_tokens,
+            )
+        )
+    if not changed:
+        return document
+    return replace(document, lines=normalized_lines)
 
 
 class ResilientLyricProcessor:

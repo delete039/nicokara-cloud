@@ -1,8 +1,19 @@
 "use client";
 
-import { Check, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle, TriangleAlert } from "lucide-react";
 
 import type { ProcessedLyrics } from "@/types/job";
+
+const LATIN_OR_DIGIT = /[A-Za-z0-9]/;
+
+function isForeignSurface(surface: string) {
+  return LATIN_OR_DIGIT.test(surface);
+}
+
+function hasUnconvertedForeignReading(surface: string, reading: string) {
+  return isForeignSurface(surface)
+    && (reading.trim().length === 0 || LATIN_OR_DIGIT.test(reading));
+}
 
 export function ReadingReviewEditor({
   lyrics,
@@ -17,6 +28,12 @@ export function ReadingReviewEditor({
 }) {
   const valid = lyrics.lines.length > 0 && lyrics.lines.every(
     (line) => line.tokens.length > 0,
+  );
+  const foreignReadingCount = lyrics.lines.reduce(
+    (count, line) => count + line.tokens.filter(
+      (token) => isForeignSurface(token.surface),
+    ).length,
+    0,
   );
 
   function updateReading(
@@ -48,6 +65,21 @@ export function ReadingReviewEditor({
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
         只需修改不准确的项目；留空将沿用系统生成的读音。
       </p>
+      {foreignReadingCount > 0 && (
+        <div
+          role="alert"
+          className="mt-4 flex gap-3 rounded-md border border-amber-500/70 bg-amber-50 px-4 py-3 text-amber-950 shadow-sm dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="font-bold">请确认将外来语注音为假名</p>
+            <p className="mt-1 text-sm leading-6">
+              检测到 {foreignReadingCount} 处英文或数字。系统已提供默认读音，
+              请按实际唱法逐项确认高亮项目，例如 LOVE → らぶ。
+            </p>
+          </div>
+        </div>
+      )}
       <div className="mt-4 max-h-[34rem] divide-y overflow-y-auto overscroll-contain border-y [scrollbar-gutter:stable]">
         {lyrics.lines.map((line, lineIndex) => (
           <section key={`${lineIndex}-${line.surface}`} className="py-4">
@@ -68,10 +100,21 @@ export function ReadingReviewEditor({
                     </div>
                   );
                 }
+                const requiresKanaConfirmation = isForeignSurface(
+                  token.surface,
+                );
+                const hasInvalidKana = hasUnconvertedForeignReading(
+                  token.surface,
+                  token.reading,
+                );
                 return (
                   <label
                     key={`${tokenIndex}-${token.surface}`}
-                    className="min-w-0 text-xs font-medium text-muted-foreground"
+                    className={`min-w-0 text-xs font-medium ${
+                      requiresKanaConfirmation
+                        ? "rounded-md border border-amber-500/70 bg-amber-50 p-2 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
+                        : "text-muted-foreground"
+                    }`}
                   >
                     <span className="block break-all text-sm font-semibold text-foreground">
                       {token.surface}
@@ -80,13 +123,18 @@ export function ReadingReviewEditor({
                     <input
                       type="text"
                       value={token.reading}
+                      aria-invalid={hasInvalidKana || undefined}
                       disabled={submitting}
                       onChange={(event) => updateReading(
                         lineIndex,
                         tokenIndex,
                         event.target.value,
                       )}
-                      className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60"
+                      className={`focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-60 ${
+                        requiresKanaConfirmation
+                          ? "border-amber-600 ring-2 ring-amber-400/50"
+                          : ""
+                      }`}
                     />
                   </label>
                 );

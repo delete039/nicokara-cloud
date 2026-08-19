@@ -245,9 +245,12 @@ class MMSForcedAligner:
                         )
                     )
                     continue
-                if _LATIN_OR_DIGIT.search(token.surface):
+                if (
+                    _LATIN_OR_DIGIT.search(token.surface)
+                    and _LATIN_OR_DIGIT.search(token.reading)
+                ):
                     raise ForcedAlignmentError(
-                        "Unannotated Latin letters or digits require the "
+                        "Latin letters or digits without a kana reading require the "
                         "FA-Kara [surface|romaji] syntax"
                     )
                 targets.extend(
