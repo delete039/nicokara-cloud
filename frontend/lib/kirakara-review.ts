@@ -27,6 +27,13 @@ export type TimelineReviewPayload = {
   style?: ReturnType<typeof kirakaraStylePayload>;
 };
 
+export class TimelineReviewValidationError extends RangeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimelineReviewValidationError";
+  }
+}
+
 function durationMs(timeline: KirakaraTimeline): number {
   return timeline.lines.reduce((latest, line) => Math.max(latest, line.endMs), 0);
 }
@@ -145,6 +152,14 @@ export function updateLineRange(
   if (nextEnd <= nextStart) throw new RangeError("结束时间必须晚于开始时间");
   const current = timeline.lines[lineIndex];
   if (!current) throw new RangeError("歌词行不存在");
+  const previous = timeline.lines[lineIndex - 1];
+  const next = timeline.lines[lineIndex + 1];
+  if (previous && nextStart < previous.endMs) {
+    throw new RangeError(`第 ${lineIndex + 1} 行不能与上一行重叠`);
+  }
+  if (next && nextEnd > next.startMs) {
+    throw new RangeError(`第 ${lineIndex + 1} 行不能与下一行重叠`);
+  }
 
   const hasUnitDuration = current.units.some(
     (unit) => unit.endMs > unit.startMs,
@@ -177,7 +192,15 @@ export function applyTimelineOffset(
   timeline: KirakaraTimeline,
   offsetMs: number,
 ): KirakaraTimeline {
-  const shift = (value: number) => Math.max(0, Math.round(value + offsetMs));
+  const requestedOffset = Number.isFinite(offsetMs) ? Math.round(offsetMs) : 0;
+  const earliestStart = timeline.lines.reduce(
+    (earliest, line) => Math.min(earliest, line.startMs),
+    Number.POSITIVE_INFINITY,
+  );
+  const appliedOffset = Number.isFinite(earliestStart)
+    ? Math.max(requestedOffset, -earliestStart)
+    : requestedOffset;
+  const shift = (value: number) => Math.round(value + appliedOffset);
   const lines = timeline.lines.map((line) => ({
     ...line,
     startMs: shift(line.startMs),
@@ -398,7 +421,7 @@ export function timelineReviewPayload(
   timeline: KirakaraTimeline,
   style?: KirakaraStyle,
 ): TimelineReviewPayload {
-  return {
+  const payload: TimelineReviewPayload = {
     lines: timeline.lines.map((sourceLine) => {
       const line = closeLineMoraGaps(sourceLine);
       return {
@@ -418,4 +441,83 @@ export function timelineReviewPayload(
     }),
     ...(style ? { style: kirakaraStylePayload(style) } : {}),
   };
+  assertTimelineReviewPayload(payload);
+  return payload;
+}
+
+export function assertTimelineReviewPayload(
+  payload: TimelineReviewPayload,
+): void {
+  let previousLineEnd = 0;
+  payload.lines.forEach((line, lineIndex) => {
+    const lineNumber = lineIndex + 1;
+    if (
+      !Number.isFinite(line.start_ms)
+      || !Number.isFinite(line.end_ms)
+      || line.start_ms < 0
+      || line.end_ms <= line.start_ms
+    ) {
+      throw new TimelineReviewValidationError(
+        `第 ${lineNumber} 行的结束时间必须晚于开始时间`,
+      );
+    }
+    if (lineIndex > 0 && line.start_ms < previousLineEnd) {
+      throw new TimelineReviewValidationError(
+        `第 ${lineNumber} 行与上一行时间重叠`,
+      );
+    }
+
+    let previousTokenEnd = line.start_ms;
+    line.tokens.forEach((token, tokenIndex) => {
+      const tokenNumber = tokenIndex + 1;
+      if (
+        !Number.isFinite(token.start_ms)
+        || !Number.isFinite(token.end_ms)
+        || token.start_ms < line.start_ms
+        || token.end_ms > line.end_ms
+        || token.end_ms < token.start_ms
+        || token.start_ms < previousTokenEnd
+      ) {
+        throw new TimelineReviewValidationError(
+          `第 ${lineNumber} 行第 ${tokenNumber} 个词元的时间范围无效`,
+        );
+      }
+
+      const expectedMoras = splitReadingMoras(token.reading);
+      if (token.moras.length > 0 && token.moras.length !== expectedMoras.length) {
+        throw new TimelineReviewValidationError(
+          `第 ${lineNumber} 行第 ${tokenNumber} 个词元的 Mora 数量与读音不一致`,
+        );
+      }
+
+      let previousMoraEnd = token.start_ms;
+      token.moras.forEach((mora, moraIndex) => {
+        const moraNumber = moraIndex + 1;
+        const normalizedReading = splitReadingMoras(mora.reading);
+        if (
+          normalizedReading.length !== 1
+          || normalizedReading[0] !== expectedMoras[moraIndex]
+        ) {
+          throw new TimelineReviewValidationError(
+            `第 ${lineNumber} 行第 ${tokenNumber} 个词元的第 ${moraNumber} 个 Mora 读音不一致`,
+          );
+        }
+        if (
+          !Number.isFinite(mora.start_ms)
+          || !Number.isFinite(mora.end_ms)
+          || mora.start_ms < token.start_ms
+          || mora.end_ms > token.end_ms
+          || mora.end_ms <= mora.start_ms
+          || mora.start_ms < previousMoraEnd
+        ) {
+          throw new TimelineReviewValidationError(
+            `第 ${lineNumber} 行第 ${tokenNumber} 个词元的第 ${moraNumber} 个 Mora 时间无效`,
+          );
+        }
+        previousMoraEnd = mora.end_ms;
+      });
+      previousTokenEnd = token.end_ms;
+    });
+    previousLineEnd = line.end_ms;
+  });
 }

@@ -6,7 +6,11 @@ export type ErrorFeedback = {
   retryable: boolean;
 };
 
-export type ErrorContext = "upload" | "job" | "cloud_render";
+export type ErrorContext =
+  | "upload"
+  | "job"
+  | "cloud_render"
+  | "timeline_review";
 
 export type ValidationErrorCode =
   | "video_required"
@@ -133,6 +137,39 @@ export function httpErrorFeedback(
       ],
       technicalDetails,
       retryable: true,
+    };
+  }
+
+  if (context === "timeline_review" && (status === 400 || status === 422)) {
+    const lineNumber = detail?.match(/line\s+(\d+)/iu)?.[1];
+    const tokenNumber = detail?.match(/token\s+(\d+)/iu)?.[1];
+    const moraNumber = detail?.match(/mora\s+(\d+)/iu)?.[1];
+    const location = lineNumber
+      ? `第 ${lineNumber} 行${tokenNumber ? `第 ${tokenNumber} 个词元` : ""}${
+          moraNumber ? `的第 ${moraNumber} 个 Mora` : ""
+        }`
+      : null;
+    let problem = "时间范围或歌词结构不符合要求";
+    if (detail?.match(/overlap/iu)) problem = "与上一行时间重叠";
+    else if (detail?.match(/mora count/iu)) problem = "Mora 数量与读音不一致";
+    else if (detail?.match(/mora timing/iu)) problem = "Mora 时间无效或相互重叠";
+    else if (detail?.match(/token count/iu)) problem = "词元数量与原始歌词不一致";
+    else if (detail?.match(/token.*timing/iu)) problem = "词元时间无效或相互重叠";
+    else if (detail?.match(/time range/iu)) problem = "结束时间没有晚于开始时间";
+
+    return {
+      title: "调整后的时间轴无效",
+      description: location
+        ? `${location}${problem}，因此暂时不能生成下载文件。`
+        : "调整后的时间轴与服务器保存的原始歌词结构不一致，因此暂时不能生成下载文件。",
+      solutions: [
+        lineNumber
+          ? `返回时间轴检查并修正第 ${lineNumber} 行，再重新下载。`
+          : "刷新任务页重新读取原始时间轴后再调整。",
+        "确认相邻歌词不重叠，并且每个结束时间都晚于对应的开始时间。",
+      ],
+      technicalDetails,
+      retryable: false,
     };
   }
 

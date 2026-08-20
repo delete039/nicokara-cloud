@@ -210,7 +210,7 @@ def test_rejects_overlapping_reviewed_lines() -> None:
         confidence=original.confidence,
         lines=[original.lines[0], original.lines[0]],
     )
-    with pytest.raises(TimelineReviewError, match="overlap"):
+    with pytest.raises(TimelineReviewError, match="line 2 overlaps"):
         apply_timeline_review(
             original,
             {

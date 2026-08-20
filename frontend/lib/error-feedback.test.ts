@@ -113,6 +113,19 @@ describe("httpErrorFeedback", () => {
     expect(feedback.description).not.toContain("歌词或表单参数创建任务");
   });
 
+  it("shows the exact line and token for reviewed artifact validation", () => {
+    const feedback = httpErrorFeedback(
+      "timeline_review",
+      422,
+      "时间轴校正数据无效：line 6 token 3 timing is invalid",
+    );
+
+    expect(feedback.title).toBe("调整后的时间轴无效");
+    expect(feedback.description).toContain("第 6 行第 3 个词元");
+    expect(feedback.description).toContain("词元时间无效");
+    expect(feedback.solutions.join(" ")).toContain("第 6 行");
+  });
+
   it("does not describe a cloud render state conflict as a download error", () => {
     const feedback = httpErrorFeedback(
       "cloud_render",

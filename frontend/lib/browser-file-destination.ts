@@ -1,11 +1,14 @@
+import type { StreamTargetChunk } from "mediabunny";
+
 type BrowserFileSink = {
-  write(data: Uint8Array): Promise<void>;
+  write(chunk: StreamTargetChunk): Promise<void>;
   close(): Promise<void>;
   abort(reason?: unknown): Promise<void>;
 };
 
 type BrowserFileHandle = {
   createWritable(): Promise<BrowserFileSink>;
+  getFile(): Promise<File>;
 };
 
 type FilePickerScope = {
@@ -18,10 +21,15 @@ type FilePickerScope = {
   }) => Promise<BrowserFileHandle>;
 };
 
+export type BrowserFileDestination = {
+  writable: WritableStream<StreamTargetChunk>;
+  getFile(): Promise<File>;
+};
+
 export async function createBrowserFileDestination(
   fileName: string,
   scope: FilePickerScope = globalThis as FilePickerScope,
-): Promise<WritableStream<Uint8Array> | null> {
+): Promise<BrowserFileDestination | null> {
   if (!scope.showSaveFilePicker) return null;
   const handle = await scope.showSaveFilePicker({
     suggestedName: fileName,
@@ -33,15 +41,20 @@ export async function createBrowserFileDestination(
     ],
   });
   const sink = await handle.createWritable();
-  return new WritableStream<Uint8Array>({
-    write(chunk) {
-      return sink.write(chunk);
+  return {
+    writable: new WritableStream<StreamTargetChunk>({
+      write(chunk) {
+        return sink.write(chunk);
+      },
+      close() {
+        return sink.close();
+      },
+      abort(reason) {
+        return sink.abort(reason);
+      },
+    }),
+    getFile() {
+      return handle.getFile();
     },
-    close() {
-      return sink.close();
-    },
-    abort(reason) {
-      return sink.abort(reason);
-    },
-  });
+  };
 }

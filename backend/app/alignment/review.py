@@ -156,7 +156,9 @@ def apply_timeline_review(
         if start_ms < 0 or end_ms <= start_ms:
             raise TimelineReviewError(f"line {line_index + 1} has an invalid time range")
         if line_index and start_ms < previous_end:
-            raise TimelineReviewError("reviewed lyric lines overlap")
+            raise TimelineReviewError(
+                f"line {line_index + 1} overlaps the previous lyric line"
+            )
         if not isinstance(reviewed_tokens, list) or len(reviewed_tokens) != len(
             source_line.tokens
         ):
@@ -188,7 +190,7 @@ def apply_timeline_review(
                 or token_start < token_end
             ):
                 raise TimelineReviewError(
-                    f"line {line_index + 1} token timing is invalid"
+                    f"line {line_index + 1} token {token_index + 1} timing is invalid"
                 )
             tokens.append(
                 AlignedToken(

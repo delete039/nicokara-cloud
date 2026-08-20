@@ -6,13 +6,15 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
 } from "mediabunny";
 
 import {
+  assertStandardMp4,
   composableConversionOptions,
-  createChunkedBlobWriter,
   exportKirakaraVideo,
   paintKirakaraVideoFrame,
+  validateKirakaraVideoOutput,
   type KirakaraVideoExportRuntime,
 } from "./kirakara-video-export";
 import type { KirakaraTimeline } from "./kirakara-timeline";
@@ -49,17 +51,55 @@ const profile = {
   bitrate: 4_000_000,
 };
 
-describe("createChunkedBlobWriter", () => {
-  it("collects sequential muxer chunks without joining them eagerly", async () => {
-    const writer = createChunkedBlobWriter("video/mp4");
-    const streamWriter = writer.writable.getWriter();
-    await streamWriter.write(new Uint8Array([1, 2]));
-    await streamWriter.write(new Uint8Array([3]));
-    await streamWriter.close();
+function mp4Box(type: string): Uint8Array {
+  const box = new Uint8Array(8);
+  new DataView(box.buffer).setUint32(0, box.byteLength);
+  [...type].forEach((character, index) => {
+    box[4 + index] = character.charCodeAt(0);
+  });
+  return box;
+}
 
-    expect(new Uint8Array(await writer.toBlob().arrayBuffer())).toEqual(
-      new Uint8Array([1, 2, 3]),
+function mp4File(
+  types: string[],
+  name = "output.mp4",
+): File {
+  return new File(types.map(mp4Box), name, { type: "video/mp4" });
+}
+
+function bufferedRuntime(output = mp4File(["ftyp", "mdat", "moov"])): KirakaraVideoExportRuntime {
+  return {
+    transcode: vi.fn(async ({ target, onProgress }) => {
+      expect(target).toBeInstanceOf(BufferTarget);
+      onProgress(0.501);
+      (target as BufferTarget).buffer = await output.arrayBuffer();
+    }),
+  };
+}
+
+describe("standard MP4 validation", () => {
+  it("accepts a regular MP4 and rejects fragmented MP4 boxes", async () => {
+    await expect(
+      assertStandardMp4(mp4File(["ftyp", "mdat", "moov"])),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      assertStandardMp4(
+        mp4File(["ftyp", "moov", "moof", "mdat", "mfra"]),
+      ),
+    ).rejects.toThrow("分片 MP4");
+  });
+
+  it("rejects an output whose duration differs from the source", async () => {
+    const source = new File(["source"], "source.mp4");
+    const output = mp4File(["ftyp", "mdat", "moov"]);
+    const durationProbe = vi.fn(async (file: File) =>
+      file === source ? 264 : 2
     );
+
+    await expect(
+      validateKirakaraVideoOutput(source, output, durationProbe),
+    ).rejects.toThrow("源视频 264.0 秒，导出结果 2.0 秒");
   });
 });
 
@@ -119,15 +159,9 @@ describe("exportKirakaraVideo", () => {
   });
 
   it("returns a named MP4 and forwards bounded progress", async () => {
-    const runtime: KirakaraVideoExportRuntime = {
-      transcode: vi.fn(async ({ writable, onProgress }) => {
-        const writer = writable.getWriter();
-        onProgress(0.501);
-        await writer.write(new Uint8Array([0, 1, 2]));
-        await writer.close();
-      }),
-    };
+    const runtime = bufferedRuntime();
     const progress = vi.fn();
+    const validator = vi.fn().mockResolvedValue(undefined);
 
     const result = await exportKirakaraVideo(
       {
@@ -137,6 +171,7 @@ describe("exportKirakaraVideo", () => {
         onProgress: progress,
       },
       runtime,
+      validator,
     );
 
     expect(result.streamed).toBe(false);
@@ -144,8 +179,13 @@ describe("exportKirakaraVideo", () => {
       name: "song.nicokara.mp4",
       type: "video/mp4",
     });
-    expect(result.file?.size).toBe(3);
+    expect(result.file?.size).toBe(24);
     expect(progress).toHaveBeenCalledWith(50);
+    expect(progress).toHaveBeenLastCalledWith(100);
+    expect(validator).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "song.mp4" }),
+      expect.objectContaining({ name: "song.nicokara.mp4" }),
+    );
   });
 
   it("does not start transcoding when already canceled", async () => {
@@ -173,11 +213,7 @@ describe("exportKirakaraVideo", () => {
     const replacementAudio = new File(["instrumental"], "instrumental.wav", {
       type: "audio/wav",
     });
-    const runtime: KirakaraVideoExportRuntime = {
-      transcode: vi.fn(async ({ writable }) => {
-        await writable.getWriter().close();
-      }),
-    };
+    const runtime = bufferedRuntime();
 
     await exportKirakaraVideo(
       {
@@ -187,6 +223,7 @@ describe("exportKirakaraVideo", () => {
         replacementAudio,
       },
       runtime,
+      vi.fn().mockResolvedValue(undefined),
     );
 
     expect(runtime.transcode).toHaveBeenCalledWith(
@@ -196,11 +233,7 @@ describe("exportKirakaraVideo", () => {
 
   it("forwards the preview style to the export renderer", async () => {
     const style = { ...DEFAULT_KIRAKARA_STYLE, fontSize: 72 };
-    const runtime: KirakaraVideoExportRuntime = {
-      transcode: vi.fn(async ({ writable }) => {
-        await writable.getWriter().close();
-      }),
-    };
+    const runtime = bufferedRuntime();
 
     await exportKirakaraVideo(
       {
@@ -210,10 +243,64 @@ describe("exportKirakaraVideo", () => {
         style,
       },
       runtime,
+      vi.fn().mockResolvedValue(undefined),
     );
 
     expect(runtime.transcode).toHaveBeenCalledWith(
       expect.objectContaining({ style }),
     );
+  });
+
+  it("validates a streamed file before reporting it as saved", async () => {
+    const savedFile = mp4File(["ftyp", "mdat", "moov"], "saved.mp4");
+    const destination = {
+      writable: new WritableStream(),
+      getFile: vi.fn().mockResolvedValue(savedFile),
+    };
+    const runtime: KirakaraVideoExportRuntime = {
+      transcode: vi.fn(async ({ target }) => {
+        expect(target).toBeInstanceOf(StreamTarget);
+      }),
+    };
+    const validator = vi.fn().mockResolvedValue(undefined);
+    const validationStarted = vi.fn();
+
+    const result = await exportKirakaraVideo(
+      {
+        video: new File(["video"], "song.mp4"),
+        timeline,
+        profile,
+        destination,
+        onValidationStart: validationStarted,
+      },
+      runtime,
+      validator,
+    );
+
+    expect(destination.getFile).toHaveBeenCalledOnce();
+    expect(validationStarted).toHaveBeenCalledOnce();
+    expect(validator).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "song.mp4" }),
+      savedFile,
+    );
+    expect(result).toMatchObject({ file: null, streamed: true });
+  });
+
+  it("does not report completion when output validation fails", async () => {
+    const progress = vi.fn();
+
+    await expect(
+      exportKirakaraVideo(
+        {
+          video: new File(["video"], "song.mp4"),
+          timeline,
+          profile,
+          onProgress: progress,
+        },
+        bufferedRuntime(),
+        vi.fn().mockRejectedValue(new Error("导出视频时长校验失败")),
+      ),
+    ).rejects.toThrow("导出视频时长校验失败");
+    expect(progress).not.toHaveBeenCalledWith(100);
   });
 });

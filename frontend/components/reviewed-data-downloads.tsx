@@ -3,8 +3,13 @@
 import { Download, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
+import { ErrorFeedbackPanel } from "@/components/error-feedback";
 import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
-import { timelineReviewPayload } from "@/lib/kirakara-review";
+import type { ErrorFeedback } from "@/lib/error-feedback";
+import {
+  TimelineReviewValidationError,
+  timelineReviewPayload,
+} from "@/lib/kirakara-review";
 import type { KirakaraStyle } from "@/lib/kirakara-style";
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
 import { JOB_COPY } from "@/lib/ui-copy";
@@ -53,7 +58,7 @@ export function ReviewedDataDownloads({
   style: KirakaraStyle;
 }) {
   const [downloading, setDownloading] = useState<ReviewedArtifact | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorFeedback | null>(null);
 
   async function downloadArtifact(
     artifact: ReviewedArtifact,
@@ -81,8 +86,25 @@ export function ReviewedDataDownloads({
     } catch (reason) {
       setError(
         reason instanceof ApiRequestError
-          ? reason.feedback.title
-          : "调整后数据生成失败，请刷新任务页后重试。",
+          ? reason.feedback
+          : reason instanceof TimelineReviewValidationError
+            ? {
+                title: "调整后的时间轴无效",
+                description: reason.message,
+                solutions: [
+                  "返回时间轴检查，修正提示中的歌词行后再下载。",
+                  "如无法确认修改内容，请刷新任务页恢复服务器保存的时间轴。",
+                ],
+                technicalDetails: [],
+                retryable: false,
+              }
+            : {
+                title: "调整后数据生成失败",
+                description: "暂时无法生成下载文件，请刷新任务页后重试。",
+                solutions: ["刷新任务页后重新下载。"],
+                technicalDetails: [],
+                retryable: true,
+              },
       );
     } finally {
       setDownloading(null);
@@ -114,9 +136,9 @@ export function ReviewedDataDownloads({
         style={style}
       />
       {error && (
-        <p className="basis-full text-xs text-destructive" role="alert">
-          {error}
-        </p>
+        <div className="basis-full pt-2">
+          <ErrorFeedbackPanel feedback={error} />
+        </div>
       )}
     </div>
   );

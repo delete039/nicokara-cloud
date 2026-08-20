@@ -775,7 +775,7 @@ export async function getReviewedArtifact(
   if (!response.ok) {
     throw new ApiRequestError(
       httpErrorFeedback(
-        "job",
+        "timeline_review",
         response.status,
         await fetchResponseDetail(response),
         retryAfterSeconds(response.headers.get("Retry-After")),
