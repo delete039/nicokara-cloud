@@ -102,7 +102,9 @@ export function networkErrorFeedback(context: ErrorContext): ErrorFeedback {
     description:
       context === "upload"
         ? "视频尚未成功提交。浏览器没有收到服务器响应，可能是网络中断、反向代理超时或服务正在重启。"
-        : "暂时无法读取任务状态。任务可能仍在服务器上继续处理，页面会自动尝试恢复连接。",
+        : context === "timeline_review"
+          ? "暂时无法同步时间轴草稿。当前页面中的修改仍会保留，可以稍后重试保存。"
+          : "暂时无法读取任务状态。任务可能仍在服务器上继续处理，页面会自动尝试恢复连接。",
     solutions: [
       "确认网络正常后刷新页面或重新尝试。",
       "如果其他设备也无法访问，请联系管理员检查 Nginx 和 Nicokara 服务状态。",
@@ -198,6 +200,20 @@ export function httpErrorFeedback(
       solutions: [
         "刷新任务页查看排队位置或渲染进度，不要连续重复提交同一视频。",
         "如果任务仍可编辑，请重新选择名称和大小都与最初上传记录一致的原视频。",
+      ],
+      technicalDetails,
+      retryable: true,
+    };
+  }
+
+  if (context === "timeline_review" && status === 409) {
+    return {
+      title: "云端时间轴草稿暂时不可用",
+      description:
+        "服务器上的原始时间轴或草稿状态已经变化，当前页面暂时不能恢复或保存草稿。",
+      solutions: [
+        "刷新任务页重新读取服务器时间轴后再继续调整。",
+        "如果页面仍保留尚未保存的修改，可先下载调整后时间轴作为备份。",
       ],
       technicalDetails,
       retryable: true,

@@ -873,6 +873,47 @@ def test_reviewed_ass_export_uses_current_timing_and_style(tmp_path: Path) -> No
     assert "lyrics.reviewed.ass" in response.headers["content-disposition"]
 
 
+def test_timeline_review_draft_can_be_saved_and_restored(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+        original_path = tmp_path / "jobs" / job_id / "timeline.json"
+        original_content = original_path.read_text(encoding="utf-8")
+
+        missing = client.get(f"/api/v1/jobs/{job_id}/timeline-review")
+        saved = client.put(
+            f"/api/v1/jobs/{job_id}/timeline-review",
+            json=review,
+        )
+        restored = client.get(f"/api/v1/jobs/{job_id}/timeline-review")
+
+    assert missing.status_code == 204
+    assert saved.status_code == 200
+    assert restored.status_code == 200
+    assert saved.json()["timeline"]["lines"][0]["start_ms"] == 2000
+    assert restored.json()["timeline"] == saved.json()["timeline"]
+    assert restored.json()["saved_at"] == saved.json()["saved_at"]
+    assert restored.headers["cache-control"] == "no-store"
+    draft_path = tmp_path / "jobs" / job_id / "timeline_review.json"
+    stored_draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    assert stored_draft["review"] == review
+    assert original_path.read_text(encoding="utf-8") == original_content
+
+
+def test_invalid_timeline_review_draft_is_not_saved(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+        review["lines"][0]["end_ms"] = review["lines"][0]["start_ms"]
+
+        response = client.put(
+            f"/api/v1/jobs/{job_id}/timeline-review",
+            json=review,
+        )
+
+    assert response.status_code == 422
+    assert "line 1" in response.json()["detail"]
+    assert not (tmp_path / "jobs" / job_id / "timeline_review.json").exists()
+
+
 def test_final_video_can_be_streamed_and_downloaded(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         response = client.post(

@@ -56,6 +56,7 @@ upload_tickets_router = APIRouter(
     tags=["upload queue"],
 )
 logger = logging.getLogger(__name__)
+TIMELINE_REVIEW_DRAFT_FILENAME = "timeline_review.json"
 
 
 def safe_display_name(filename: str | None) -> str:
@@ -1297,6 +1298,140 @@ def get_timeline(request: Request, job_id: str) -> FileResponse:
         timeline_path,
         media_type="application/json",
         filename="timeline.json",
+    )
+
+
+@router.get("/{job_id}/timeline-review", response_class=Response)
+def get_timeline_review(request: Request, job_id: str) -> Response:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    timeline_path_value = job.get("timeline_path")
+    if not timeline_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词时间轴尚未完成",
+        )
+
+    draft_path = settings.storage_dir / job_id / TIMELINE_REVIEW_DRAFT_FILENAME
+    if not draft_path.is_file():
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    timeline_path = validated_job_file(settings, job_id, timeline_path_value)
+    try:
+        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+        review = draft["review"]
+        saved_at = str(draft["saved_at"])
+        if not isinstance(review, dict) or not saved_at:
+            raise TypeError("timeline review draft shape is invalid")
+        source_timeline = lyric_timeline_from_dict(
+            json.loads(timeline_path.read_text(encoding="utf-8"))
+        )
+        reviewed_timeline = apply_timeline_review(source_timeline, review)
+    except TimelineReviewError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"云端时间轴草稿已失效：{exc}",
+        ) from exc
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="云端时间轴草稿无法读取",
+        ) from exc
+
+    return Response(
+        content=json.dumps(
+            {
+                "timeline": reviewed_timeline.to_dict(),
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.put("/{job_id}/timeline-review", response_class=Response)
+def save_timeline_review(
+    request: Request,
+    job_id: str,
+    review: dict[str, Any],
+) -> Response:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    timeline_path_value = job.get("timeline_path")
+    if not timeline_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="歌词时间轴尚未完成",
+        )
+    timeline_path = validated_job_file(settings, job_id, timeline_path_value)
+
+    try:
+        source_timeline = lyric_timeline_from_dict(
+            json.loads(timeline_path.read_text(encoding="utf-8"))
+        )
+        reviewed_timeline = apply_timeline_review(source_timeline, review)
+    except (json.JSONDecodeError, TimelineReviewError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"时间轴校正数据无效：{exc}",
+        ) from exc
+
+    saved_at = datetime.now(UTC).isoformat()
+    job_dir = settings.storage_dir / job_id
+    draft_path = job_dir / TIMELINE_REVIEW_DRAFT_FILENAME
+    temporary_path = job_dir / f".{TIMELINE_REVIEW_DRAFT_FILENAME}.{uuid4().hex}.tmp"
+    try:
+        temporary_path.write_text(
+            json.dumps(
+                {"saved_at": saved_at, "review": review},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(draft_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+    return Response(
+        content=json.dumps(
+            {
+                "timeline": reviewed_timeline.to_dict(),
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
     )
 
 

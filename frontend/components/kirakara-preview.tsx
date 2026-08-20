@@ -1,6 +1,6 @@
 "use client";
 
-import { Film, FolderOpen, LoaderCircle } from "lucide-react";
+import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
@@ -25,9 +25,25 @@ import {
   type KirakaraFrame,
   type KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
+import {
+  TimelineReviewValidationError,
+  timelineReviewPayload,
+} from "@/lib/kirakara-review";
 import { getLocalVideo, rememberLocalVideo } from "@/lib/local-media-session";
-import { ApiRequestError, getTimeline } from "@/services/api";
+import {
+  ApiRequestError,
+  getTimeline,
+  getTimelineReviewDraft,
+  saveTimelineReviewDraft,
+} from "@/services/api";
 import type { Job } from "@/types/job";
+
+const TIMELINE_AUTOSAVE_DELAY_MS = 600;
+
+type TimelineSaveState = {
+  phase: "idle" | "pending" | "saving" | "saved" | "restored" | "error";
+  message?: string;
+};
 
 export function KirakaraPreview({
   jobId,
@@ -46,11 +62,22 @@ export function KirakaraPreview({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const animationFrame = useRef<number | null>(null);
+  const componentActive = useRef(true);
+  const activeJobId = useRef(jobId);
+  const autosaveVersion = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const [video, setVideo] = useState<File | null>(() => getLocalVideo(jobId));
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<KirakaraTimeline | null>(null);
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [autosaveTrigger, setAutosaveTrigger] = useState<{
+    jobId: string;
+    version: number;
+  } | null>(null);
+  const [timelineSaveState, setTimelineSaveState] = useState<TimelineSaveState>({
+    phase: "idle",
+  });
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
   const [capabilities, setCapabilities] =
     useState<KirakaraCapabilities | null>(null);
@@ -66,23 +93,124 @@ export function KirakaraPreview({
   }, [onVideoElementChange]);
 
   useEffect(() => {
+    componentActive.current = true;
+    return () => {
+      componentActive.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    activeJobId.current = jobId;
+    autosaveVersion.current = 0;
+  }, [jobId]);
+
+  useEffect(() => {
     let active = true;
-    getTimeline(jobId)
-      .then((source) => {
-        if (active) setTimeline(toKirakaraTimeline(source));
-      })
-      .catch((reason) => {
-        if (!active) return;
+    Promise.allSettled([
+      getTimeline(jobId),
+      getTimelineReviewDraft(jobId),
+    ]).then(([sourceResult, draftResult]) => {
+      if (!active) return;
+      if (sourceResult.status === "rejected") {
         setTimelineError(
-          reason instanceof ApiRequestError
-            ? reason.feedback.title
+          sourceResult.reason instanceof ApiRequestError
+            ? sourceResult.reason.feedback.title
             : "时间轴读取失败",
         );
-      });
+        return;
+      }
+
+      const draft = draftResult.status === "fulfilled"
+        ? draftResult.value
+        : null;
+      setTimeline(
+        toKirakaraTimeline(draft?.timeline ?? sourceResult.value),
+      );
+      setTimelineError(null);
+      if (draft) {
+        setTimelineSaveState({ phase: "restored" });
+      } else if (draftResult.status === "rejected") {
+        setTimelineSaveState({
+          phase: "error",
+          message: draftResult.reason instanceof ApiRequestError
+            ? draftResult.reason.feedback.title
+            : "云端草稿读取失败",
+        });
+      } else {
+        setTimelineSaveState({ phase: "idle" });
+      }
+    });
     return () => {
       active = false;
     };
   }, [jobId]);
+
+  useEffect(() => {
+    if (!timeline || !autosaveTrigger || autosaveTrigger.jobId !== jobId) return;
+    const version = autosaveTrigger.version;
+    const targetJobId = jobId;
+    const timeout = globalThis.setTimeout(() => {
+      let review;
+      try {
+        review = timelineReviewPayload(timeline);
+      } catch (reason) {
+        if (
+          componentActive.current
+          && activeJobId.current === targetJobId
+          && autosaveVersion.current === version
+        ) {
+          setTimelineSaveState({
+            phase: "error",
+            message: reason instanceof TimelineReviewValidationError
+              ? reason.message
+              : "时间轴校验失败",
+          });
+        }
+        return;
+      }
+
+      const operation = saveQueue.current.then(async () => {
+        if (
+          componentActive.current
+          && activeJobId.current === targetJobId
+          && autosaveVersion.current === version
+        ) {
+          setTimelineSaveState({ phase: "saving" });
+        }
+        return saveTimelineReviewDraft(targetJobId, review);
+      });
+      saveQueue.current = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      void operation.then(
+        () => {
+          if (
+            componentActive.current
+            && activeJobId.current === targetJobId
+            && autosaveVersion.current === version
+          ) {
+            setTimelineSaveState({ phase: "saved" });
+          }
+        },
+        (reason) => {
+          if (
+            componentActive.current
+            && activeJobId.current === targetJobId
+            && autosaveVersion.current === version
+          ) {
+            setTimelineSaveState({
+              phase: "error",
+              message: reason instanceof ApiRequestError
+                ? reason.feedback.title
+                : "时间轴自动保存失败",
+            });
+          }
+        },
+      );
+    }, TIMELINE_AUTOSAVE_DELAY_MS);
+    return () => globalThis.clearTimeout(timeout);
+  }, [autosaveTrigger, jobId, timeline]);
 
   useEffect(() => {
     let active = true;
@@ -125,6 +253,22 @@ export function KirakaraPreview({
   function updateStyle(nextStyle: KirakaraStyle) {
     setStyle(nextStyle);
     saveKirakaraStyle(window.localStorage, nextStyle);
+  }
+
+  function updateTimeline(nextTimeline: KirakaraTimeline) {
+    const version = autosaveVersion.current + 1;
+    autosaveVersion.current = version;
+    setTimeline(nextTimeline);
+    setAutosaveTrigger({ jobId, version });
+    setTimelineSaveState({ phase: "pending" });
+  }
+
+  function retryTimelineSave() {
+    if (!timeline) return;
+    const version = autosaveVersion.current + 1;
+    autosaveVersion.current = version;
+    setAutosaveTrigger({ jobId, version });
+    setTimelineSaveState({ phase: "pending" });
   }
 
   const stopDrawing = useCallback(() => {
@@ -256,11 +400,47 @@ export function KirakaraPreview({
             }`}
           >
             {timeline && (
-              <KirakaraReviewEditor
-                timeline={timeline}
-                onChange={setTimeline}
-                onSeek={seekPreview}
-              />
+              <>
+                <div
+                  data-timeline-autosave={timelineSaveState.phase}
+                  aria-live="polite"
+                  className="mb-3 flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground"
+                >
+                  {timelineSaveState.phase === "saving" ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Cloud className="size-3.5" />
+                  )}
+                  <span>
+                    {timelineSaveState.phase === "pending"
+                      ? "等待保存到云端"
+                      : timelineSaveState.phase === "saving"
+                        ? "正在保存时间轴"
+                        : timelineSaveState.phase === "saved"
+                          ? "时间轴已保存到云端"
+                          : timelineSaveState.phase === "restored"
+                            ? "已恢复云端时间轴草稿"
+                            : timelineSaveState.phase === "error"
+                              ? timelineSaveState.message ?? "时间轴自动保存失败"
+                              : "时间轴修改会自动保存到云端"}
+                  </span>
+                  {timelineSaveState.phase === "error" && (
+                    <button
+                      type="button"
+                      onClick={retryTimelineSave}
+                      className="focus-ring inline-flex items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 hover:underline"
+                    >
+                      <RefreshCw className="size-3.5" />
+                      重试保存
+                    </button>
+                  )}
+                </div>
+                <KirakaraReviewEditor
+                  timeline={timeline}
+                  onChange={updateTimeline}
+                  onSeek={seekPreview}
+                />
+              </>
             )}
           </div>
 

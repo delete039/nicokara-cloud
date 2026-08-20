@@ -754,6 +754,44 @@ export async function getTimeline(jobId: string): Promise<CloudLyricTimeline> {
   return (await response.json()) as CloudLyricTimeline;
 }
 
+export type TimelineReviewDraft = {
+  timeline: CloudLyricTimeline;
+  saved_at: string;
+};
+
+export async function getTimelineReviewDraft(
+  jobId: string,
+): Promise<TimelineReviewDraft | null> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/timeline-review`, {
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("timeline_review");
+  }
+  if (response.status === 204) return null;
+  return checkedJson<TimelineReviewDraft>(response, "timeline_review");
+}
+
+export async function saveTimelineReviewDraft(
+  jobId: string,
+  review: TimelineReviewPayload,
+): Promise<TimelineReviewDraft> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/timeline-review`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(review),
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("timeline_review");
+  }
+  return checkedJson<TimelineReviewDraft>(response, "timeline_review");
+}
+
 export type ReviewedArtifact = "lyrics" | "timeline" | "subtitle";
 
 export async function getReviewedArtifact(
