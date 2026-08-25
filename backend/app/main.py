@@ -32,9 +32,9 @@ from app.core.worker_config import (
 )
 from app.schemas.jobs import HealthResponse
 from app.lyrics.processor import (
-    DeepSeekLyricProcessor,
+    DeepSeekReadingReviewer,
     LocalJapaneseLyricProcessor,
-    ResilientLyricProcessor,
+    ReviewedLyricProcessor,
 )
 from app.tasks.pipeline import TranscriptionPipeline
 from app.tasks.runner import LocalTaskRunner
@@ -97,8 +97,9 @@ def build_pipeline(
 ) -> TranscriptionPipeline:
     local_lyric_processor = LocalJapaneseLyricProcessor()
     if settings.deepseek_api_key is not None:
-        lyric_processor = ResilientLyricProcessor(
-            primary=DeepSeekLyricProcessor(
+        lyric_processor = ReviewedLyricProcessor(
+            base=local_lyric_processor,
+            reviewer=DeepSeekReadingReviewer(
                 client=DeepSeekClient(
                     api_key=settings.deepseek_api_key.get_secret_value(),
                     base_url=settings.deepseek_base_url,
@@ -106,7 +107,6 @@ def build_pipeline(
                     timeout_seconds=settings.deepseek_timeout_seconds,
                 )
             ),
-            fallback=local_lyric_processor,
             event_logger=database.event_logger,
         )
     else:

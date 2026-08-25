@@ -13,7 +13,7 @@ from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.main import create_app
 from app.lyrics.processor import (
     LocalJapaneseLyricProcessor,
-    ResilientLyricProcessor,
+    ReviewedLyricProcessor,
 )
 from app.tasks.runner import LocalTaskRunner
 from app.vocal.mdx import MDXNetVocalRemover
@@ -182,7 +182,7 @@ def test_app_hot_reloads_processing_worker_count(tmp_path: Path) -> None:
         assert snapshot["alive_workers"] == 4
 
 
-def test_app_prefers_deepseek_when_api_key_is_configured(tmp_path: Path) -> None:
+def test_app_adds_deepseek_review_when_api_key_is_configured(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
         storage_dir=tmp_path / "jobs",
@@ -194,10 +194,10 @@ def test_app_prefers_deepseek_when_api_key_is_configured(tmp_path: Path) -> None
 
     with TestClient(app):
         processor = app.state.runner.pipeline.lyric_processor
-        assert isinstance(processor, ResilientLyricProcessor)
-        assert processor.primary.client.model == "deepseek-v4-flash"
-        assert processor.primary.client.api_key == "secret"
-        assert isinstance(processor.fallback, LocalJapaneseLyricProcessor)
+        assert isinstance(processor, ReviewedLyricProcessor)
+        assert processor.reviewer.client.model == "deepseek-v4-flash"
+        assert processor.reviewer.client.api_key == "secret"
+        assert isinstance(processor.base, LocalJapaneseLyricProcessor)
 
 
 def test_app_uses_configured_mdx_net_vocal_remover(
