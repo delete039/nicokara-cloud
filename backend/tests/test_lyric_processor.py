@@ -299,6 +299,59 @@ def test_local_processor_generates_editable_kana_for_latin_words_and_digits() ->
     assert re.search(r"[A-Za-z0-9]", line.reading) is None
 
 
+@pytest.mark.parametrize(
+    ("surface", "reading"),
+    [
+        ("80億分の1", "はちじゅうおくぶんのいち"),
+        ("1000メーター", "せんめーたー"),
+        ("100分", "ひゃっぷん"),
+        ("3泊4日", "さんぱくよっか"),
+        ("1人", "ひとり"),
+        ("8月15日", "はちがつじゅうごにち"),
+        ("午後12時半", "ごごじゅうにじはん"),
+    ],
+)
+def test_local_processor_resolves_standard_numeric_phrases(
+    surface: str,
+    reading: str,
+) -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process(surface)
+
+    line = document.lines[0]
+    assert line.surface == surface
+    assert line.reading == reading
+    assert "".join(token.surface for token in line.tokens) == surface
+
+
+def test_local_processor_keeps_calendar_date_token_readings_nonempty() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("1月1日")
+
+    line = document.lines[0]
+    assert line.reading == "いちがつついたち"
+    assert all(token.reading for token in line.tokens)
+
+
+@pytest.mark.parametrize("surface", ["12345ire", "50:50", "321", "1LDK"])
+def test_local_processor_keeps_ambiguous_numeric_surface_editable(
+    surface: str,
+) -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process(surface)
+
+    line = document.lines[0]
+    assert line.surface == surface
+    assert "".join(token.surface for token in line.tokens) == surface
+    assert re.search(r"[A-Za-z0-9]", line.reading) is None
+
+
 def test_local_processor_parses_fa_kara_explicit_annotations() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
     processor = processor_module.LocalJapaneseLyricProcessor()

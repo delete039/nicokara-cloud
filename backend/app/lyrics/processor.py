@@ -11,6 +11,7 @@ from janome.tokenizer import Tokenizer
 from pykakasi import kakasi
 
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
+from app.lyrics.numeric_reading import resolve_numeric_span
 from app.core.event_logging import exception_details
 
 
@@ -366,8 +367,20 @@ class LocalJapaneseLyricProcessor:
 
     def _plain_tokens(self, text: str) -> list[LyricToken]:
         tokens: list[LyricToken] = []
-        for item in self.tokenizer.tokenize(text):
+        items = list(self.tokenizer.tokenize(text))
+        surfaces = [item.surface for item in items]
+        index = 0
+        while index < len(items):
+            item = items[index]
             surface = item.surface
+            numeric = resolve_numeric_span(surfaces, index)
+            if numeric is not None:
+                tokens.extend(
+                    LyricToken(surface=part.surface, reading=part.reading)
+                    for part in numeric.parts
+                )
+                index += numeric.consumed_items
+                continue
             alignment_pronunciation = None
             major_part = item.part_of_speech.split(",", maxsplit=1)[0]
             if _LATIN_OR_DIGIT.search(surface) or item.reading == "*":
@@ -385,6 +398,7 @@ class LocalJapaneseLyricProcessor:
                     alignment_pronunciation=alignment_pronunciation,
                 )
             )
+            index += 1
         return split_tokens_by_kanji(tokens)
 
     def _annotated_tokens(self, source: str) -> list[LyricToken]:
