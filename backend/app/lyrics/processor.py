@@ -370,6 +370,10 @@ class LocalJapaneseLyricProcessor:
             surface = item.surface
             alignment_pronunciation = None
             major_part = item.part_of_speech.split(",", maxsplit=1)[0]
+            if _LATIN_OR_DIGIT.search(surface) or item.reading == "*":
+                reading = self._surface_reading(surface)
+            else:
+                reading = self._hiragana(item.reading)
             if major_part == "助詞" and surface == "は":
                 alignment_pronunciation = "wa"
             elif major_part == "助詞" and surface == "へ":
@@ -377,7 +381,7 @@ class LocalJapaneseLyricProcessor:
             tokens.append(
                 LyricToken(
                     surface=surface,
-                    reading=self._surface_reading(surface),
+                    reading=reading,
                     alignment_pronunciation=alignment_pronunciation,
                 )
             )

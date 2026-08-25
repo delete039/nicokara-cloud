@@ -216,6 +216,38 @@ def test_local_processor_generates_hiragana_and_tokens() -> None:
     assert document.warnings == ["local_reading_may_be_inaccurate"]
 
 
+def test_local_processor_prefers_janome_compound_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("泣き声")
+
+    line = document.lines[0]
+    assert line.reading == "なきごえ"
+    assert [(token.surface, token.reading) for token in line.tokens] == [
+        ("泣", "な"),
+        ("き", "き"),
+        ("声", "ごえ"),
+    ]
+
+
+def test_local_processor_prefers_janome_contextual_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("君は")
+
+    line = document.lines[0]
+    assert line.reading == "きみは"
+    assert [
+        (token.surface, token.reading, token.alignment_pronunciation)
+        for token in line.tokens
+    ] == [
+        ("君", "きみ", None),
+        ("は", "は", "wa"),
+    ]
+
+
 def test_local_processor_keeps_ambiguous_compound_reading_complete() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
     processor = processor_module.LocalJapaneseLyricProcessor()
