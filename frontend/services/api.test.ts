@@ -15,6 +15,17 @@ describe("result video URLs", () => {
       "/api/v1/jobs/job-1/download",
     );
   });
+
+  it("cache-busts a rerendered cloud result with the job version", async () => {
+    const api = await import("./api");
+
+    expect(api.resultVideoUrl("job-1", "2026-08-28T12:34:56+00:00")).toBe(
+      "/api/v1/jobs/job-1/result?v=2026-08-28T12%3A34%3A56%2B00%3A00",
+    );
+    expect(api.downloadVideoUrl("job-1", "render attempt 2")).toBe(
+      "/api/v1/jobs/job-1/download?v=render%20attempt%202",
+    );
+  });
 });
 
 describe("createUploadTicket", () => {
@@ -171,6 +182,11 @@ describe("createAudioOnlyJob", () => {
     const audio = new File([new Uint8Array(17 * 1024 * 1024)], "song.audio.m4a", {
       type: "audio/mp4",
     });
+    const reviewedTimeline = new File(
+      [JSON.stringify({ confidence: 1, lines: [] })],
+      "timeline.reviewed.json",
+      { type: "application/json" },
+    );
     const session = {
       ticket_id: "audio-ticket-1",
       status: "UPLOADING",
@@ -244,6 +260,7 @@ describe("createAudioOnlyJob", () => {
           originalVideoName: "song.mp4",
           originalVideoSizeBytes: 120 * 1024 * 1024,
           lyricsText: "lyrics",
+          projectFiles: [reviewedTimeline],
         },
         vi.fn(),
       ),
@@ -254,6 +271,10 @@ describe("createAudioOnlyJob", () => {
       "POST",
       "/api/v1/browser/audio-uploads/audio-ticket-1/chunks/part/1",
     );
+    const completionBody = fetchMock.mock.calls[2][1]?.body as FormData;
+    expect(completionBody.getAll("project_files")).toEqual([
+      reviewedTimeline,
+    ]);
   });
 
   it("retries an interrupted audio chunk up to three attempts", async () => {
@@ -587,6 +608,7 @@ describe("createAudioOnlyJob", () => {
       ),
     ).resolves.toMatchObject(recoveredJob);
   });
+
 });
 
 describe("getJob", () => {
@@ -842,6 +864,52 @@ describe("submitCloudRender", () => {
     ).resolves.toMatchObject(queued);
   });
 
+  it("preserves structured FastAPI validation details from an XHR response", async () => {
+    class ValidationXMLHttpRequest {
+      readonly upload = { addEventListener: vi.fn() };
+      readonly open = vi.fn();
+      readonly getResponseHeader = vi.fn(() => null);
+      readonly send = vi.fn(() => {
+        this.listeners.load?.forEach((listener) => listener());
+      });
+      status = 422;
+      responseText = JSON.stringify({
+        detail: [
+          {
+            type: "missing",
+            loc: ["body", "timeline_review"],
+            msg: "Field required",
+            input: null,
+          },
+        ],
+      });
+      private readonly listeners: Record<string, Array<() => void>> = {};
+
+      addEventListener(type: string, listener: () => void) {
+        this.listeners[type] ??= [];
+        this.listeners[type].push(listener);
+      }
+    }
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      ValidationXMLHttpRequest as unknown as typeof XMLHttpRequest,
+    );
+    const { submitCloudRender } = await import("./api");
+
+    await expect(
+      submitCloudRender(
+        "job-1",
+        new File(["video"], "song.mp4", { type: "video/mp4" }),
+        { lines: [] },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      feedback: {
+        description: expect.stringContaining("调整后的时间轴未提供"),
+      },
+    });
+  });
+
   it("recovers the job status when the render was already queued", async () => {
     const queued = {
       id: "job-1",
@@ -922,6 +990,31 @@ describe("confirmReadings", () => {
         method: "POST",
         body: JSON.stringify(review),
       }),
+    );
+  });
+});
+
+describe("reopenReadingReview", () => {
+  it("returns a completed task to the reading review stage", async () => {
+    const reopened = {
+      id: "job-1",
+      status: "LYRICS_PROCESSED",
+      stage: "READING_REVIEW_REQUIRED",
+      progress: 80,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(reopened), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { reopenReadingReview } = await import("./api");
+
+    await expect(reopenReadingReview("job-1")).resolves.toEqual(reopened);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/readings/reopen",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });

@@ -280,9 +280,16 @@ class MMSForcedAligner:
             reading = target.reading
             if target.pronunciation is not None:
                 pass
-            elif reading == "っ":
+            elif reading.endswith(("っ", "ッ")):
                 following = raw[index + 1] if index + 1 < len(raw) else ""
-                token = following[:1] or "t"
+                consonant = following[:1] or "t"
+                if consonant == "c":
+                    consonant = "t"
+                prefix = "".join(
+                    item["hepburn"]
+                    for item in _CONVERTER.convert(reading[:-1])
+                ).lower()
+                token = _ROMAJI_FILTER.sub("", prefix) + consonant
             elif reading == "ー":
                 previous = tokens[-1] if tokens else ""
                 token = next(

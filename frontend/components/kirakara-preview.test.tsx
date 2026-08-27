@@ -22,6 +22,7 @@ describe("KirakaraPreview", () => {
     expect(html).toContain("text-base");
     expect(html).toContain("重新选择原视频");
     expect(html).toContain("song.mp4");
+    expect(html).toContain("时间轴调整会自动保存在此浏览器");
   });
 
   it("shows the engine name only in the preview heading, not over the video", async () => {

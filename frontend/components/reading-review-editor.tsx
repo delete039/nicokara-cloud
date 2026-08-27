@@ -65,6 +65,9 @@ export function ReadingReviewEditor({
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
         只需修改不准确的项目；留空将沿用系统生成的读音。
       </p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        修改会自动保存在此浏览器，刷新页面后可继续。
+      </p>
       {foreignReadingCount > 0 && (
         <div
           role="alert"

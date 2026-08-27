@@ -1364,6 +1364,203 @@ def test_pipeline_does_not_expose_raw_exception_details(tmp_path: Path) -> None:
     )
 
 
+def imported_timeline_payload() -> dict:
+    return {
+        "confidence": 1.0,
+        "alignment_engine": "fa_kara_mms",
+        "alignment_model": "MMS_FA",
+        "warnings": ["browser_reviewed"],
+        "lines": [
+            {
+                "surface": "物語",
+                "reading": "ものがたり",
+                "start_ms": 1000,
+                "end_ms": 1600,
+                "confidence": 1.0,
+                "tokens": [
+                    {
+                        "surface": "物語",
+                        "reading": "ものがたり",
+                        "start_ms": 1000,
+                        "end_ms": 1600,
+                        "confidence": 1.0,
+                        "moras": [
+                            {
+                                "reading": "ものがたり",
+                                "start_ms": 1000,
+                                "end_ms": 1600,
+                                "matched": True,
+                                "confidence": 1.0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+class UnexpectedTranscriber:
+    def transcribe(self, audio_path: Path) -> TranscriptDocument:
+        pytest.fail("imported reviewed artifacts must skip Whisper")
+
+
+def test_pipeline_uses_imported_mora_timeline_without_realigning(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "imported-timeline"
+    job_id = create_uploaded_job(database, job_dir)
+    (job_dir / "imported_timeline.json").write_text(
+        json.dumps(imported_timeline_payload(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    class UnexpectedAligner:
+        def align(self, *args, **kwargs):
+            pytest.fail("imported timeline must skip alignment")
+
+    class RecordingSubtitleGenerator:
+        def __init__(self) -> None:
+            self.timelines: list[LyricTimeline] = []
+
+        def generate(self, timeline: LyricTimeline) -> str:
+            self.timelines.append(timeline)
+            return "[Script Info]\n[Events]\nDialogue: 0,reviewed\n"
+
+    generator = RecordingSubtitleGenerator()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=UnexpectedTranscriber(),
+        aligner=UnexpectedAligner(),
+        subtitle_generator=generator,
+    )
+
+    pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "SUBTITLE_GENERATED"
+    assert generator.timelines[0].lines[0].tokens[0].moras[0].start_ms == 1000
+    assert json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))[
+        "warnings"
+    ] == ["browser_reviewed"]
+
+
+def test_pipeline_preserves_imported_ass_for_video_rendering(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "imported-ass"
+    job_id = create_uploaded_job(database, job_dir)
+    imported_ass = (
+        "[Script Info]\n[V4+ Styles]\n[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,调整后的字幕\n"
+    )
+    (job_dir / "imported_subtitle.ass").write_text(
+        imported_ass,
+        encoding="utf-8-sig",
+    )
+
+    class UnexpectedSubtitleGenerator:
+        def generate(self, timeline):
+            pytest.fail("imported ASS must not be regenerated")
+
+    class RecordingRenderer:
+        def __init__(self) -> None:
+            self.subtitle_content: str | None = None
+
+        def render(
+            self,
+            input_path: Path,
+            subtitle_path: Path,
+            output_path: Path,
+            **kwargs,
+        ) -> None:
+            self.subtitle_content = subtitle_path.read_text(encoding="utf-8-sig")
+            output_path.write_bytes(b"rendered")
+
+    renderer = RecordingRenderer()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=UnexpectedTranscriber(),
+        subtitle_generator=UnexpectedSubtitleGenerator(),
+        video_renderer=renderer,
+    )
+
+    pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "COMPLETED"
+    assert renderer.subtitle_content == imported_ass
+
+
+def test_pipeline_uses_imported_readings_without_processing_or_review_pause(
+    tmp_path: Path,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / "imported-readings"
+    job_id = create_uploaded_job(database, job_dir)
+    document = LyricDocument(
+        provider="deepseek",
+        source_text="物語",
+        lines=[
+            LyricLine(
+                source="物語",
+                surface="物語",
+                reading="ものがたり",
+                tokens=[LyricToken(surface="物語", reading="ものがたり")],
+            )
+        ],
+    )
+    (job_dir / "imported_lyrics_processed.json").write_text(
+        json.dumps(document.to_dict(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    class UnexpectedLyricProcessor:
+        def process(self, text: str):
+            pytest.fail("imported readings must skip lyric processing")
+
+    class RecordingAligner:
+        supports_transcriptless_alignment = True
+        requires_reading_review = True
+        requires_vocals = False
+
+        def __init__(self) -> None:
+            self.lyrics: LyricDocument | None = None
+
+        def align(self, lyrics, transcript, **kwargs):
+            self.lyrics = lyrics
+            return LyricTimeline(confidence=1.0, lines=[])
+
+    aligner = RecordingAligner()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=UnexpectedTranscriber(),
+        lyric_processor=UnexpectedLyricProcessor(),
+        aligner=aligner,
+    )
+
+    pipeline.process(job_id)
+
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "ALIGNED"
+    assert job["stage"] == "ALIGNMENT_COMPLETE"
+    assert aligner.lyrics == document
+
+
 def test_pipeline_classifies_missing_ffmpeg_as_server_tool_failure(
     tmp_path: Path,
 ) -> None:

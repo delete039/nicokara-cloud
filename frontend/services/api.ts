@@ -25,6 +25,7 @@ export type CreateJobInput = {
   video: File;
   lyricsText?: string;
   lyricsFile?: File;
+  projectFiles?: File[];
   vocalMode?: string;
 };
 
@@ -34,8 +35,13 @@ export type CreateAudioOnlyJobInput = {
   originalVideoSizeBytes: number;
   lyricsText?: string;
   lyricsFile?: File;
+  projectFiles?: File[];
   vocalMode?: string;
 };
+
+function appendProjectFiles(form: FormData, files?: File[]): void {
+  for (const file of files ?? []) form.append("project_files", file);
+}
 
 type CreateUploadTicketInput = {
   videoName: string;
@@ -81,13 +87,21 @@ function createClientSubmissionId(): string {
   });
 }
 
-function responseDetail(xhr: XMLHttpRequest): string | null {
+function responseDetailText(text: string): string | null {
+  const normalized = text.trim();
+  if (!normalized) return null;
   try {
-    const body = JSON.parse(xhr.responseText) as { detail?: string };
-    return typeof body.detail === "string" ? body.detail : null;
+    const body = JSON.parse(normalized) as { detail?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+    if (body.detail !== undefined) return JSON.stringify(body.detail);
+    return normalized;
   } catch {
-    return xhr.responseText?.trim() || null;
+    return normalized;
   }
+}
+
+function responseDetail(xhr: XMLHttpRequest): string | null {
+  return responseDetailText(xhr.responseText ?? "");
 }
 
 function retryAfterSeconds(value: string | null): number | undefined {
@@ -112,13 +126,7 @@ function xhrRequestError(
 
 async function fetchResponseDetail(response: Response): Promise<string | null> {
   const text = await response.text();
-  if (!text.trim()) return response.statusText || null;
-  try {
-    const body = JSON.parse(text) as { detail?: unknown };
-    return typeof body.detail === "string" ? body.detail : text.trim();
-  } catch {
-    return text.trim();
-  }
+  return responseDetailText(text) ?? response.statusText ?? null;
 }
 
 function connectionError(context: ErrorContext): ApiRequestError {
@@ -424,6 +432,7 @@ export async function createJob(
     if (input.lyricsFile) {
       data.append("lyrics_file", input.lyricsFile);
     }
+    appendProjectFiles(data, input.projectFiles);
     if (input.vocalMode) {
       data.append("vocal_mode", input.vocalMode);
     }
@@ -498,6 +507,7 @@ export function createJobDirect(
     if (input.lyricsFile) {
       data.append("lyrics_file", input.lyricsFile);
     }
+    appendProjectFiles(data, input.projectFiles);
     if (input.vocalMode) {
       data.append("vocal_mode", input.vocalMode);
     }
@@ -673,6 +683,7 @@ export async function createAudioOnlyJob(
   const form = new FormData();
   if (input.lyricsText?.trim()) form.append("lyrics_text", input.lyricsText.trim());
   if (input.lyricsFile) form.append("lyrics_file", input.lyricsFile);
+  appendProjectFiles(form, input.projectFiles);
   if (input.vocalMode) form.append("vocal_mode", input.vocalMode);
   try {
     response = await fetch(
@@ -892,6 +903,29 @@ export async function confirmReadings(
   return (await response.json()) as Job;
 }
 
+export async function reopenReadingReview(jobId: string): Promise<Job> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/readings/reopen`, {
+      method: "POST",
+      cache: "no-store",
+    });
+  } catch {
+    throw connectionError("job");
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(
+      httpErrorFeedback(
+        "job",
+        response.status,
+        await fetchResponseDetail(response),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      ),
+    );
+  }
+  return (await response.json()) as Job;
+}
+
 export async function getInstrumentalAudio(
   jobId: string,
   signal?: AbortSignal,
@@ -1068,10 +1102,14 @@ export function subtitleUrl(jobId: string): string {
   return `${API_BASE}/jobs/${jobId}/subtitle`;
 }
 
-export function resultVideoUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/result`;
+function versionedResultUrl(path: string, version?: string): string {
+  return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 
-export function downloadVideoUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/download`;
+export function resultVideoUrl(jobId: string, version?: string): string {
+  return versionedResultUrl(`${API_BASE}/jobs/${jobId}/result`, version);
+}
+
+export function downloadVideoUrl(jobId: string, version?: string): string {
+  return versionedResultUrl(`${API_BASE}/jobs/${jobId}/download`, version);
 }

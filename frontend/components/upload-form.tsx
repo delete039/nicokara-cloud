@@ -40,6 +40,11 @@ import {
   type LyricsWidthOverflowReport,
 } from "@/lib/lyrics-width-validation";
 import {
+  inspectReviewedArtifactFiles,
+  type ReviewedArtifactInspection,
+  type ReviewedArtifactKind,
+} from "@/lib/reviewed-artifact-import";
+import {
   ApiRequestError,
   createAudioOnlyJob,
   createJob,
@@ -64,6 +69,7 @@ export function UploadForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
   const lyricsInput = useRef<HTMLInputElement>(null);
+  const reviewedArtifactsInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const mobileAbortController = useRef<AbortController | null>(null);
   const ignoredLyricsSignature = useRef<string | null>(null);
@@ -71,6 +77,8 @@ export function UploadForm() {
   const [video, setVideo] = useState<File | null>(null);
   const [lyricsText, setLyricsText] = useState("");
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
+  const [reviewedArtifacts, setReviewedArtifacts] =
+    useState<ReviewedArtifactInspection | null>(null);
   const [vocalMode, setVocalMode] = useState("on");
   const [uploading, setUploading] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
@@ -202,7 +210,7 @@ export function UploadForm() {
       setError(validationErrorFeedback("video_required"));
       return;
     }
-    if (!lyricsText.trim() && !lyricsFile) {
+    if (!lyricsText.trim() && !lyricsFile && !reviewedArtifacts?.files.length) {
       setError(validationErrorFeedback("lyrics_required"));
       return;
     }
@@ -218,7 +226,10 @@ export function UploadForm() {
       setError(validationErrorFeedback("video_too_large"));
       return;
     }
-    if (!(await checkLyricsWidth(lyricsText, lyricsFile, true))) {
+    if (
+      (lyricsText.trim() || lyricsFile) &&
+      !(await checkLyricsWidth(lyricsText, lyricsFile, true))
+    ) {
       return;
     }
 
@@ -226,7 +237,9 @@ export function UploadForm() {
     setProgress(0);
     setUploadTicket(null);
     setMobileSubmission(null);
-    const useAudioOnly = mobileRoute === "AUDIO_ONLY";
+    const useAudioOnly =
+      mobileRoute === "AUDIO_ONLY" &&
+      !reviewedArtifacts?.requiresRemoteVideo;
     const abortController = useAudioOnly ? new AbortController() : null;
     mobileAbortController.current = abortController;
     try {
@@ -234,6 +247,7 @@ export function UploadForm() {
         video,
         lyricsText,
         lyricsFile: lyricsFile ?? undefined,
+        projectFiles: reviewedArtifacts?.files,
         vocalMode,
       };
       const job = useAudioOnly
@@ -284,6 +298,42 @@ export function UploadForm() {
       mobileAbortController.current = null;
     }
   }
+
+  async function selectReviewedArtifacts(files: File[]) {
+    setError(null);
+    if (!files.length) {
+      setReviewedArtifacts(null);
+      return;
+    }
+    try {
+      setReviewedArtifacts(await inspectReviewedArtifactFiles(files));
+    } catch (reason) {
+      setReviewedArtifacts(null);
+      if (reviewedArtifactsInput.current) {
+        reviewedArtifactsInput.current.value = "";
+      }
+      setError({
+        title: "调整数据无法导入",
+        description:
+          reason instanceof Error ? reason.message : "无法识别所选文件。",
+        solutions: [
+          "请使用本站任务页导出的调整后注音 JSON、mora 时间轴 JSON 或 ASS 字幕。",
+          "同一种格式只选择一个文件，并确认文件内容没有被其他软件修改损坏。",
+        ],
+        retryable: false,
+      });
+    }
+  }
+
+  const effectiveMobileRoute = reviewedArtifacts?.requiresRemoteVideo
+    ? "REMOTE_VIDEO"
+    : mobileRoute;
+
+  const artifactKindLabel: Record<ReviewedArtifactKind, string> = {
+    lyrics: "调整后注音",
+    timeline: "mora 时间轴",
+    subtitle: "调整后 ASS",
+  };
 
   return (
     <form ref={formRef} onSubmit={submit} className="space-y-7">
@@ -342,7 +392,9 @@ export function UploadForm() {
             </div>
           )}
         </button>
-        {video && mobileRoute && <MobileRouteStatus route={mobileRoute} />}
+        {video && effectiveMobileRoute && (
+          <MobileRouteStatus route={effectiveMobileRoute} />
+        )}
       </section>
 
       <section aria-labelledby="lyrics-heading">
@@ -417,6 +469,79 @@ export function UploadForm() {
         </div>
       </section>
 
+      <section aria-labelledby="reviewed-artifacts-heading">
+        <h2
+          id="reviewed-artifacts-heading"
+          className="mb-3 text-lg font-semibold"
+        >
+          导入本站调整数据（可选）
+        </h2>
+        <input
+          ref={reviewedArtifactsInput}
+          type="file"
+          multiple
+          accept=".json,.ass,application/json,text/x-ssa,text/plain"
+          className="sr-only"
+          disabled={uploading}
+          onChange={(event) => {
+            void selectReviewedArtifacts(Array.from(event.target.files ?? []));
+          }}
+        />
+        <div className="rounded-xl border bg-card p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => reviewedArtifactsInput.current?.click()}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
+            >
+              <FileText className="size-4" />
+              {reviewedArtifacts ? "重新选择调整数据" : "选择导出的调整数据"}
+            </button>
+            {reviewedArtifacts && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewedArtifacts(null);
+                  if (reviewedArtifactsInput.current) {
+                    reviewedArtifactsInput.current.value = "";
+                  }
+                }}
+                className="focus-ring rounded-sm text-sm text-muted-foreground underline-offset-4 hover:underline"
+              >
+                移除全部
+              </button>
+            )}
+          </div>
+          {reviewedArtifacts ? (
+            <ul className="mt-3 space-y-2 text-sm">
+              {reviewedArtifacts.files.map((file, index) => (
+                <li
+                  key={`${file.name}-${index}`}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-muted px-3 py-2"
+                >
+                  <span className="min-w-0 truncate" title={file.name}>
+                    {file.name}
+                  </span>
+                  <span className="shrink-0 font-medium text-primary">
+                    {artifactKindLabel[reviewedArtifacts.kinds[index]]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              支持调整后注音 JSON、mora 时间轴 JSON 和 ASS 字幕，可同时选择。
+            </p>
+          )}
+          {reviewedArtifacts?.requiresRemoteVideo && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              已选择 ASS 字幕，将上传原视频并按该字幕进行云端渲染。
+            </p>
+          )}
+        </div>
+      </section>
+
       <section aria-labelledby="vocal-heading">
         <h2 id="vocal-heading" className="mb-3 text-lg font-semibold">
           {UPLOAD_COPY.vocalSectionTitle}
@@ -454,7 +579,20 @@ export function UploadForm() {
         )}
       </section>
 
-      {error && <ErrorFeedbackPanel feedback={error} />}
+      {error && (
+        <ErrorFeedbackPanel
+          feedback={error}
+          onEdit={() => {
+            setError(null);
+            requestAnimationFrame(() => {
+              formRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              });
+            });
+          }}
+        />
+      )}
 
       {uploading && (
         <>

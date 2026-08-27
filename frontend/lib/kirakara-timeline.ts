@@ -125,7 +125,8 @@ function normalizeKana(text: string): string {
   );
 }
 
-const SMALL_KANA = new Set([..."ゃゅょぁぃぅぇぉゎゕゖ"]);
+// Keep timestamp boundaries identical to FA-Kara's default sylla_split.
+const SMALL_KANA = new Set([..."ゃゅょぁぃぅぇぉゎゕゖっー"]);
 
 export function splitReadingMoras(reading: string): string[] {
   const moras: string[] = [];

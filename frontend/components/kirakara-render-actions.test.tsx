@@ -21,7 +21,7 @@ const profile = {
 };
 
 describe("KirakaraRenderActions", () => {
-  it("shows only local export when browser export is supported", () => {
+  it("offers cloud export as a discouraged alternative when browser export is supported", () => {
     const html = renderToStaticMarkup(
       <KirakaraRenderActions
         capabilities={{ supported: true, export: true, profile, reasons: [] }}
@@ -34,7 +34,8 @@ describe("KirakaraRenderActions", () => {
     );
 
     expect(html).toContain("导出本地视频");
-    expect(html).not.toContain("进入云端渲染队列");
+    expect(html).toContain("云端导出（不推荐）");
+    expect(html).toContain("会重新上传原视频并占用服务器渲染队列");
   });
 
   it("shows only cloud rendering when browser export is unsupported", () => {
@@ -51,5 +52,6 @@ describe("KirakaraRenderActions", () => {
 
     expect(html).toContain("进入云端渲染队列");
     expect(html).not.toContain("导出本地视频");
+    expect(html).not.toContain("不推荐");
   });
 });

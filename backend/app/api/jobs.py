@@ -45,6 +45,10 @@ from app.services.chunked_uploads import (
     start_chunked_upload,
 )
 from app.services.uploads import save_lyrics, save_mp4
+from app.services.reviewed_artifacts import (
+    ensure_lyrics_source_from_reviewed_artifacts,
+    save_reviewed_artifacts,
+)
 from app.lyrics.models import LyricDocument, lyric_document_from_dict
 from app.lyrics.processor import normalize_unconverted_foreign_readings
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
@@ -497,6 +501,7 @@ async def complete_upload_chunks(
     ticket_id: str,
     lyrics_text: str | None = Form(default=None),
     lyrics_file: UploadFile | None = File(default=None),
+    project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
 ) -> JobResponse:
     try:
@@ -608,6 +613,18 @@ async def complete_upload_chunks(
             destination=lyrics_path,
             max_bytes=settings.max_lyrics_bytes,
         )
+        reviewed = await save_reviewed_artifacts(
+            project_files,
+            job_dir,
+            max_bytes=max(settings.max_lyrics_bytes, 4 * 1024 * 1024),
+        )
+        lyrics_source, effective_lyrics_path = (
+            ensure_lyrics_source_from_reviewed_artifacts(
+                reviewed,
+                lyrics_path,
+                lyrics_source,
+            )
+        )
         job = database.create_job(
             job_id=job_id,
             original_video_name=original_name,
@@ -616,7 +633,7 @@ async def complete_upload_chunks(
             video_path=saved.path,
             client_key=ticket["client_key"],
             lyrics_source=lyrics_source,
-            lyrics_path=lyrics_path if lyrics_source else None,
+            lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
             client_submission_id=ticket.get("client_submission_id"),
         )
@@ -680,6 +697,7 @@ async def create_job_from_upload_ticket(
     video: UploadFile = File(...),
     lyrics_text: str | None = Form(default=None),
     lyrics_file: UploadFile | None = File(default=None),
+    project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
 ) -> JobResponse:
     try:
@@ -749,6 +767,18 @@ async def create_job_from_upload_ticket(
             destination=lyrics_path,
             max_bytes=settings.max_lyrics_bytes,
         )
+        reviewed = await save_reviewed_artifacts(
+            project_files,
+            job_dir,
+            max_bytes=max(settings.max_lyrics_bytes, 4 * 1024 * 1024),
+        )
+        lyrics_source, effective_lyrics_path = (
+            ensure_lyrics_source_from_reviewed_artifacts(
+                reviewed,
+                lyrics_path,
+                lyrics_source,
+            )
+        )
         job = database.create_job(
             job_id=job_id,
             original_video_name=original_name,
@@ -757,7 +787,7 @@ async def create_job_from_upload_ticket(
             video_path=saved.path,
             client_key=ticket["client_key"],
             lyrics_source=lyrics_source,
-            lyrics_path=lyrics_path if lyrics_source else None,
+            lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
             client_submission_id=ticket.get("client_submission_id"),
         )
@@ -786,6 +816,7 @@ async def create_job(
     video: UploadFile = File(...),
     lyrics_text: str | None = Form(default=None),
     lyrics_file: UploadFile | None = File(default=None),
+    project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
 ) -> JobResponse:
     settings, database = services(request)
@@ -835,6 +866,18 @@ async def create_job(
             destination=lyrics_path,
             max_bytes=settings.max_lyrics_bytes,
         )
+        reviewed = await save_reviewed_artifacts(
+            project_files,
+            job_dir,
+            max_bytes=max(settings.max_lyrics_bytes, 4 * 1024 * 1024),
+        )
+        lyrics_source, effective_lyrics_path = (
+            ensure_lyrics_source_from_reviewed_artifacts(
+                reviewed,
+                lyrics_path,
+                lyrics_source,
+            )
+        )
         job = database.create_job(
             job_id=job_id,
             original_video_name=original_name,
@@ -843,7 +886,7 @@ async def create_job(
             video_path=saved.path,
             client_key=client_key,
             lyrics_source=lyrics_source,
-            lyrics_path=lyrics_path if lyrics_source else None,
+            lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
         )
         created = True
@@ -1263,6 +1306,56 @@ async def confirm_readings(
     return job_response(database, queued_job)
 
 
+@router.post("/{job_id}/readings/reopen", response_model=JobResponse)
+def reopen_reading_review(request: Request, job_id: str) -> JobResponse:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        ) from exc
+
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在",
+        )
+    if (
+        job["status"] == "LYRICS_PROCESSED"
+        and job["stage"] == "READING_REVIEW_REQUIRED"
+    ):
+        return job_response(database, job)
+    if job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED", "COMPLETED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前任务尚未生成可修改的注音结果。",
+        )
+
+    lyrics_path_value = job.get("lyrics_processed_path")
+    if not lyrics_path_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前任务没有可继续修改的注音数据。",
+        )
+    lyrics_path = validated_job_file(settings, job_id, lyrics_path_value)
+    if not lyrics_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="已保存的注音数据不存在，无法返回修改。",
+        )
+
+    reopened = database.reopen_reading_review(job_id)
+    if reopened is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="任务状态已发生变化，请刷新页面后重试。",
+        )
+    return job_response(database, reopened)
+
+
 @router.get("/{job_id}/timeline", response_class=FileResponse)
 def get_timeline(request: Request, job_id: str) -> FileResponse:
     try:
@@ -1550,6 +1643,7 @@ def get_result_video(request: Request, job_id: str) -> FileResponse:
     return FileResponse(
         output_path,
         media_type="video/mp4",
+        headers=result_video_cache_headers(),
     )
 
 
@@ -1560,7 +1654,16 @@ def download_result_video(request: Request, job_id: str) -> FileResponse:
         output_path,
         media_type="video/mp4",
         filename="final_karaoke.mp4",
+        headers=result_video_cache_headers(),
     )
+
+
+def result_video_cache_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "private, no-store, max-age=0",
+        "CDN-Cache-Control": "no-store",
+        "Cloudflare-CDN-Cache-Control": "no-store",
+    }
 
 
 def result_video_path(request: Request, job_id: str) -> Path:

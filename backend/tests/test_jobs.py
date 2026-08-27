@@ -14,6 +14,45 @@ def fake_mp4(payload: bytes = b"video-data") -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom" + payload
 
 
+def reviewed_timeline_bytes() -> bytes:
+    return json.dumps(
+        {
+            "confidence": 1.0,
+            "alignment_engine": "fa_kara_mms",
+            "alignment_model": "MMS_FA",
+            "warnings": ["browser_reviewed"],
+            "lines": [
+                {
+                    "surface": "物語",
+                    "reading": "ものがたり",
+                    "start_ms": 1000,
+                    "end_ms": 1500,
+                    "confidence": 1.0,
+                    "tokens": [
+                        {
+                            "surface": "物語",
+                            "reading": "ものがたり",
+                            "start_ms": 1000,
+                            "end_ms": 1500,
+                            "confidence": 1.0,
+                            "moras": [
+                                {
+                                    "reading": "ものがたり",
+                                    "start_ms": 1000,
+                                    "end_ms": 1500,
+                                    "matched": True,
+                                    "confidence": 1.0,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
 def build_client(tmp_path: Path, *, max_video_bytes: int = 1024) -> TestClient:
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -45,6 +84,35 @@ def test_upload_mp4_and_lyrics(tmp_path: Path) -> None:
         assert (
             tmp_path / "jobs" / body["id"] / "lyrics.txt"
         ).read_text(encoding="utf-8") == "君の知らない物語\n"
+
+
+def test_upload_accepts_reviewed_timeline_without_plain_lyrics(
+    tmp_path: Path,
+) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files=[
+                ("video", ("song.mp4", fake_mp4(), "video/mp4")),
+                (
+                    "project_files",
+                    (
+                        "renamed.json",
+                        reviewed_timeline_bytes(),
+                        "application/json",
+                    ),
+                ),
+            ],
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    job_dir = tmp_path / "jobs" / body["id"]
+    assert body["lyrics_source"] == "reviewed_timeline"
+    assert json.loads(
+        (job_dir / "imported_timeline.json").read_text(encoding="utf-8")
+    )["lines"][0]["tokens"][0]["moras"][0]["start_ms"] == 1000
+    assert (job_dir / "lyrics.txt").read_text(encoding="utf-8") == "物語\n"
 
 
 def test_rejects_non_mp4_content(tmp_path: Path) -> None:
@@ -444,6 +512,70 @@ def test_reviewed_readings_preserve_whitespace_before_alignment_is_queued(
         assert saved["lines"][0]["tokens"][2][
             "alignment_pronunciation"
         ] is None
+
+
+def test_completed_job_can_return_to_the_last_reviewed_readings(
+    tmp_path: Path,
+) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.mp4", fake_mp4(), "video/mp4")},
+            data={"lyrics_text": "君"},
+        )
+        job_id = response.json()["id"]
+        job_dir = tmp_path / "jobs" / job_id
+        lyrics_path = job_dir / "lyrics_processed.json"
+        timeline_path = job_dir / "timeline.json"
+        ass_path = job_dir / "lyrics.ass"
+        output_path = job_dir / "final_karaoke.mp4"
+        lyrics_path.write_text(
+            json.dumps(
+                {
+                    "provider": "local",
+                    "source_text": "君",
+                    "lines": [
+                        {
+                            "source": "君",
+                            "surface": "君",
+                            "reading": "きみ",
+                            "tokens": [
+                                {"surface": "君", "reading": "きみ"}
+                            ],
+                        }
+                    ],
+                    "warnings": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        timeline_path.write_text("{}", encoding="utf-8")
+        ass_path.write_text("ass", encoding="utf-8")
+        output_path.write_bytes(b"video")
+        client.app.state.database.update_job_state(
+            job_id,
+            status="COMPLETED",
+            stage="VIDEO_RENDERING_COMPLETE",
+            progress=100,
+            lyrics_processed_path=lyrics_path,
+            timeline_path=timeline_path,
+            ass_path=ass_path,
+            output_path=output_path,
+        )
+
+        reopened = client.post(f"/api/v1/jobs/{job_id}/readings/reopen")
+        stored = client.app.state.database.get_job(job_id)
+
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "LYRICS_PROCESSED"
+    assert reopened.json()["stage"] == "READING_REVIEW_REQUIRED"
+    assert stored is not None
+    assert stored["timeline_path"] is None
+    assert stored["ass_path"] is None
+    assert stored["output_path"] is None
+    saved = json.loads(lyrics_path.read_text(encoding="utf-8"))
+    assert saved["lines"][0]["tokens"][0]["reading"] == "きみ"
 
 
 def test_reading_review_rejects_changed_lyric_structure(tmp_path: Path) -> None:
@@ -873,6 +1005,66 @@ def test_reviewed_ass_export_uses_current_timing_and_style(tmp_path: Path) -> No
     assert "lyrics.reviewed.ass" in response.headers["content-disposition"]
 
 
+def test_current_reviewed_exports_can_be_imported_together(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        source_job_id, review = _prepare_reviewable_job(client, tmp_path)
+        lyrics_export = client.post(
+            f"/api/v1/jobs/{source_job_id}/exports/lyrics",
+            json=review,
+        )
+        timeline_export = client.post(
+            f"/api/v1/jobs/{source_job_id}/exports/timeline",
+            json=review,
+        )
+        subtitle_export = client.post(
+            f"/api/v1/jobs/{source_job_id}/exports/subtitle",
+            json=review,
+        )
+
+        imported = client.post(
+            "/api/v1/jobs",
+            files=[
+                ("video", ("next.mp4", fake_mp4(), "video/mp4")),
+                (
+                    "project_files",
+                    (
+                        "renamed-lyrics.json",
+                        lyrics_export.content,
+                        "application/json",
+                    ),
+                ),
+                (
+                    "project_files",
+                    (
+                        "renamed-timeline.json",
+                        timeline_export.content,
+                        "application/json",
+                    ),
+                ),
+                (
+                    "project_files",
+                    (
+                        "renamed-subtitle.ass",
+                        subtitle_export.content,
+                        "text/x-ssa",
+                    ),
+                ),
+            ],
+        )
+
+    assert imported.status_code == 201
+    job_dir = tmp_path / "jobs" / imported.json()["id"]
+    assert (job_dir / "imported_lyrics_processed.json").is_file()
+    assert (job_dir / "imported_timeline.json").is_file()
+    assert (job_dir / "imported_subtitle.ass").is_file()
+    assert json.loads(
+        (job_dir / "imported_timeline.json").read_text(encoding="utf-8")
+    )["lines"][0]["start_ms"] == 2000
+    assert "&H00332211" in (
+        job_dir / "imported_subtitle.ass"
+    ).read_text(encoding="utf-8-sig")
+
+
 def test_final_video_can_be_streamed_and_downloaded(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         response = client.post(
@@ -904,6 +1096,13 @@ def test_final_video_can_be_streamed_and_downloaded(tmp_path: Path) -> None:
     assert result_response.status_code == 200
     assert result_response.content == content
     assert result_response.headers["content-type"].startswith("video/mp4")
+    assert result_response.headers["cache-control"] == (
+        "private, no-store, max-age=0"
+    )
+    assert result_response.headers["cdn-cache-control"] == "no-store"
+    assert result_response.headers["cloudflare-cdn-cache-control"] == (
+        "no-store"
+    )
     assert "attachment" not in result_response.headers.get(
         "content-disposition",
         "",
@@ -911,6 +1110,9 @@ def test_final_video_can_be_streamed_and_downloaded(tmp_path: Path) -> None:
     assert range_response.status_code == 206
     assert range_response.content == content[:10]
     assert download_response.status_code == 200
+    assert download_response.headers["cache-control"] == (
+        "private, no-store, max-age=0"
+    )
     assert "attachment" in download_response.headers["content-disposition"]
     assert "final_karaoke.mp4" in download_response.headers[
         "content-disposition"

@@ -5,7 +5,13 @@ import unicodedata
 from pykakasi import kakasi
 
 
-SMALL_KANA = frozenset("ゃゅょぁぃぅぇぉゎゕゖ")
+# FA-Kara's default sylla_split keeps small kana, a trailing sokuon, and a
+# prolonged-sound mark in the preceding pronunciation unit.  The model then
+# receives the same boundaries that Kirakara uses for its lyric timestamps.
+COMBINING_KANA = frozenset(
+    "ゃゅょぁぃぅぇぉゎゕゖっー"
+    "ャュョァィゥェォヮヵヶッ"
+)
 _CONVERTER = kakasi()
 
 
@@ -26,8 +32,19 @@ def split_moras(reading: str) -> list[str]:
         category = unicodedata.category(character)
         if character.isspace() or category.startswith("P"):
             continue
-        if character in SMALL_KANA and moras:
+        if character in COMBINING_KANA and moras:
             moras[-1] += character
         else:
             moras.append(character)
     return moras
+
+
+def split_kana_units(text: str) -> list[str]:
+    """Split visible kana with the same boundaries as FA-Kara sylla_split."""
+    units: list[str] = []
+    for character in text:
+        if character in COMBINING_KANA and units:
+            units[-1] += character
+        else:
+            units.append(character)
+    return units

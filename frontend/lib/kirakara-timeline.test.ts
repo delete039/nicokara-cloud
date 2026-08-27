@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeKirakaraFrame,
   kanjiRuby,
+  splitReadingMoras,
   toKirakaraTimeline,
   type CloudAlignedLine,
   type CloudLyricTimeline,
@@ -92,6 +93,15 @@ const cloudTimeline: CloudLyricTimeline = {
 };
 
 describe("toKirakaraTimeline", () => {
+  it("uses FA-Kara pronunciation units for sokuon and long vowels", () => {
+    expect(splitReadingMoras("きゃっと すーぱー")).toEqual([
+      "きゃっ",
+      "と",
+      "すー",
+      "ぱー",
+    ]);
+  });
+
   it("isolates ruby to kanji runs inside mixed kana tokens", () => {
     expect(kanjiRuby("お願い", "おねがい")).toEqual([
       { text: "ねが", startCharacter: 1, endCharacter: 2 },

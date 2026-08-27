@@ -17,8 +17,14 @@ from app.core.event_logging import (
     exception_details,
 )
 from app.ai.whisper import transcript_document_from_dict
+from app.alignment.review import lyric_timeline_from_dict
 from app.lyrics.lrc import parse_lrc, retime_timeline_from_lrc
-from app.lyrics.models import lyric_document_from_dict
+from app.lyrics.models import (
+    LyricDocument,
+    LyricLine,
+    LyricToken,
+    lyric_document_from_dict,
+)
 from app.video.audio import FFmpegUnavailableError
 
 
@@ -120,6 +126,9 @@ class TranscriptionPipeline:
         transcript_path = job_dir / "transcript.json"
         lyrics_processed_path = job_dir / "lyrics_processed.json"
         timeline_path = job_dir / "timeline.json"
+        imported_lyrics_path = job_dir / "imported_lyrics_processed.json"
+        imported_timeline_path = job_dir / "imported_timeline.json"
+        imported_ass_path = job_dir / "imported_subtitle.ass"
         ass_path = (
             Path(job["ass_path"])
             if job.get("ass_path")
@@ -235,7 +244,10 @@ class TranscriptionPipeline:
             lyrics_path_value = job.get("lyrics_path")
             render_vocal_mode = "on"
             direct_alignment_job = (
-                job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+                (
+                    imported_lyrics_path.is_file()
+                    or job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+                )
                 and bool(
                     getattr(
                         self.aligner,
@@ -243,8 +255,13 @@ class TranscriptionPipeline:
                         False,
                     )
                 )
-                and self.lyric_processor is not None
-                and bool(lyrics_path_value)
+                and (
+                    imported_lyrics_path.is_file()
+                    or (
+                        self.lyric_processor is not None
+                        and bool(lyrics_path_value)
+                    )
+                )
             )
             alignment_fallback_warning: str | None = None
             alignment_requires_vocals = (
@@ -362,6 +379,31 @@ class TranscriptionPipeline:
                         "reason": "on_vocal_without_direct_mms_requirement"
                     },
                 )
+            if imported_timeline_path.is_file() or imported_ass_path.is_file():
+                resumed_stage = [
+                    "GENERATING_SUBTITLE"
+                    if imported_timeline_path.is_file()
+                    and not imported_ass_path.is_file()
+                    else "RENDERING_VIDEO"
+                ]
+                self._complete_imported_artifacts(
+                    job_id=job_id,
+                    run_id=run_id,
+                    job=job,
+                    video_path=video_path,
+                    audio_path=audio_path,
+                    instrumental_path=instrumental_path,
+                    imported_lyrics_path=imported_lyrics_path,
+                    imported_timeline_path=imported_timeline_path,
+                    imported_ass_path=imported_ass_path,
+                    lyrics_processed_path=lyrics_processed_path,
+                    timeline_path=timeline_path,
+                    ass_path=ass_path,
+                    output_path=output_path,
+                    render_vocal_mode=render_vocal_mode,
+                    stage_state=resumed_stage,
+                )
+                return
             transcript = None
 
             def load_transcript():
@@ -428,7 +470,9 @@ class TranscriptionPipeline:
                     component="whisper",
                     details={"reason": "direct_fa_kara_alignment"},
                 )
-            if self.lyric_processor is not None and lyrics_path_value:
+            if imported_lyrics_path.is_file() or (
+                self.lyric_processor is not None and lyrics_path_value
+            ):
                 stage = "PROCESSING_LYRICS"
                 self.database.update_job_state(
                     job_id,
@@ -444,22 +488,51 @@ class TranscriptionPipeline:
                     job_id=job_id,
                     run_id=run_id,
                     stage="PROCESSING_LYRICS",
-                    component=self._lyric_component(),
-                    message="歌词读取与注音处理",
+                    component=(
+                        "reviewed_artifact_import"
+                        if imported_lyrics_path.is_file()
+                        else self._lyric_component()
+                    ),
+                    message=(
+                        "读取已调整注音数据"
+                        if imported_lyrics_path.is_file()
+                        else "歌词读取与注音处理"
+                    ),
                     details={
-                        **self._lyric_processor_details(),
+                        **(
+                            {"imported_artifact": "reviewed_lyrics"}
+                            if imported_lyrics_path.is_file()
+                            else self._lyric_processor_details()
+                        ),
                         "input_size_bytes": self._file_size(
-                            Path(lyrics_path_value)
+                            imported_lyrics_path
+                            if imported_lyrics_path.is_file()
+                            else Path(lyrics_path_value)
                         ),
                     },
                 ) as lyric_trace:
-                    lyrics = Path(lyrics_path_value).read_text(encoding="utf-8")
-                    parsed_lrc = parse_lrc(lyrics)
-                    processed_lyrics = self.lyric_processor.process(
-                        parsed_lrc.lyrics_text
-                        if parsed_lrc.has_timing
-                        else lyrics
-                    )
+                    if imported_lyrics_path.is_file():
+                        processed_lyrics = lyric_document_from_dict(
+                            json.loads(
+                                imported_lyrics_path.read_text(encoding="utf-8")
+                            )
+                        )
+                        lyrics = (
+                            Path(lyrics_path_value).read_text(encoding="utf-8")
+                            if lyrics_path_value
+                            else processed_lyrics.source_text
+                        )
+                        parsed_lrc = parse_lrc(lyrics)
+                    else:
+                        lyrics = Path(lyrics_path_value).read_text(
+                            encoding="utf-8"
+                        )
+                        parsed_lrc = parse_lrc(lyrics)
+                        processed_lyrics = self.lyric_processor.process(
+                            parsed_lrc.lyrics_text
+                            if parsed_lrc.has_timing
+                            else lyrics
+                        )
                     lyrics_processed_path.write_text(
                         json.dumps(
                             processed_lyrics.to_dict(),
@@ -496,7 +569,7 @@ class TranscriptionPipeline:
                             "requires_reading_review",
                             False,
                         )
-                    ):
+                    ) and not imported_lyrics_path.is_file():
                         self.database.update_job_state(
                             job_id,
                             status="LYRICS_PROCESSED",
@@ -901,6 +974,215 @@ class TranscriptionPipeline:
                     },
                 )
             run_context.__exit__(None, None, None)
+
+    def _complete_imported_artifacts(
+        self,
+        *,
+        job_id: str,
+        run_id: str,
+        job: dict[str, Any],
+        video_path: Path,
+        audio_path: Path,
+        instrumental_path: Path,
+        imported_lyrics_path: Path,
+        imported_timeline_path: Path,
+        imported_ass_path: Path,
+        lyrics_processed_path: Path,
+        timeline_path: Path,
+        ass_path: Path,
+        output_path: Path,
+        render_vocal_mode: str,
+        stage_state: list[str],
+    ) -> None:
+        timeline = None
+        processed_lyrics = None
+        if imported_lyrics_path.is_file():
+            processed_lyrics = lyric_document_from_dict(
+                json.loads(imported_lyrics_path.read_text(encoding="utf-8"))
+            )
+        if imported_timeline_path.is_file():
+            timeline = lyric_timeline_from_dict(
+                json.loads(imported_timeline_path.read_text(encoding="utf-8"))
+            )
+            timeline_path.write_text(
+                json.dumps(timeline.to_dict(), ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
+            if processed_lyrics is None:
+                processed_lyrics = LyricDocument(
+                    provider="reviewed_timeline",
+                    source_text="\n".join(line.surface for line in timeline.lines),
+                    lines=[
+                        LyricLine(
+                            source=line.surface,
+                            surface=line.surface,
+                            reading=line.reading,
+                            tokens=[
+                                LyricToken(
+                                    surface=token.surface,
+                                    reading=token.reading,
+                                )
+                                for token in line.tokens
+                            ],
+                        )
+                        for line in timeline.lines
+                    ],
+                    warnings=["imported_from_reviewed_timeline"],
+                )
+            self.event_logger.emit(
+                event="stage.skipped",
+                level="INFO",
+                category="pipeline",
+                message="已导入调整后的 mora 时间轴，跳过重新识别与对齐",
+                stage="ALIGNING",
+                component="reviewed_artifact_import",
+                details={
+                    "reason": "reviewed_timeline_imported",
+                    **self._timeline_summary(timeline),
+                },
+            )
+        if processed_lyrics is not None:
+            lyrics_processed_path.write_text(
+                json.dumps(
+                    processed_lyrics.to_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+        if imported_ass_path.is_file():
+            stage_state[0] = "GENERATING_SUBTITLE"
+            ass_path.write_bytes(imported_ass_path.read_bytes())
+            self.event_logger.emit(
+                event="stage.skipped",
+                level="INFO",
+                category="pipeline",
+                message="已导入调整后的 ASS 字幕，跳过字幕重新生成",
+                stage="GENERATING_SUBTITLE",
+                component="reviewed_artifact_import",
+                details={
+                    "reason": "reviewed_ass_imported",
+                    "ass_event_count": self._ass_event_count(
+                        ass_path.read_text(encoding="utf-8-sig")
+                    ),
+                    "output_size_bytes": self._file_size(ass_path),
+                },
+            )
+        else:
+            stage_state[0] = "GENERATING_SUBTITLE"
+            if timeline is None or self.subtitle_generator is None:
+                raise RuntimeError(
+                    "Imported timeline cannot be converted to ASS subtitles"
+                )
+            self.database.update_job_state(
+                job_id,
+                status="PROCESSING",
+                stage="GENERATING_SUBTITLE",
+                progress=95,
+                audio_path=audio_path,
+                lyrics_processed_path=(
+                    lyrics_processed_path
+                    if lyrics_processed_path.is_file()
+                    else None
+                ),
+                timeline_path=timeline_path,
+            )
+            with self.event_logger.stage(
+                job_id=job_id,
+                run_id=run_id,
+                stage="GENERATING_SUBTITLE",
+                component=type(self.subtitle_generator).__name__,
+                message="根据导入时间轴生成 ASS 字幕",
+                details={
+                    "imported_artifact": "reviewed_timeline",
+                    "timeline_lines": len(timeline.lines),
+                },
+            ) as subtitle_trace:
+                ass_content = self.subtitle_generator.generate(timeline)
+                ass_path.write_text(ass_content, encoding="utf-8-sig")
+                subtitle_trace.result(
+                    ass_event_count=self._ass_event_count(ass_content),
+                    output_size_bytes=self._file_size(ass_path),
+                )
+
+        if (
+            self.video_renderer is None
+            or job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
+        ):
+            self.database.update_job_state(
+                job_id,
+                status="SUBTITLE_GENERATED",
+                stage="SUBTITLE_GENERATION_COMPLETE",
+                progress=100,
+                audio_path=audio_path,
+                lyrics_processed_path=(
+                    lyrics_processed_path
+                    if lyrics_processed_path.is_file()
+                    else None
+                ),
+                timeline_path=(timeline_path if timeline_path.is_file() else None),
+                ass_path=ass_path,
+            )
+            return
+
+        stage_state[0] = "RENDERING_VIDEO"
+        self.database.update_job_state(
+            job_id,
+            status="PROCESSING",
+            stage="RENDERING_VIDEO",
+            progress=98,
+            audio_path=audio_path,
+            lyrics_processed_path=(
+                lyrics_processed_path if lyrics_processed_path.is_file() else None
+            ),
+            timeline_path=(timeline_path if timeline_path.is_file() else None),
+            ass_path=ass_path,
+        )
+        with self.event_logger.stage(
+            job_id=job_id,
+            run_id=run_id,
+            stage="RENDERING_VIDEO",
+            component="ffmpeg",
+            message="使用导入的调整成果渲染视频",
+            details={
+                "imported_timeline": imported_timeline_path.is_file(),
+                "imported_ass": imported_ass_path.is_file(),
+                "preset": getattr(self.video_renderer, "preset", None),
+                "crf": getattr(self.video_renderer, "crf", None),
+                "vocal_mode": render_vocal_mode,
+            },
+        ) as render_trace:
+            self.video_renderer.render(
+                video_path,
+                ass_path,
+                output_path,
+                vocal_mode=render_vocal_mode,
+                instrumental_audio_path=(
+                    instrumental_path
+                    if render_vocal_mode == "off" and instrumental_path.exists()
+                    else None
+                ),
+            )
+            render_trace.result(
+                exit_code=0,
+                output_size_bytes=self._file_size(output_path),
+            )
+        self.database.update_job_state(
+            job_id,
+            status="COMPLETED",
+            stage="VIDEO_RENDERING_COMPLETE",
+            progress=100,
+            audio_path=audio_path,
+            lyrics_processed_path=(
+                lyrics_processed_path if lyrics_processed_path.is_file() else None
+            ),
+            timeline_path=(timeline_path if timeline_path.is_file() else None),
+            ass_path=ass_path,
+            output_path=output_path,
+        )
 
     @staticmethod
     def _file_size(path: Path) -> int | None:

@@ -34,6 +34,7 @@ describe("ReadingReviewEditor", () => {
     expect(html).toContain('value="くん"');
     expect(html).toContain('value="は"');
     expect(html).toContain("保存注音并开始对齐");
+    expect(html).toContain("修改会自动保存在此浏览器");
     expect(html).not.toContain("设置时间轴");
   });
 

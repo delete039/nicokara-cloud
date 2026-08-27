@@ -56,7 +56,9 @@ def test_deepseek_processor_returns_ruby_ready_lyrics() -> None:
         ("君", "きみ"),
         ("の", "の"),
         ("知", "し"),
-        ("らない", "らない"),
+        ("ら", "ら"),
+        ("な", "な"),
+        ("い", "い"),
         ("物", "もの"),
         ("語", "がたり"),
     ]
@@ -238,9 +240,29 @@ def test_local_processor_uses_kana_suffix_as_reading_anchor() -> None:
     assert [(token.surface, token.reading) for token in tokens] == [
         ("大", "おと"),
         ("人", "な"),
-        ("しい", "しい"),
+        ("し", "し"),
+        ("い", "い"),
     ]
     assert "".join(token.reading for token in tokens) == "おとなしい"
+
+
+def test_local_processor_uses_fa_kara_alignment_markers() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("げっと LOVE 物語 だー")
+
+    assert [(token.surface, token.reading) for token in document.lines[0].tokens] == [
+        ("げっ", "げっ"),
+        ("と", "と"),
+        (" ", " "),
+        ("LOVE", "らぶ"),
+        (" ", " "),
+        ("物", "もの"),
+        ("語", "がたり"),
+        (" ", " "),
+        ("だー", "だー"),
+    ]
 
 
 def test_local_processor_generates_editable_kana_for_latin_words_and_digits() -> None:

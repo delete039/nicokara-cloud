@@ -340,7 +340,7 @@ def test_mms_aligner_falls_back_for_unannotated_latin_lyrics(
     ("surface", "reading", "expected_tokens"),
     [
         ("LOVE", "らぶ", ["ra", "bu"]),
-        ("39", "さんきゅー", ["sa", "n", "kyu", "u"]),
+        ("39", "さんきゅー", ["sa", "n", "kyuu"]),
     ],
 )
 def test_mms_aligner_accepts_latin_or_digits_with_reviewed_kana_reading(
@@ -402,6 +402,17 @@ def test_mms_aligner_accepts_latin_or_digits_with_reviewed_kana_reading(
         for token in timeline.lines[0].tokens
         for mora in token.moras
     ] == list(split_moras(normalize_reading(reading)))
+
+
+def test_mms_aligner_romanizes_fa_kara_sokuon_unit_with_next_consonant() -> None:
+    from app.alignment.mms import MMSForcedAligner, _MoraTarget
+
+    targets = [
+        _MoraTarget(0, 0, "げっ"),
+        _MoraTarget(0, 1, "と"),
+    ]
+
+    assert MMSForcedAligner._romanized_tokens(targets) == ["get", "to"]
 
 
 def test_subprocess_runtime_parses_worker_output(tmp_path: Path) -> None:
@@ -561,6 +572,25 @@ def test_fa_kara_line_boundary_correction_uses_vocal_edges() -> None:
 
     assert corrected[0]["start_ms"] == 1000
     assert corrected[-1]["end_ms"] == 1700
+
+
+def test_fa_kara_line_boundary_correction_does_not_collapse_first_mora() -> None:
+    from app.alignment.mms_worker import _adjust_line_boundaries
+
+    spans = [
+        {"start_ms": 1000, "end_ms": 1100, "score": 0.9},
+        {"start_ms": 4000, "end_ms": 4100, "score": 0.9},
+    ]
+
+    corrected = _adjust_line_boundaries(
+        spans,
+        [2],
+        [(1.0, 1.2), (3.5, 4.5)],
+        [],
+    )
+
+    assert corrected[0]["start_ms"] == 1000
+    assert corrected[0]["end_ms"] == 1100
 
 
 def test_mms_aligner_rejects_zero_duration_mora_spans(

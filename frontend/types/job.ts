@@ -6,7 +6,13 @@ export type Job = {
   original_video_name: string;
   video_size_bytes: number;
   video_sha256: string;
-  lyrics_source: "text" | "file" | null;
+  lyrics_source:
+    | "text"
+    | "file"
+    | "reviewed_lyrics"
+    | "reviewed_timeline"
+    | "reviewed_subtitle"
+    | null;
   vocal_mode?: "on" | "off";
   client_submission_id?: string | null;
   input_mode?: "VIDEO" | "AUDIO_ONLY";

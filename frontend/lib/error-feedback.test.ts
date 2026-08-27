@@ -124,6 +124,30 @@ describe("httpErrorFeedback", () => {
     expect(feedback.description).toContain("刷新");
     expect(feedback.description).not.toContain("文件暂时不能下载");
   });
+
+  it("translates FastAPI field validation into an actionable user explanation", () => {
+    const feedback = httpErrorFeedback(
+      "upload",
+      422,
+      JSON.stringify([
+        {
+          type: "missing",
+          loc: ["body", "original_video_size_bytes"],
+          msg: "Field required",
+          input: { original_video_name: "song.mp4" },
+        },
+      ]),
+    );
+
+    expect(feedback.title).toBe("提交内容未通过校验");
+    expect(feedback.description).toContain("原视频大小未提供");
+    expect(feedback.description).not.toContain("服务器无法使用当前视频");
+    expect(feedback.solutions.join(" ")).toContain("返回修改");
+    expect(feedback.technicalDetails.join(" ")).toContain(
+      "original_video_size_bytes",
+    );
+    expect(feedback.technicalDetails.join(" ")).not.toContain("song.mp4");
+  });
 });
 
 describe("jobFailureFeedback", () => {

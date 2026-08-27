@@ -44,4 +44,21 @@ describe("ErrorFeedbackPanel", () => {
 
     expect(html).toContain("重新加入队列");
   });
+
+  it("renders an action that returns the user to editable inputs", () => {
+    const html = renderToStaticMarkup(
+      <ErrorFeedbackPanel
+        feedback={{
+          title: "提交内容未通过校验",
+          description: "原视频大小未提供。",
+          solutions: ["修改后重新提交。"],
+          technicalDetails: ["HTTP 状态码：422"],
+          retryable: false,
+        }}
+        onEdit={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("返回修改");
+  });
 });

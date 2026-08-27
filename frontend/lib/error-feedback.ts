@@ -68,6 +68,134 @@ function retryDelay(seconds?: number): string {
   return `${Math.ceil(seconds / 60)} 分钟后`;
 }
 
+type FastApiValidationIssue = {
+  type?: unknown;
+  loc?: unknown;
+  msg?: unknown;
+};
+
+const VALIDATION_FIELD_LABELS: Record<string, string> = {
+  audio: "音频文件",
+  audio_name: "音频文件名",
+  audio_size_bytes: "音频文件大小",
+  chunk: "上传分片",
+  chunk_size_bytes: "分片大小",
+  client_submission_id: "本次提交编号",
+  lyrics_file: "歌词文件",
+  lyrics_text: "粘贴歌词",
+  original_video_name: "原视频文件名",
+  original_video_size_bytes: "原视频大小",
+  project_files: "调整后数据文件",
+  timeline_review: "调整后的时间轴",
+  total_chunks: "分片数量",
+  video: "视频文件",
+  vocal_mode: "人声模式",
+};
+
+function parsedValidationIssues(detail?: string | null): FastApiValidationIssue[] {
+  const normalized = detail?.trim();
+  if (!normalized) return [];
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    const issues = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && "detail" in parsed
+        ? (parsed as { detail?: unknown }).detail
+        : null;
+    if (!Array.isArray(issues)) return [];
+    return issues.filter(
+      (issue): issue is FastApiValidationIssue =>
+        Boolean(issue) && typeof issue === "object",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function validationIssueField(issue: FastApiValidationIssue): {
+  key: string;
+  path: string;
+} {
+  const location = Array.isArray(issue.loc)
+    ? issue.loc.filter(
+        (part): part is string | number =>
+          typeof part === "string" || typeof part === "number",
+      )
+    : [];
+  const key = [...location]
+    .reverse()
+    .find((part): part is string =>
+      typeof part === "string" && !["body", "path", "query"].includes(part),
+    ) ?? "request";
+  return { key, path: location.join(".") || key };
+}
+
+function validationIssueReason(issue: FastApiValidationIssue): string {
+  const type = typeof issue.type === "string" ? issue.type.toLowerCase() : "";
+  const message = typeof issue.msg === "string" ? issue.msg.trim() : "";
+  if (type === "missing" || /field required/iu.test(message)) return "未提供";
+  if (type.includes("too_long")) return "内容过长";
+  if (type.includes("too_short")) return "内容为空或过短";
+  if (type.includes("less_than")) return "超过允许范围";
+  if (type.includes("greater_than")) return "数值小于允许范围";
+  if (type.includes("parsing") || type.includes("type")) return "格式不正确";
+  if (/^[\u3400-\u9fff]/u.test(message) && message.length <= 120) {
+    return message.replace(/[。.]$/u, "");
+  }
+  return "内容格式不符合要求";
+}
+
+function structuredValidationFeedback(
+  context: ErrorContext,
+  status: number,
+  detail?: string | null,
+): ErrorFeedback | null {
+  const issues = parsedValidationIssues(detail);
+  if (!issues.length) return null;
+  const summaries = issues.slice(0, 4).map((issue) => {
+    const { key } = validationIssueField(issue);
+    return `${VALIDATION_FIELD_LABELS[key] ?? "提交参数"}${validationIssueReason(issue)}`;
+  });
+  const technicalDetails = [
+    `HTTP 状态码：${status}`,
+    ...issues.slice(0, 8).map((issue) => {
+      const { path } = validationIssueField(issue);
+      const type = typeof issue.type === "string" ? issue.type : "invalid";
+      return `校验字段：${path}（${type}）`;
+    }),
+  ];
+  return {
+    title: "提交内容未通过校验",
+    description: `需要修改以下内容：${summaries.join("；")}。`,
+    solutions: [
+      context === "cloud_render"
+        ? "点击“返回修改”，检查时间轴、注音和字幕样式后再次提交。"
+        : "点击“返回修改”，检查对应素材或输入项后再次提交。",
+      "已经选择的其他有效内容会保留，不需要从头重新填写。",
+    ],
+    technicalDetails,
+    retryable: false,
+  };
+}
+
+function readableValidationDescription(detail?: string | null): string {
+  const normalized = detail?.trim() ?? "";
+  if (/original_video_name.*mp4/iu.test(normalized)) {
+    return "原视频文件名或格式不是 MP4，服务器无法确认要处理的视频。";
+  }
+  if (/必须提供歌词|lyrics.*required/iu.test(normalized)) {
+    return "没有收到可用歌词，无法创建字幕生成任务。";
+  }
+  if (
+    normalized.length <= 180 &&
+    /[\u3400-\u9fff]/u.test(normalized) &&
+    !/<!doctype|<html|traceback|authorization|api[_ -]?key/iu.test(normalized)
+  ) {
+    return `服务器检查结果：${normalized}`;
+  }
+  return "视频、歌词或提交参数中至少有一项不符合要求，请按下方提示返回检查。";
+}
+
 function httpDetails(status: number, detail?: string | null): string[] {
   const details = [`HTTP 状态码：${status}`];
   const normalizedDetail = detail?.trim();
@@ -118,6 +246,15 @@ export function httpErrorFeedback(
   retryAfterSeconds?: number,
 ): ErrorFeedback {
   const technicalDetails = httpDetails(status, detail);
+
+  if (status === 400 || status === 422) {
+    const fieldFeedback = structuredValidationFeedback(
+      context,
+      status,
+      detail,
+    );
+    if (fieldFeedback) return fieldFeedback;
+  }
 
   if (status === 524) {
     return {
@@ -198,10 +335,10 @@ export function httpErrorFeedback(
   if (status === 422 || status === 400) {
     return {
       title: "提交内容未通过校验",
-      description: "服务器无法使用当前视频、歌词或表单参数创建任务。",
+      description: readableValidationDescription(detail),
       solutions: [
-        "确认选择了 MP4 视频，并且只使用粘贴歌词或 TXT 文件中的一种。",
-        "重新选择素材后提交；如果持续失败，请将下方技术信息提供给管理员。",
+        "点击“返回修改”，确认选择了 MP4 视频，并且只使用一种歌词来源。",
+        "修改对应内容后重新提交；如果持续失败，请将下方技术信息提供给管理员。",
       ],
       technicalDetails,
       retryable: false,

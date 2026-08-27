@@ -28,14 +28,25 @@ export function KirakaraRenderActions({
 }) {
   if (capabilities.export && capabilities.profile) {
     return (
-      <KirakaraExportControls
-        video={video}
-        timeline={timeline}
-        profile={capabilities.profile}
-        style={style}
-        jobId={jobId}
-        vocalMode={vocalMode}
-      />
+      <>
+        <KirakaraExportControls
+          video={video}
+          timeline={timeline}
+          profile={capabilities.profile}
+          style={style}
+          jobId={jobId}
+          vocalMode={vocalMode}
+        />
+        <KirakaraCloudRenderControls
+          jobId={jobId}
+          video={video}
+          timeline={timeline}
+          style={style}
+          discouraged
+          rerender={rerender}
+          onQueued={onCloudRenderQueued}
+        />
+      </>
     );
   }
 

@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
 import { JobMetadata } from "@/components/job-metadata";
 import { ReadingReviewEditor } from "@/components/reading-review-editor";
+import { ReadingRevisionControls } from "@/components/reading-revision-controls";
 import { KirakaraPreview } from "@/components/kirakara-preview";
 import { KirakaraProjectDownload } from "@/components/kirakara-project-download";
 import {
@@ -32,6 +33,12 @@ import {
 import { JOB_COPY } from "@/lib/ui-copy";
 import { synchronizeMediaPair } from "@/lib/synchronized-media";
 import {
+  compatibleReadingDraft,
+  deleteBrowserReviewDraft,
+  loadBrowserReviewDraft,
+  saveBrowserReviewDraft,
+} from "@/lib/review-draft-store";
+import {
   ApiRequestError,
   cancelJob,
   confirmReadings,
@@ -41,6 +48,7 @@ import {
   processedLyricsUrl,
   resultVideoUrl,
   retryJob,
+  reopenReadingReview,
   subtitleUrl,
   timelineUrl,
   transcriptUrl,
@@ -54,7 +62,9 @@ export function JobStatus({ jobId }: { jobId: string }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [canceling, setCanceling] = useState(false);
   const [processedLyrics, setProcessedLyrics] = useState<ProcessedLyrics | null>(null);
+  const [readingDraftJobId, setReadingDraftJobId] = useState<string | null>(null);
   const [submittingReadings, setSubmittingReadings] = useState(false);
+  const [reopeningReadings, setReopeningReadings] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [resultVideoElement, setResultVideoElement] =
     useState<HTMLVideoElement | null>(null);
@@ -116,22 +126,45 @@ export function JobStatus({ jobId }: { jobId: string }) {
       return;
     }
     let active = true;
-    getProcessedLyrics(job.id)
-      .then((lyrics) => {
-        if (active) setProcessedLyrics(lyrics);
-      })
-      .catch((reason) => {
+    async function loadReadings() {
+      try {
+        const lyrics = await getProcessedLyrics(job.id);
+        const draft = await loadBrowserReviewDraft<ProcessedLyrics>(
+          job.id,
+          "readings",
+        );
+        if (!active) return;
+        setProcessedLyrics(compatibleReadingDraft(lyrics, draft) ?? lyrics);
+        setReadingDraftJobId(job.id);
+      } catch (reason) {
         if (!active) return;
         setRequestError(
           reason instanceof ApiRequestError
             ? reason.feedback
             : networkErrorFeedback("job"),
         );
-      });
+      }
+    }
+    void loadReadings();
     return () => {
       active = false;
     };
   }, [job?.id, job?.stage]);
+
+  useEffect(() => {
+    if (
+      !job
+      || job.stage !== "READING_REVIEW_REQUIRED"
+      || readingDraftJobId !== job.id
+      || !processedLyrics
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void saveBrowserReviewDraft(job.id, "readings", processedLyrics);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [job, processedLyrics, readingDraftJobId]);
 
   if (requestError && !job) {
     return (
@@ -218,6 +251,10 @@ export function JobStatus({ jobId }: { jobId: string }) {
           })),
         })),
       });
+      await Promise.all([
+        deleteBrowserReviewDraft(job.id, "readings"),
+        deleteBrowserReviewDraft(job.id, "timeline"),
+      ]);
       setJob(queued);
       setProcessedLyrics(null);
       setRefreshKey((value) => value + 1);
@@ -229,6 +266,31 @@ export function JobStatus({ jobId }: { jobId: string }) {
       );
     } finally {
       setSubmittingReadings(false);
+    }
+  }
+
+  async function handleReopenReadings() {
+    const confirmed = window.confirm(
+      "返回注音确认后，当前时间轴、字幕和视频需要重新生成。是否继续？",
+    );
+    if (!confirmed) return;
+
+    setReopeningReadings(true);
+    setRequestError(null);
+    try {
+      const reopened = await reopenReadingReview(job.id);
+      await deleteBrowserReviewDraft(job.id, "timeline");
+      setJob(reopened);
+      setProcessedLyrics(null);
+      setRefreshKey((value) => value + 1);
+    } catch (reason) {
+      setRequestError(
+        reason instanceof ApiRequestError
+          ? reason.feedback
+          : networkErrorFeedback("job"),
+      );
+    } finally {
+      setReopeningReadings(false);
     }
   }
 
@@ -380,6 +442,15 @@ export function JobStatus({ jobId }: { jobId: string }) {
           />
         )}
 
+        {(job.status === "ALIGNED" ||
+          job.status === "SUBTITLE_GENERATED" ||
+          job.status === "COMPLETED") && (
+          <ReadingRevisionControls
+            reopening={reopeningReadings}
+            onReopen={handleReopenReadings}
+          />
+        )}
+
         {(job.status === "TRANSCRIBED" ||
           job.status === "LYRICS_PROCESSED" ||
           job.status === "ALIGNED" ||
@@ -449,17 +520,18 @@ export function JobStatus({ jobId }: { jobId: string }) {
               {JOB_COPY.resultHeading}
             </h2>
             <video
+              key={job.updated_at}
               ref={setResultVideoElement}
               className="mt-4 aspect-video w-full rounded-2xl bg-black"
               controls
               playsInline
               preload="metadata"
-              src={resultVideoUrl(job.id)}
+              src={resultVideoUrl(job.id, job.updated_at)}
             >
               {JOB_COPY.unsupportedVideo}
             </video>
             <a
-              href={downloadVideoUrl(job.id)}
+              href={downloadVideoUrl(job.id, job.updated_at)}
               className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
             >
               <Download className="size-4" />

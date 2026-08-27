@@ -26,6 +26,11 @@ import {
   type KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
 import { getLocalVideo, rememberLocalVideo } from "@/lib/local-media-session";
+import {
+  compatibleTimelineDraft,
+  loadBrowserReviewDraft,
+  saveBrowserReviewDraft,
+} from "@/lib/review-draft-store";
 import { ApiRequestError, getTimeline } from "@/services/api";
 import type { Job } from "@/types/job";
 
@@ -49,6 +54,7 @@ export function KirakaraPreview({
   const [video, setVideo] = useState<File | null>(() => getLocalVideo(jobId));
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<KirakaraTimeline | null>(null);
+  const [timelineDraftReady, setTimelineDraftReady] = useState(false);
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
@@ -67,22 +73,38 @@ export function KirakaraPreview({
 
   useEffect(() => {
     let active = true;
-    getTimeline(jobId)
-      .then((source) => {
-        if (active) setTimeline(toKirakaraTimeline(source));
-      })
-      .catch((reason) => {
+    async function loadTimeline() {
+      try {
+        const source = toKirakaraTimeline(await getTimeline(jobId));
+        const draft = await loadBrowserReviewDraft<KirakaraTimeline>(
+          jobId,
+          "timeline",
+        );
+        if (!active) return;
+        setTimeline(compatibleTimelineDraft(source, draft) ?? source);
+        setTimelineDraftReady(true);
+      } catch (reason) {
         if (!active) return;
         setTimelineError(
           reason instanceof ApiRequestError
             ? reason.feedback.title
             : "时间轴读取失败",
         );
-      });
+      }
+    }
+    void loadTimeline();
     return () => {
       active = false;
     };
   }, [jobId]);
+
+  useEffect(() => {
+    if (!timelineDraftReady || !timeline) return;
+    const timer = setTimeout(() => {
+      void saveBrowserReviewDraft(jobId, "timeline", timeline);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [jobId, timeline, timelineDraftReady]);
 
   useEffect(() => {
     let active = true;
@@ -173,6 +195,9 @@ export function KirakaraPreview({
           <h2 id="kirakara-preview-heading" className="mt-1 text-xl font-bold">
             浏览器本地预览
           </h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            时间轴调整会自动保存在此浏览器，刷新页面后可继续。
+          </p>
         </div>
         <Film className="size-5 shrink-0 text-muted-foreground" />
       </div>

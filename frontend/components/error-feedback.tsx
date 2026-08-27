@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, PencilLine, RefreshCw } from "lucide-react";
 
 import type { ErrorFeedback } from "@/lib/error-feedback";
 
@@ -7,6 +7,7 @@ type ErrorFeedbackPanelProps = {
   onRetry?: () => void;
   retryLabel?: string;
   retrying?: boolean;
+  onEdit?: () => void;
 };
 
 export function ErrorFeedbackPanel({
@@ -14,6 +15,7 @@ export function ErrorFeedbackPanel({
   onRetry,
   retryLabel,
   retrying = false,
+  onEdit,
 }: ErrorFeedbackPanelProps) {
   return (
     <section
@@ -67,6 +69,16 @@ export function ErrorFeedbackPanel({
             >
               <RefreshCw className={`size-4 ${retrying ? "animate-spin" : ""}`} />
               {retrying ? "正在重新加入队列…" : retryLabel ?? "重新检查"}
+            </button>
+          )}
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-semibold text-foreground transition hover:bg-muted"
+            >
+              <PencilLine className="size-4" />
+              返回修改
             </button>
           )}
         </div>

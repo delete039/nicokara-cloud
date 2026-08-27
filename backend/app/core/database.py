@@ -893,6 +893,51 @@ class Database:
             )
         return queued
 
+    def reopen_reading_review(self, job_id: str) -> dict | None:
+        previous = self.get_job(job_id)
+        if previous is None:
+            return None
+        timestamp = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'LYRICS_PROCESSED',
+                    stage = 'READING_REVIEW_REQUIRED',
+                    progress = 80,
+                    timeline_path = NULL,
+                    ass_path = NULL,
+                    output_path = NULL,
+                    error_code = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status IN ('ALIGNED', 'SUBTITLE_GENERATED', 'COMPLETED')
+                  AND lyrics_processed_path IS NOT NULL
+                """,
+                (timestamp, job_id),
+            )
+        if cursor.rowcount != 1:
+            return None
+        self.record_event_log(
+            level="INFO",
+            category="task",
+            event="job.reading_review_reopened",
+            message="任务已返回注音确认阶段。",
+            reference_type="job",
+            reference_id=job_id,
+            stage="READING_REVIEW_REQUIRED",
+            component="state_machine",
+            details={
+                "previous_status": previous["status"],
+                "previous_stage": previous["stage"],
+                "status": "LYRICS_PROCESSED",
+                "stage": "READING_REVIEW_REQUIRED",
+                "invalidated_artifacts": ["timeline", "subtitle", "video"],
+            },
+        )
+        return self.get_job(job_id)
+
     def cancel_job(self, job_id: str, *, actor: str = "user") -> bool:
         with self.connect() as connection:
             cursor = connection.execute(

@@ -51,6 +51,10 @@ from app.services.chunked_uploads import (
     touch_chunked_upload,
 )
 from app.services.uploads import save_audio, save_lyrics, save_mp4
+from app.services.reviewed_artifacts import (
+    ensure_lyrics_source_from_reviewed_artifacts,
+    save_reviewed_artifacts,
+)
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
 
 
@@ -233,6 +237,7 @@ async def complete_audio_upload(
     ticket_id: str,
     lyrics_text: str | None = Form(default=None),
     lyrics_file: UploadFile | None = File(default=None),
+    project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
 ) -> JobResponse:
     try:
@@ -328,6 +333,18 @@ async def complete_audio_upload(
             destination=lyrics_path,
             max_bytes=settings.max_lyrics_bytes,
         )
+        reviewed = await save_reviewed_artifacts(
+            project_files,
+            job_dir,
+            max_bytes=max(settings.max_lyrics_bytes, 4 * 1024 * 1024),
+        )
+        lyrics_source, effective_lyrics_path = (
+            ensure_lyrics_source_from_reviewed_artifacts(
+                reviewed,
+                lyrics_path,
+                lyrics_source,
+            )
+        )
         if lyrics_source is None:
             raise HTTPException(status_code=422, detail="音频任务必须提供歌词")
         job = database.create_job(
@@ -338,7 +355,7 @@ async def complete_audio_upload(
             video_path=saved.path,
             client_key=str(metadata["client_key"]),
             lyrics_source=lyrics_source,
-            lyrics_path=lyrics_path,
+            lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
             client_submission_id=ticket_id,
             input_mode="AUDIO_ONLY",
@@ -416,6 +433,7 @@ async def create_audio_only_job(
     original_video_size_bytes: int = Form(...),
     lyrics_text: str | None = Form(default=None),
     lyrics_file: UploadFile | None = File(default=None),
+    project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
     client_submission_id: str | None = Form(default=None),
 ) -> JobResponse:
@@ -493,6 +511,18 @@ async def create_audio_only_job(
             destination=lyrics_path,
             max_bytes=settings.max_lyrics_bytes,
         )
+        reviewed = await save_reviewed_artifacts(
+            project_files,
+            job_dir,
+            max_bytes=max(settings.max_lyrics_bytes, 4 * 1024 * 1024),
+        )
+        lyrics_source, effective_lyrics_path = (
+            ensure_lyrics_source_from_reviewed_artifacts(
+                reviewed,
+                lyrics_path,
+                lyrics_source,
+            )
+        )
         if lyrics_source is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -506,7 +536,7 @@ async def create_audio_only_job(
             video_path=saved.path,
             client_key=client_key,
             lyrics_source=lyrics_source,
-            lyrics_path=lyrics_path,
+            lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
             client_submission_id=normalized_submission_id,
             input_mode="AUDIO_ONLY",

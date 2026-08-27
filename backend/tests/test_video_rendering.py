@@ -112,6 +112,52 @@ pathlib.Path(sys.argv[-1]).write_bytes(b"rendered")
     assert arguments[arguments.index("-crf") + 1] == "21"
 
 
+def test_default_render_matches_kirakara_fixed_canvas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendering_module = importlib.import_module("app.video.rendering")
+    fake_ffmpeg = tmp_path / "fake_ffmpeg.py"
+    fake_ffmpeg.write_text(
+        """
+import json
+import os
+import pathlib
+import sys
+pathlib.Path(os.environ["ARGS"]).write_text(
+    json.dumps(sys.argv[1:]),
+    encoding="utf-8",
+)
+pathlib.Path(sys.argv[-1]).write_bytes(b"rendered")
+""".strip(),
+        encoding="utf-8",
+    )
+    arguments_path = tmp_path / "args.json"
+    monkeypatch.setenv("ARGS", str(arguments_path))
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    input_path = job_dir / "input.mp4"
+    subtitle_path = job_dir / "lyrics.ass"
+    output_path = job_dir / "final_karaoke.mp4"
+    input_path.write_bytes(b"video")
+    subtitle_path.write_text("[Script Info]\n", encoding="utf-8")
+
+    rendering_module.FFmpegVideoRenderer(
+        command=(sys.executable, str(fake_ffmpeg)),
+    ).render(input_path, subtitle_path, output_path)
+
+    arguments = json.loads(arguments_path.read_text(encoding="utf-8"))
+    assert arguments[arguments.index("-vf") + 1] == (
+        "scale=w=iw*sar:h=ih:flags=lanczos,"
+        "setsar=1,"
+        "scale=w=1920:h=1080:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:flags=lanczos,"
+        "pad=w=1920:h=1080:x=(ow-iw)/2:y=(oh-ih)/2:color=black,"
+        "setsar=1,"
+        "subtitles=filename=lyrics.ass"
+    )
+
+
 def test_off_vocal_maps_separated_audio_before_output_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

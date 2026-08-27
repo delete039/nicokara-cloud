@@ -12,6 +12,12 @@ from pykakasi import kakasi
 
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
 from app.core.event_logging import exception_details
+from app.alignment.japanese import (
+    COMBINING_KANA,
+    normalize_reading,
+    split_kana_units,
+    split_moras,
+)
 
 
 SYSTEM_PROMPT = """
@@ -32,6 +38,7 @@ tokens 的 surface 拼接必须严格等于该行 surface。
 
 _FA_KARA_ROMAJI = re.compile(r"[A-Za-z']+")
 _LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")
+_KANA_ONLY = re.compile(r"^[\u3040-\u30ff\u31f0-\u31ffー]+$")
 _SMALL_KANA = frozenset("ゃゅょぁぃぅぇぉゎゕゖっー")
 _READING_CONVERTER = kakasi()
 _FOREIGN_READING_PARTS = re.compile(r"[A-Za-z]+|[0-9]+|[^A-Za-z0-9]+")
@@ -249,6 +256,63 @@ def split_tokens_by_kanji(tokens: list[LyricToken]) -> list[LyricToken]:
     ]
 
 
+def split_token_for_alignment(token: LyricToken) -> list[LyricToken]:
+    """Create FA-Kara display markers without splitting words or kanji."""
+    refined_tokens = split_token_by_kanji(token)
+    markers: list[LyricToken] = []
+    for refined in refined_tokens:
+        if (
+            refined.alignment_pronunciation is not None
+            or _LATIN_OR_DIGIT.search(refined.surface)
+            or any(_is_kanji(character) for character in refined.surface)
+            or _KANA_ONLY.fullmatch(refined.surface) is None
+        ):
+            markers.append(refined)
+            continue
+
+        surface_units = split_kana_units(refined.surface)
+        reading_units = split_moras(normalize_reading(refined.reading))
+        if len(surface_units) != len(reading_units):
+            markers.append(refined)
+            continue
+        markers.extend(
+            LyricToken(surface=surface, reading=reading)
+            for surface, reading in zip(
+                surface_units,
+                reading_units,
+                strict=True,
+            )
+        )
+    return markers
+
+
+def split_tokens_for_alignment(tokens: list[LyricToken]) -> list[LyricToken]:
+    markers = [
+        marker
+        for token in tokens
+        for marker in split_token_for_alignment(token)
+    ]
+    normalized: list[LyricToken] = []
+    for marker in markers:
+        should_join_previous = (
+            normalized
+            and marker.surface
+            and all(character in COMBINING_KANA for character in marker.surface)
+            and marker.alignment_pronunciation is None
+            and normalized[-1].alignment_pronunciation is None
+            and _KANA_ONLY.fullmatch(normalized[-1].surface) is not None
+        )
+        if should_join_previous:
+            previous = normalized[-1]
+            normalized[-1] = LyricToken(
+                surface=previous.surface + marker.surface,
+                reading=previous.reading + marker.reading,
+            )
+        else:
+            normalized.append(marker)
+    return normalized
+
+
 def contains_fa_kara_annotations(text: str) -> bool:
     return any(marker in text for marker in ("{", "}", "[", "]"))
 
@@ -315,7 +379,7 @@ class DeepSeekLyricProcessor:
             ]
             if "".join(token.surface for token in tokens) != result["surface"]:
                 raise LyricProcessingError("tokens do not reconstruct surface")
-            tokens = split_tokens_by_kanji(tokens)
+            tokens = split_tokens_for_alignment(tokens)
             lines.append(
                 LyricLine(
                     source=source,
@@ -381,7 +445,7 @@ class LocalJapaneseLyricProcessor:
                     alignment_pronunciation=alignment_pronunciation,
                 )
             )
-        return split_tokens_by_kanji(tokens)
+        return split_tokens_for_alignment(tokens)
 
     def _annotated_tokens(self, source: str) -> list[LyricToken]:
         tokens: list[LyricToken] = []
@@ -441,7 +505,7 @@ class LocalJapaneseLyricProcessor:
 
         if plain_start < len(source):
             tokens.extend(self._plain_tokens(source[plain_start:]))
-        return tokens
+        return split_tokens_for_alignment(tokens)
 
     def process(self, text: str) -> LyricDocument:
         source_lines = normalized_lines(text)

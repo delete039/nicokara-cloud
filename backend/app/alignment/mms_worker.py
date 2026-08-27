@@ -125,10 +125,9 @@ def _adjust_line_boundaries(
             start_ms = round(start * 1000)
             end_ms = math.ceil(end * 1000)
             if start_ms <= line_end <= end_ms:
-                spans[first_index]["start_ms"] = min(
-                    int(spans[first_index]["end_ms"]),
-                    start_ms,
-                )
+                first_end = int(spans[first_index]["end_ms"])
+                if start_ms < first_end:
+                    spans[first_index]["start_ms"] = start_ms
                 break
 
     for line_index, (_, last_index) in enumerate(line_bounds):

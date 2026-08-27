@@ -31,12 +31,20 @@ class FFmpegVideoRenderer:
         command: Sequence[str] = ("ffmpeg",),
         timeout_seconds: int = 7200,
         pad_to_16_9: bool = True,
+        canvas_width: int = 1920,
+        canvas_height: int = 1080,
         preset: str = "veryfast",
         crf: int = 20,
     ) -> None:
+        if canvas_width <= 0 or canvas_height <= 0:
+            raise ValueError("Video canvas dimensions must be positive")
+        if canvas_width % 2 or canvas_height % 2:
+            raise ValueError("Video canvas dimensions must be even")
         self.command = tuple(command)
         self.timeout_seconds = timeout_seconds
         self.pad_to_16_9 = pad_to_16_9
+        self.canvas_width = canvas_width
+        self.canvas_height = canvas_height
         self.preset = preset
         self.crf = crf
 
@@ -59,12 +67,19 @@ class FFmpegVideoRenderer:
         try:
             vf_parts = []
             if self.pad_to_16_9:
+                # Kirakara exports to a fixed canvas: normalize non-square
+                # pixels, contain the source video, then letterbox it.
                 vf_parts.append(
-                    "pad=w=max(iw\\,ih*16/9)"
-                    ":h=max(ih\\,iw*9/16)"
+                    "scale=w=iw*sar:h=ih:flags=lanczos,"
+                    "setsar=1,"
+                    f"scale=w={self.canvas_width}:h={self.canvas_height}"
+                    ":force_original_aspect_ratio=decrease"
+                    ":force_divisible_by=2:flags=lanczos,"
+                    f"pad=w={self.canvas_width}:h={self.canvas_height}"
                     ":x=(ow-iw)/2"
                     ":y=(oh-ih)/2"
-                    ":color=black"
+                    ":color=black,"
+                    "setsar=1"
                 )
             vf_parts.append(
                 f"subtitles=filename={subtitle_path.name}"

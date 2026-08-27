@@ -3,6 +3,11 @@
 import { CloudUpload, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
+import { ErrorFeedbackPanel } from "@/components/error-feedback";
+import {
+  networkErrorFeedback,
+  type ErrorFeedback,
+} from "@/lib/error-feedback";
 import { timelineReviewPayload } from "@/lib/kirakara-review";
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
 import type { KirakaraStyle } from "@/lib/kirakara-style";
@@ -11,12 +16,19 @@ import type { Job } from "@/types/job";
 
 type CloudRenderState = "idle" | "uploading" | "error";
 
+export function cloudRenderErrorFeedback(reason: unknown): ErrorFeedback {
+  return reason instanceof ApiRequestError
+    ? reason.feedback
+    : networkErrorFeedback("cloud_render");
+}
+
 export function KirakaraCloudRenderControls({
   jobId,
   video,
   timeline,
   style,
   emphasized = false,
+  discouraged = false,
   rerender = false,
   onQueued,
 }: {
@@ -25,12 +37,20 @@ export function KirakaraCloudRenderControls({
   timeline: KirakaraTimeline;
   style?: KirakaraStyle;
   emphasized?: boolean;
+  discouraged?: boolean;
   rerender?: boolean;
   onQueued: (job: Job) => void;
 }) {
   const [state, setState] = useState<CloudRenderState>("idle");
   const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorFeedback | null>(null);
+  const idleLabel = discouraged
+    ? rerender
+      ? "重新云端导出（不推荐）"
+      : "云端导出（不推荐）"
+    : rerender
+      ? "按当前设置重新云端渲染"
+      : "进入云端渲染队列";
 
   async function queueRender() {
     setState("uploading");
@@ -46,12 +66,22 @@ export function KirakaraCloudRenderControls({
       onQueued(job);
     } catch (reason) {
       setState("error");
-      setError(
-        reason instanceof ApiRequestError
-          ? `${reason.feedback.title}：${reason.feedback.description}`
-          : "云端渲染提交失败，请检查网络后重试。",
-      );
+      setError(cloudRenderErrorFeedback(reason));
     }
+  }
+
+  function returnToEditor() {
+    setState("idle");
+    setError(null);
+    requestAnimationFrame(() => {
+      const editor = document.querySelector<HTMLElement>(
+        '[data-kirakara-timeline-panel="true"]',
+      );
+      editor?.scrollIntoView({ behavior: "smooth", block: "start" });
+      editor
+        ?.querySelector<HTMLElement>("select, input, button")
+        ?.focus({ preventScroll: true });
+    });
   }
 
   return (
@@ -73,11 +103,11 @@ export function KirakaraCloudRenderControls({
         )}
         {state === "uploading"
           ? `正在上传原视频 ${progress}%`
-          : rerender
-            ? "按当前设置重新云端渲染"
-            : "进入云端渲染队列"}
+          : idleLabel}
       </button>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        {discouraged &&
+          "会重新上传原视频并占用服务器渲染队列；本地导出可用时，建议优先使用本地导出。"}
         云端只使用已校正的时间轴和注音进行 Kirakara 视频嵌字，不会重新识别或对齐歌词。
       </p>
       {state === "uploading" && (
@@ -85,7 +115,11 @@ export function KirakaraCloudRenderControls({
           <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
         </div>
       )}
-      {error && <p className="mt-3 text-sm text-destructive" role="alert">{error}</p>}
+      {error && (
+        <div className="mt-4">
+          <ErrorFeedbackPanel feedback={error} onEdit={returnToEditor} />
+        </div>
+      )}
     </div>
   );
 }

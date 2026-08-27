@@ -11,8 +11,10 @@ def test_split_moras_keeps_combined_kana_and_timing_marks() -> None:
     except ModuleNotFoundError:
         pytest.fail("Japanese alignment helpers are not implemented")
 
-    assert japanese_module.split_moras("きゃっと") == ["きゃ", "っ", "と"]
-    assert japanese_module.split_moras("すーぱー") == ["す", "ー", "ぱ", "ー"]
+    # Match FA-Kara's default sylla_split behavior: a trailing sokuon and
+    # prolonged-sound mark belong to the preceding pronunciation unit.
+    assert japanese_module.split_moras("きゃっと") == ["きゃっ", "と"]
+    assert japanese_module.split_moras("すーぱー") == ["すー", "ぱー"]
     assert japanese_module.split_moras("もの、がたり！") == [
         "も",
         "の",

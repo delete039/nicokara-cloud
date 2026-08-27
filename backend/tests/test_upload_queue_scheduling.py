@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import json
 import threading
 
 import pytest
@@ -383,6 +384,33 @@ def test_chunked_upload_creates_job_after_all_parts(
         completed = client.post(
             f"/api/v1/upload-tickets/{ticket['id']}/chunks/complete",
             data={"lyrics_text": "lyrics"},
+            files={
+                "project_files": (
+                    "lyrics_processed.reviewed.json",
+                    json.dumps(
+                        {
+                            "provider": "local",
+                            "source_text": "lyrics",
+                            "lines": [
+                                {
+                                    "source": "lyrics",
+                                    "surface": "lyrics",
+                                    "reading": "りりっくす",
+                                    "tokens": [
+                                        {
+                                            "surface": "lyrics",
+                                            "reading": "りりっくす",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "warnings": [],
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    "application/json",
+                )
+            },
         )
 
     assert started.status_code == 200
@@ -393,6 +421,9 @@ def test_chunked_upload_creates_job_after_all_parts(
     assert completed.status_code == 201
     job_id = completed.json()["id"]
     assert (tmp_path / "jobs" / job_id / "input.mp4").read_bytes() == content
+    assert (
+        tmp_path / "jobs" / job_id / "imported_lyrics_processed.json"
+    ).exists()
     assert not (tmp_path / "jobs" / "_uploads" / ticket["id"]).exists()
     assert runner.job_ids == [job_id]
 

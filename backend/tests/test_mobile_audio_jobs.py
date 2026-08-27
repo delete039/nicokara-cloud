@@ -42,6 +42,15 @@ def fake_mp4(payload: bytes = b"video") -> bytes:
     return b"\x00\x00\x00\x18ftypisom" + payload
 
 
+def reviewed_ass_bytes() -> bytes:
+    return (
+        "[Script Info]\nScriptType: v4.00+\n"
+        "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Text\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,物語\n"
+    ).encode("utf-8")
+
+
 def upload_audio_chunk(
     client: TestClient,
     session_id: str,
@@ -173,6 +182,48 @@ def test_audio_upload_can_retry_completion_after_validation_failure(
     assert uploaded.status_code == 200
     assert invalid.status_code == 422
     assert completed.status_code == 201
+
+
+def test_audio_upload_accepts_reviewed_ass_without_plain_lyrics(
+    tmp_path: Path,
+) -> None:
+    audio = fake_wav()
+    submission_id = "33333333-4444-4555-8666-777777777777"
+    request = {
+        "audio_name": "song.wav",
+        "audio_size_bytes": len(audio),
+        "original_video_name": "song.mp4",
+        "original_video_size_bytes": 1024,
+        "chunk_size_bytes": TEST_AUDIO_UPLOAD_CHUNK_BYTES,
+        "total_chunks": 1,
+        "client_submission_id": submission_id,
+    }
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+        cleanup_enabled=False,
+    )
+
+    with TestClient(create_app(settings, runner=RecordingRunner())) as client:
+        session = client.post("/api/v1/browser/audio-uploads", json=request).json()
+        upload_audio_chunk(client, session["ticket_id"], 0, audio)
+        completed = client.post(
+            f"/api/v1/browser/audio-uploads/{session['ticket_id']}/complete",
+            files={
+                "project_files": (
+                    "subtitle.ass",
+                    reviewed_ass_bytes(),
+                    "text/x-ssa",
+                )
+            },
+        )
+
+    assert completed.status_code == 201
+    body = completed.json()
+    assert body["lyrics_source"] == "reviewed_subtitle"
+    subtitle = tmp_path / "jobs" / body["id"] / "imported_subtitle.ass"
+    assert subtitle.read_text(encoding="utf-8-sig").endswith("物語\n")
 
 
 def test_audio_upload_rejects_nonstandard_chunk_size(tmp_path: Path) -> None:
