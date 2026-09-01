@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import json
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -16,185 +18,6 @@ class FakeJsonClient:
     def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict:
         self.calls.append((system_prompt, user_prompt))
         return self.response
-
-
-def test_deepseek_processor_returns_ruby_ready_lyrics() -> None:
-    try:
-        processor_module = importlib.import_module("app.lyrics.processor")
-    except ModuleNotFoundError:
-        pytest.fail("DeepSeek lyric processor is not implemented")
-
-    client = FakeJsonClient(
-        {
-            "lines": [
-                {
-                    "surface": "君の知らない物語",
-                    "reading": "きみのしらないものがたり",
-                    "tokens": [
-                        {"surface": "君", "reading": "きみ"},
-                        {"surface": "の", "reading": "の"},
-                        {"surface": "知らない", "reading": "しらない"},
-                        {"surface": "物語", "reading": "ものがたり"},
-                    ],
-                }
-            ]
-        }
-    )
-    processor = processor_module.DeepSeekLyricProcessor(client=client)
-
-    document = processor.process("  君の知らない物語  \n\n")
-
-    assert document.provider == "deepseek"
-    assert document.source_text == "君の知らない物語"
-    assert len(document.lines) == 1
-    line = document.lines[0]
-    assert line.source == "君の知らない物語"
-    assert line.surface == "君の知らない物語"
-    assert line.reading == "きみのしらないものがたり"
-    assert "".join(token.surface for token in line.tokens) == line.surface
-    assert [(token.surface, token.reading) for token in line.tokens] == [
-        ("君", "きみ"),
-        ("の", "の"),
-        ("知", "し"),
-        ("ら", "ら"),
-        ("な", "な"),
-        ("い", "い"),
-        ("物", "もの"),
-        ("語", "がたり"),
-    ]
-    assert client.calls
-    assert "JSON" in client.calls[0][0]
-    assert "每个汉字" in client.calls[0][0]
-
-
-def test_deepseek_processor_requests_kana_readings_for_latin_and_digits() -> None:
-    processor_module = importlib.import_module("app.lyrics.processor")
-    client = FakeJsonClient(
-        {
-            "lines": [
-                {
-                    "surface": "LOVE 39",
-                    "reading": "らぶ さんきゅー",
-                    "tokens": [
-                        {"surface": "LOVE", "reading": "らぶ"},
-                        {"surface": " ", "reading": " "},
-                        {"surface": "39", "reading": "さんきゅー"},
-                    ],
-                }
-            ]
-        }
-    )
-
-    document = processor_module.DeepSeekLyricProcessor(client=client).process(
-        "LOVE 39"
-    )
-
-    prompt = client.calls[0][0]
-    assert "英文或数字" in prompt
-    assert "实际唱法" in prompt
-    assert "平假名" in prompt
-    assert document.lines[0].reading == "らぶ さんきゅー"
-
-
-def test_deepseek_processor_retries_unconverted_latin_reading_once() -> None:
-    processor_module = importlib.import_module("app.lyrics.processor")
-
-    class SequenceJsonClient:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, str]] = []
-            self.responses = [
-                {
-                    "lines": [
-                        {
-                            "surface": "LOVE",
-                            "reading": "LOVE",
-                            "tokens": [
-                                {"surface": "LOVE", "reading": "LOVE"}
-                            ],
-                        }
-                    ]
-                },
-                {
-                    "lines": [
-                        {
-                            "surface": "LOVE",
-                            "reading": "らぶ",
-                            "tokens": [
-                                {"surface": "LOVE", "reading": "らぶ"}
-                            ],
-                        }
-                    ]
-                },
-            ]
-
-        def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict:
-            self.calls.append((system_prompt, user_prompt))
-            return self.responses[len(self.calls) - 1]
-
-    client = SequenceJsonClient()
-    document = processor_module.DeepSeekLyricProcessor(client=client).process(
-        "LOVE"
-    )
-
-    assert len(client.calls) == 2
-    assert "纠正" in client.calls[1][1]
-    assert document.lines[0].reading == "らぶ"
-    assert document.lines[0].tokens[0].reading == "らぶ"
-
-
-def test_deepseek_processor_rejects_unconverted_reading_after_retry() -> None:
-    processor_module = importlib.import_module("app.lyrics.processor")
-
-    class InvalidJsonClient:
-        def __init__(self) -> None:
-            self.call_count = 0
-
-        def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict:
-            self.call_count += 1
-            return {
-                "lines": [
-                    {
-                        "surface": "LOVE",
-                        "reading": "LOVE",
-                        "tokens": [
-                            {"surface": "LOVE", "reading": "LOVE"}
-                        ],
-                    }
-                ]
-            }
-
-    client = InvalidJsonClient()
-    with pytest.raises(
-        processor_module.LyricProcessingError,
-        match="kana reading",
-    ):
-        processor_module.DeepSeekLyricProcessor(client=client).process("LOVE")
-
-    assert client.call_count == 2
-
-
-def test_deepseek_processor_rejects_tokens_that_change_surface() -> None:
-    processor_module = importlib.import_module("app.lyrics.processor")
-    client = FakeJsonClient(
-        {
-            "lines": [
-                {
-                    "surface": "君の知らない物語",
-                    "reading": "きみのしらないものがたり",
-                    "tokens": [
-                        {"surface": "君の物語", "reading": "きみのものがたり"}
-                    ],
-                }
-            ]
-        }
-    )
-    processor = processor_module.DeepSeekLyricProcessor(client=client)
-
-    with pytest.raises(
-        processor_module.LyricProcessingError,
-        match="tokens do not reconstruct surface",
-    ):
-        processor.process("君の知らない物語")
 
 
 def test_local_processor_generates_hiragana_and_tokens() -> None:
@@ -216,6 +39,38 @@ def test_local_processor_generates_hiragana_and_tokens() -> None:
         for token in document.lines[0].tokens
     ] == [("物", "もの"), ("語", "がたり")]
     assert document.warnings == ["local_reading_may_be_inaccurate"]
+
+
+def test_local_processor_prefers_janome_compound_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("泣き声")
+
+    line = document.lines[0]
+    assert line.reading == "なきごえ"
+    assert [(token.surface, token.reading) for token in line.tokens] == [
+        ("泣", "な"),
+        ("き", "き"),
+        ("声", "ごえ"),
+    ]
+
+
+def test_local_processor_prefers_janome_contextual_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("君は")
+
+    line = document.lines[0]
+    assert line.reading == "きみは"
+    assert [
+        (token.surface, token.reading, token.alignment_pronunciation)
+        for token in line.tokens
+    ] == [
+        ("君", "きみ", None),
+        ("は", "は", "wa"),
+    ]
 
 
 def test_local_processor_keeps_ambiguous_compound_reading_complete() -> None:
@@ -289,6 +144,83 @@ def test_local_processor_generates_editable_kana_for_latin_words_and_digits() ->
     assert re.search(r"[A-Za-z0-9]", line.reading) is None
 
 
+@pytest.mark.parametrize(
+    ("surface", "reading"),
+    [
+        ("80億分の1", "はちじゅうおくぶんのいち"),
+        ("1000メーター", "せんめーたー"),
+        ("100分", "ひゃっぷん"),
+        ("3泊4日", "さんぱくよっか"),
+        ("1人", "ひとり"),
+        ("4人", "よにん"),
+        ("8月15日", "はちがつじゅうごにち"),
+        ("17日", "じゅうしちにち"),
+        ("19日", "じゅうくにち"),
+        ("27日", "にじゅうしちにち"),
+        ("29日", "にじゅうくにち"),
+        ("1丁目", "いっちょうめ"),
+        ("8丁目", "はっちょうめ"),
+        ("14時", "じゅうよじ"),
+        ("17時", "じゅうしちじ"),
+        ("19時", "じゅうくじ"),
+        ("24時", "にじゅうよじ"),
+        ("午後12時半", "ごごじゅうにじはん"),
+        ("2024年", "にせんにじゅうよねん"),
+    ],
+)
+def test_local_processor_resolves_standard_numeric_phrases(
+    surface: str,
+    reading: str,
+) -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process(surface)
+
+    line = document.lines[0]
+    assert line.surface == surface
+    assert line.reading == reading
+    assert "".join(token.surface for token in line.tokens) == surface
+
+
+def test_local_processor_keeps_calendar_date_token_readings_nonempty() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("1月1日")
+
+    line = document.lines[0]
+    assert line.reading == "いちがつついたち"
+    assert all(token.reading for token in line.tokens)
+
+
+@pytest.mark.parametrize("surface", ["12345ire", "50:50", "321", "1LDK"])
+def test_local_processor_keeps_ambiguous_numeric_surface_editable(
+    surface: str,
+) -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process(surface)
+
+    line = document.lines[0]
+    assert line.surface == surface
+    assert "".join(token.surface for token in line.tokens) == surface
+    assert re.search(r"[A-Za-z0-9]", line.reading) is None
+
+
+def test_local_processor_falls_back_for_unsupported_large_cardinals() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("12345678901234567円")
+
+    line = document.lines[0]
+    assert line.surface == "12345678901234567円"
+    assert "".join(token.surface for token in line.tokens) == line.surface
+    assert re.search(r"[A-Za-z0-9]", line.reading) is None
+
+
 def test_local_processor_parses_fa_kara_explicit_annotations() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
     processor = processor_module.LocalJapaneseLyricProcessor()
@@ -334,16 +266,417 @@ def test_local_processor_rejects_malformed_fa_kara_annotations() -> None:
         processor.process("{知|しる")
 
 
-def test_resilient_processor_falls_back_when_deepseek_fails() -> None:
+def test_deepseek_reviewer_applies_contextual_patch_to_local_tokens() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
-    if not hasattr(processor_module, "ResilientLyricProcessor"):
-        pytest.fail("Resilient lyric processor is not implemented")
+    local = processor_module.LocalJapaneseLyricProcessor().process(
+        "無き声\n君は"
+    )
+    client = FakeJsonClient(
+        {
+            "corrections": [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ]
+        }
+    )
+    reviewer = processor_module.DeepSeekReadingReviewer(client=client)
 
-    class FailingPrimary:
-        def process(self, text: str) -> LyricDocument:
-            raise RuntimeError("DeepSeek unavailable")
+    reviewed = reviewer.review(local)
 
-    class RecordingFallback:
+    assert reviewed.provider == "local+deepseek"
+    assert reviewed.lines[0].surface == "無き声"
+    assert reviewed.lines[0].reading == "なきごえ"
+    assert reviewed.lines[1].reading == "きみは"
+    assert reviewed.lines[1].tokens[-1].alignment_pronunciation == "wa"
+    payload = json.loads(client.calls[0][1])
+    prompt = client.calls[0][0]
+    assert "不得修改歌词表面文字" in prompt
+    assert "不要重新生成全文或 token" in prompt
+    assert "含英文或数字的范围" in prompt
+    assert "不得改写 surface" in prompt
+    assert "未提供的音频" in prompt
+    assert payload["lines"][0] == {
+        "line_index": 0,
+        "surface": "無き声",
+        "tokens": [
+            {"token_index": 0, "surface": "無", "reading": "な"},
+            {"token_index": 1, "surface": "き", "reading": "き"},
+            {"token_index": 2, "surface": "声", "reading": "こえ"},
+        ],
+    }
+
+
+def test_deepseek_reviewer_marks_success_when_no_patch_is_needed() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    local = processor_module.LocalJapaneseLyricProcessor().process("泣き声")
+    reviewer = processor_module.DeepSeekReadingReviewer(
+        client=FakeJsonClient({"corrections": []})
+    )
+
+    reviewed = reviewer.review(local)
+
+    assert reviewed.provider == "local+deepseek"
+    assert reviewed.lines == local.lines
+    assert reviewed.warnings == local.warnings
+
+
+def test_deepseek_reviewer_can_correct_contextual_numeric_reading() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    local = processor_module.LocalJapaneseLyricProcessor().process("39みゅーじっく")
+    assert local.lines[0].tokens[0].surface == "39"
+    assert local.lines[0].tokens[0].reading == "さんじゅうきゅう"
+    reviewer = processor_module.DeepSeekReadingReviewer(
+        client=FakeJsonClient(
+            {
+                "corrections": [
+                    {
+                        "line_index": 0,
+                        "start_token": 0,
+                        "end_token": 1,
+                        "surface": "39",
+                        "current_reading": "さんじゅうきゅう",
+                        "corrected_reading": "みく",
+                    }
+                ]
+            }
+        )
+    )
+
+    reviewed = reviewer.review(local)
+
+    assert reviewed.lines[0].surface == "39みゅーじっく"
+    assert reviewed.lines[0].reading == "みくみゅーじっく"
+    assert reviewed.lines[0].tokens[0].reading == "みく"
+
+
+def test_deepseek_reviewer_preserves_alignment_markers_after_patch() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    local = processor_module.LocalJapaneseLyricProcessor().process("寂しい声")
+    assert [token.surface for token in local.lines[0].tokens] == [
+        "寂",
+        "し",
+        "い",
+        "声",
+    ]
+    reviewer = processor_module.DeepSeekReadingReviewer(
+        client=FakeJsonClient(
+            {
+                "corrections": [
+                    {
+                        "line_index": 0,
+                        "start_token": 0,
+                        "end_token": 4,
+                        "surface": "寂しい声",
+                        "current_reading": "さびしいこえ",
+                        "corrected_reading": "さみしいこえ",
+                    }
+                ]
+            }
+        )
+    )
+
+    reviewed = reviewer.review(local)
+
+    assert [(token.surface, token.reading) for token in reviewed.lines[0].tokens] == [
+        ("寂", "さみ"),
+        ("し", "し"),
+        ("い", "い"),
+        ("声", "こえ"),
+    ]
+
+
+def test_deepseek_reviewer_allows_only_surface_anchored_spaces() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    local = processor_module.LocalJapaneseLyricProcessor().process("泣き 声")
+    reviewer = processor_module.DeepSeekReadingReviewer(
+        client=FakeJsonClient(
+            {
+                "corrections": [
+                    {
+                        "line_index": 0,
+                        "start_token": 0,
+                        "end_token": 4,
+                        "surface": "泣き 声",
+                        "current_reading": "なき こえ",
+                        "corrected_reading": "なき ごえ",
+                    }
+                ]
+            }
+        )
+    )
+
+    reviewed = reviewer.review(local)
+
+    assert reviewed.lines[0].reading == "なき ごえ"
+    assert [(token.surface, token.reading) for token in reviewed.lines[0].tokens] == [
+        ("泣", "な"),
+        ("き ", "き "),
+        ("声", "ごえ"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "corrections", "message"),
+    [
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 3,
+                    "start_token": 0,
+                    "end_token": 1,
+                    "surface": "無",
+                    "current_reading": "な",
+                    "corrected_reading": "む",
+                }
+            ],
+            "line",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 1,
+                    "end_token": 1,
+                    "surface": "",
+                    "current_reading": "",
+                    "corrected_reading": "な",
+                }
+            ],
+            "range",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 2,
+                    "surface": "無き",
+                    "current_reading": "なき",
+                    "corrected_reading": "むき",
+                },
+                {
+                    "line_index": 0,
+                    "start_token": 1,
+                    "end_token": 3,
+                    "surface": "き声",
+                    "current_reading": "きこえ",
+                    "corrected_reading": "きごえ",
+                },
+            ],
+            "overlap",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "泣き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ],
+            "surface",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "むきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ],
+            "current reading",
+        ),
+        (
+            "君は",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 1,
+                    "end_token": 2,
+                    "surface": "は",
+                    "current_reading": "は",
+                    "corrected_reading": "わ",
+                }
+            ],
+            "alignment pronunciation",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "naki1",
+                }
+            ],
+            "hiragana",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なごえ",
+                }
+            ],
+            "literal kana",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきこえ",
+                }
+            ],
+            "no-op",
+        ),
+        (
+            "物語",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 2,
+                    "surface": "物語",
+                    "current_reading": "ものがたり",
+                    "corrected_reading": "あ",
+                }
+            ],
+            "empty token reading",
+        ),
+        (
+            "声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 1,
+                    "surface": "声",
+                    "current_reading": "こえ",
+                    "corrected_reading": "こえ ",
+                }
+            ],
+            "kanji reading",
+        ),
+        (
+            "声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 1,
+                    "surface": "声",
+                    "current_reading": "こえ",
+                    "corrected_reading": "こ え",
+                }
+            ],
+            "kanji reading",
+        ),
+        (
+            "物語",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": 0,
+                    "end_token": 2,
+                    "surface": "物語",
+                    "current_reading": "ものがたり",
+                    "corrected_reading": "あ ",
+                }
+            ],
+            "kanji reading",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0.5,
+                    "start_token": 0,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ],
+            "integer",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": "0",
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ],
+            "integer",
+        ),
+        (
+            "無き声",
+            [
+                {
+                    "line_index": 0,
+                    "start_token": False,
+                    "end_token": 3,
+                    "surface": "無き声",
+                    "current_reading": "なきこえ",
+                    "corrected_reading": "なきごえ",
+                }
+            ],
+            "integer",
+        ),
+    ],
+)
+def test_deepseek_reviewer_rejects_unsafe_corrections_atomically(
+    text: str,
+    corrections: list[dict],
+    message: str,
+) -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    local = processor_module.LocalJapaneseLyricProcessor().process(text)
+    reviewer = processor_module.DeepSeekReadingReviewer(
+        client=FakeJsonClient({"corrections": corrections})
+    )
+
+    with pytest.raises(processor_module.LyricProcessingError, match=message):
+        reviewer.review(local)
+
+
+def test_reviewed_processor_keeps_single_local_result_when_review_fails() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class RecordingBase:
         def __init__(self) -> None:
             self.texts: list[str] = []
 
@@ -355,23 +688,33 @@ def test_resilient_processor_falls_back_when_deepseek_fails() -> None:
                 warnings=["local_reading_may_be_inaccurate"],
             )
 
-    fallback = RecordingFallback()
-    processor = processor_module.ResilientLyricProcessor(
-        primary=FailingPrimary(),
-        fallback=fallback,
+    class FailingReviewer:
+        def __init__(self) -> None:
+            self.documents: list[LyricDocument] = []
+
+        def review(self, document: LyricDocument) -> LyricDocument:
+            self.documents.append(document)
+            raise RuntimeError("DeepSeek unavailable")
+
+    base = RecordingBase()
+    reviewer = FailingReviewer()
+    processor = processor_module.ReviewedLyricProcessor(
+        base=base,
+        reviewer=reviewer,
     )
 
     document = processor.process("物語")
 
-    assert fallback.texts == ["物語"]
+    assert base.texts == ["物語"]
+    assert reviewer.documents[0].source_text == "物語"
     assert document.provider == "local"
     assert document.warnings == [
         "local_reading_may_be_inaccurate",
-        "deepseek_fallback:RuntimeError",
+        "deepseek_review_failed:RuntimeError",
     ]
 
 
-def test_resilient_processor_records_deepseek_call_lifecycle_without_lyrics() -> None:
+def test_reviewed_processor_records_review_lifecycle_without_lyrics() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
 
     class RecordingEvents:
@@ -382,20 +725,20 @@ def test_resilient_processor_records_deepseek_call_lifecycle_without_lyrics() ->
             self.items.append(event)
             return True
 
-    class Primary:
+    class Reviewer:
         class Client:
             model = "deepseek-test"
             timeout_seconds = 12
 
         client = Client()
 
-        def process(self, text: str) -> LyricDocument:
-            return LyricDocument(provider="deepseek", source_text=text, lines=[])
+        def review(self, document: LyricDocument) -> LyricDocument:
+            return replace(document, provider="local+deepseek")
 
     events = RecordingEvents()
-    processor = processor_module.ResilientLyricProcessor(
-        primary=Primary(),
-        fallback=object(),
+    processor = processor_module.ReviewedLyricProcessor(
+        base=processor_module.LocalJapaneseLyricProcessor(),
+        reviewer=Reviewer(),
         event_logger=events,
     )
 
@@ -416,7 +759,7 @@ def test_resilient_processor_records_deepseek_call_lifecycle_without_lyrics() ->
     assert "秘密の歌詞" not in str(events.items)
 
 
-def test_resilient_processor_records_deepseek_failure_and_fallback() -> None:
+def test_reviewed_processor_records_review_failure_and_keeps_local_result() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
 
     class RecordingEvents:
@@ -427,18 +770,14 @@ def test_resilient_processor_records_deepseek_failure_and_fallback() -> None:
             self.items.append(event)
             return True
 
-    class FailingPrimary:
-        def process(self, text: str) -> LyricDocument:
+    class FailingReviewer:
+        def review(self, document: LyricDocument) -> LyricDocument:
             raise RuntimeError("temporary upstream failure")
 
-    class Fallback:
-        def process(self, text: str) -> LyricDocument:
-            return LyricDocument(provider="local", source_text=text, lines=[])
-
     events = RecordingEvents()
-    processor = processor_module.ResilientLyricProcessor(
-        primary=FailingPrimary(),
-        fallback=Fallback(),
+    processor = processor_module.ReviewedLyricProcessor(
+        base=processor_module.LocalJapaneseLyricProcessor(),
+        reviewer=FailingReviewer(),
         event_logger=events,
     )
 
@@ -450,4 +789,27 @@ def test_resilient_processor_records_deepseek_failure_and_fallback() -> None:
         "stage.fallback",
     ]
     assert events.items[1]["details"]["retry_count"] == 0
-    assert events.items[2]["details"]["reason"] == "deepseek_unavailable"
+    assert events.items[2]["details"]["reason"] == "deepseek_review_failed"
+
+
+def test_reviewed_processor_does_not_send_fa_kara_to_deepseek() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+
+    class RecordingReviewer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def review(self, document: LyricDocument) -> LyricDocument:
+            self.calls += 1
+            return replace(document, provider="local+deepseek")
+
+    reviewer = RecordingReviewer()
+    processor = processor_module.ReviewedLyricProcessor(
+        base=processor_module.LocalJapaneseLyricProcessor(),
+        reviewer=reviewer,
+    )
+
+    document = processor.process("{今日|きょう}")
+
+    assert reviewer.calls == 0
+    assert document.provider == "local"

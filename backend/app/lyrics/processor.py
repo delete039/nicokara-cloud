@@ -11,6 +11,7 @@ from janome.tokenizer import Tokenizer
 from pykakasi import kakasi
 
 from app.lyrics.models import LyricDocument, LyricLine, LyricToken
+from app.lyrics.numeric_reading import resolve_numeric_span
 from app.core.event_logging import exception_details
 from app.alignment.japanese import (
     COMBINING_KANA,
@@ -20,25 +21,25 @@ from app.alignment.japanese import (
 )
 
 
-SYSTEM_PROMPT = """
-你是日语歌词格式化器。只输出 JSON，不要输出 Markdown。
-保持输入行顺序，为每行生成：
-- surface：修正明显表记错误后的歌词
-- reading：整行平假名读音
-- tokens：用于 Ruby 注音的 surface/reading 数组；每个汉字必须单独作为一个 token，
-  后续连续假名可以合并为一个 token，不得把多个汉字放在同一个 token 中
-  例如「物語」拆成「物/もの」「語/がたり」，
-  「知らない」拆成「知/し」「らない/らない」
-- surface 中的英文或数字必须保留原表记；对应的整行 reading 和 token reading
-  必须根据歌词中的实际唱法改写为平假名，不得保留英文字母或数字，
-  例如「LOVE 39」可写为「LOVE/らぶ」「39/さんきゅー」
-tokens 的 surface 拼接必须严格等于该行 surface。
-输出格式：{"lines":[{"surface":"...","reading":"...","tokens":[...]}]}
+DEEPSEEK_REVIEW_PROMPT = """
+你是日语歌词读音审阅器。只输出 JSON，不要输出 Markdown。
+输入已经由本地日语处理器生成，包含不可修改的 surface 和 token 索引。
+只报告必须依赖日语上下文修正的最小连续 token 范围，不要重新生成全文或 token。
+不得修改歌词表面文字。含英文或数字的范围只能在本地读音明显不符合日语语境时修正 reading，
+不得改写 surface，也不得声称根据未提供的音频判断实际唱法。
+没有需要修正的内容时输出 {"corrections":[]}。
+输出格式：
+{"corrections":[{"line_index":0,"start_token":0,"end_token":1,
+"surface":"...","current_reading":"...","corrected_reading":"..."}]}
+end_token 使用 exclusive 下标。
 """.strip()
 
 _FA_KARA_ROMAJI = re.compile(r"[A-Za-z']+")
 _LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")
 _KANA_ONLY = re.compile(r"^[\u3040-\u30ff\u31f0-\u31ffー]+$")
+_HIRAGANA_READING = re.compile(r"[ぁ-ゖゝゞー・ 　]+")
+_HIRAGANA_CHARACTER = re.compile(r"[ぁ-ゖゝゞ]")
+_KANJI_SEGMENT_READING = re.compile(r"[ぁ-ゖゝゞー・]+")
 _SMALL_KANA = frozenset("ゃゅょぁぃぅぇぉゎゕゖっー")
 _READING_CONVERTER = kakasi()
 _FOREIGN_READING_PARTS = re.compile(r"[A-Za-z]+|[0-9]+|[^A-Za-z0-9]+")
@@ -321,77 +322,181 @@ def normalized_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def has_unconverted_latin_or_digits(response: dict[str, Any]) -> bool:
-    for line in response.get("lines", []):
-        if (
-            _LATIN_OR_DIGIT.search(str(line.get("surface", "")))
-            and _LATIN_OR_DIGIT.search(str(line.get("reading", "")))
-        ):
-            return True
-        for token in line.get("tokens", []):
-            if (
-                _LATIN_OR_DIGIT.search(str(token.get("surface", "")))
-                and _LATIN_OR_DIGIT.search(str(token.get("reading", "")))
-            ):
-                return True
-    return False
-
-
 class LyricProcessingError(ValueError):
     """Raised when an AI lyric response cannot be safely consumed."""
 
 
-class DeepSeekLyricProcessor:
+class DeepSeekReadingReviewer:
     def __init__(self, *, client: Any) -> None:
         self.client = client
 
-    def process(self, text: str) -> LyricDocument:
-        if contains_fa_kara_annotations(text):
-            return LocalJapaneseLyricProcessor().process(text)
-        source_lines = normalized_lines(text)
-        source_text = "\n".join(source_lines)
-        request_payload: dict[str, Any] = {"lines": source_lines}
+    def review(self, document: LyricDocument) -> LyricDocument:
+        request_payload = {
+            "lines": [
+                {
+                    "line_index": line_index,
+                    "surface": line.surface,
+                    "tokens": [
+                        {
+                            "token_index": token_index,
+                            "surface": token.surface,
+                            "reading": token.reading,
+                        }
+                        for token_index, token in enumerate(line.tokens)
+                    ],
+                }
+                for line_index, line in enumerate(document.lines)
+            ]
+        }
         response = self.client.complete_json(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=DEEPSEEK_REVIEW_PROMPT,
             user_prompt=json.dumps(request_payload, ensure_ascii=False),
         )
-        if has_unconverted_latin_or_digits(response):
-            request_payload["纠正"] = (
-                "上一次结果仍在 reading 中保留了英文或数字。请保持 surface "
-                "不变，并按实际唱法把对应 reading 全部改为平假名。"
-            )
-            response = self.client.complete_json(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=json.dumps(request_payload, ensure_ascii=False),
-            )
-            if has_unconverted_latin_or_digits(response):
+        if not isinstance(response, dict) or not isinstance(
+            response.get("corrections"), list
+        ):
+            raise LyricProcessingError("review response must contain corrections list")
+
+        validated: list[dict[str, Any]] = []
+        for raw_correction in response["corrections"]:
+            if not isinstance(raw_correction, dict):
+                raise LyricProcessingError("correction must be an object")
+            try:
+                line_index = raw_correction["line_index"]
+                start = raw_correction["start_token"]
+                end = raw_correction["end_token"]
+                surface = str(raw_correction["surface"])
+                current_reading = str(raw_correction["current_reading"])
+                corrected_reading = str(raw_correction["corrected_reading"])
+            except KeyError as exc:
+                raise LyricProcessingError("correction fields are invalid") from exc
+            if any(type(value) is not int for value in (line_index, start, end)):
                 raise LyricProcessingError(
-                    "automatic English or numeric kana reading was not generated"
+                    "correction indices must be JSON integers"
                 )
-        lines: list[LyricLine] = []
-        for source, result in zip(source_lines, response["lines"], strict=True):
-            tokens = [
-                LyricToken(
-                    surface=token["surface"],
-                    reading=token["reading"],
+
+            if not 0 <= line_index < len(document.lines):
+                raise LyricProcessingError("correction line is out of bounds")
+            line = document.lines[line_index]
+            if not 0 <= start < end <= len(line.tokens):
+                raise LyricProcessingError("correction token range is invalid")
+            selected = line.tokens[start:end]
+            rebuilt_surface = "".join(token.surface for token in selected)
+            rebuilt_reading = "".join(token.reading for token in selected)
+            if rebuilt_surface != surface:
+                raise LyricProcessingError("correction surface does not match tokens")
+            if rebuilt_reading != current_reading:
+                raise LyricProcessingError(
+                    "correction current reading does not match tokens"
                 )
-                for token in result["tokens"]
-            ]
-            if "".join(token.surface for token in tokens) != result["surface"]:
-                raise LyricProcessingError("tokens do not reconstruct surface")
-            tokens = split_tokens_for_alignment(tokens)
-            lines.append(
-                LyricLine(
-                    source=source,
-                    surface=result["surface"],
-                    reading=result["reading"],
+            if corrected_reading == current_reading:
+                raise LyricProcessingError("correction is a no-op")
+            if any(
+                token.alignment_pronunciation is not None for token in selected
+            ):
+                raise LyricProcessingError(
+                    "correction range contains alignment pronunciation"
+                )
+            if (
+                _HIRAGANA_CHARACTER.search(corrected_reading) is None
+                or _HIRAGANA_READING.fullmatch(corrected_reading) is None
+            ):
+                raise LyricProcessingError(
+                    "corrected reading must be non-empty hiragana"
+                )
+
+            pattern_parts = ["^"]
+            for is_kanji, segment in _surface_segments(rebuilt_surface):
+                if is_kanji:
+                    pattern_parts.append("(.+?)")
+                    continue
+                for part in _FOREIGN_READING_PARTS.findall(segment):
+                    pattern_parts.append(
+                        "(.+?)"
+                        if _LATIN_OR_DIGIT.search(part) is not None
+                        else re.escape(_reading_for_literal_surface(part))
+                    )
+            pattern_parts.append("$")
+            anchor_match = re.fullmatch(
+                "".join(pattern_parts),
+                corrected_reading,
+            )
+            if anchor_match is None:
+                raise LyricProcessingError(
+                    "correction does not preserve literal kana"
+                )
+            if any(
+                _KANJI_SEGMENT_READING.fullmatch(reading) is None
+                for reading in anchor_match.groups()
+            ):
+                raise LyricProcessingError(
+                    "correction kanji reading contains invalid whitespace"
+                )
+            replacement = split_tokens_for_alignment(
+                [
+                    LyricToken(
+                        surface=rebuilt_surface,
+                        reading=corrected_reading,
+                    )
+                ]
+            )
+            if (
+                any(not token.reading.strip() for token in replacement)
+                or "".join(token.surface for token in replacement)
+                != rebuilt_surface
+                or "".join(token.reading for token in replacement)
+                != corrected_reading
+            ):
+                raise LyricProcessingError(
+                    "correction would create an empty token reading"
+                )
+            validated.append(
+                {
+                    "line_index": line_index,
+                    "start_token": start,
+                    "end_token": end,
+                    "surface": surface,
+                    "corrected_reading": corrected_reading,
+                    "replacement": replacement,
+                }
+            )
+
+        corrections_by_line: dict[int, list[dict[str, Any]]] = {}
+        for correction in validated:
+            corrections_by_line.setdefault(correction["line_index"], []).append(
+                correction
+            )
+        for corrections in corrections_by_line.values():
+            ordered = sorted(corrections, key=lambda item: item["start_token"])
+            if any(
+                left["end_token"] > right["start_token"]
+                for left, right in zip(ordered, ordered[1:])
+            ):
+                raise LyricProcessingError("correction ranges overlap")
+
+        reviewed_lines: list[LyricLine] = []
+        for line_index, line in enumerate(document.lines):
+            tokens = list(line.tokens)
+            corrections = corrections_by_line.get(line_index, [])
+            for correction in sorted(
+                corrections,
+                key=lambda item: item["start_token"],
+                reverse=True,
+            ):
+                start = correction["start_token"]
+                end = correction["end_token"]
+                tokens[start:end] = correction["replacement"]
+            reviewed_lines.append(
+                replace(
+                    line,
+                    reading="".join(token.reading for token in tokens),
                     tokens=tokens,
                 )
             )
-        return LyricDocument(
-            provider="deepseek",
-            source_text=source_text,
-            lines=lines,
+        return replace(
+            document,
+            provider="local+deepseek",
+            lines=reviewed_lines,
         )
 
 
@@ -430,10 +535,26 @@ class LocalJapaneseLyricProcessor:
 
     def _plain_tokens(self, text: str) -> list[LyricToken]:
         tokens: list[LyricToken] = []
-        for item in self.tokenizer.tokenize(text):
+        items = list(self.tokenizer.tokenize(text))
+        surfaces = [item.surface for item in items]
+        index = 0
+        while index < len(items):
+            item = items[index]
             surface = item.surface
+            numeric = resolve_numeric_span(surfaces, index)
+            if numeric is not None:
+                tokens.extend(
+                    LyricToken(surface=part.surface, reading=part.reading)
+                    for part in numeric.parts
+                )
+                index += numeric.consumed_items
+                continue
             alignment_pronunciation = None
             major_part = item.part_of_speech.split(",", maxsplit=1)[0]
+            if _LATIN_OR_DIGIT.search(surface) or item.reading == "*":
+                reading = self._surface_reading(surface)
+            else:
+                reading = self._hiragana(item.reading)
             if major_part == "助詞" and surface == "は":
                 alignment_pronunciation = "wa"
             elif major_part == "助詞" and surface == "へ":
@@ -441,10 +562,11 @@ class LocalJapaneseLyricProcessor:
             tokens.append(
                 LyricToken(
                     surface=surface,
-                    reading=self._surface_reading(surface),
+                    reading=reading,
                     alignment_pronunciation=alignment_pronunciation,
                 )
             )
+            index += 1
         return split_tokens_for_alignment(tokens)
 
     def _annotated_tokens(self, source: str) -> list[LyricToken]:
@@ -568,21 +690,25 @@ def normalize_unconverted_foreign_readings(
     return replace(document, lines=normalized_lines)
 
 
-class ResilientLyricProcessor:
+class ReviewedLyricProcessor:
     def __init__(
         self,
         *,
-        primary: Any,
-        fallback: Any,
+        base: Any,
+        reviewer: Any,
         event_logger: Any | None = None,
     ) -> None:
-        self.primary = primary
-        self.fallback = fallback
+        self.base = base
+        self.reviewer = reviewer
         self.event_logger = event_logger
 
     def process(self, text: str) -> LyricDocument:
+        document = self.base.process(text)
+        if contains_fa_kara_annotations(text):
+            return document
+
         source_lines = normalized_lines(text)
-        client = getattr(self.primary, "client", None)
+        client = getattr(self.reviewer, "client", None)
         call_details = {
             "attempt": 1,
             "character_count": sum(len(line) for line in source_lines),
@@ -596,25 +722,25 @@ class ResilientLyricProcessor:
                 event="external.started",
                 level="INFO",
                 category="external",
-                message="开始调用 DeepSeek 处理歌词注音",
+                message="DeepSeek 开始本地读音审阅",
                 component="deepseek",
                 details=call_details,
             )
         try:
-            document = self.primary.process(text)
+            reviewed = self.reviewer.review(document)
         except Exception as exc:
             if self.event_logger is not None:
                 self.event_logger.emit(
                     event="external.failed",
                     level="WARNING",
                     category="external",
-                    message="DeepSeek 歌词处理失败，将使用本地处理器",
+                    message="DeepSeek 审阅失败，保留本地结果",
                     component="deepseek",
                     duration_ms=(time.perf_counter() - started) * 1000,
                     details={
                         "attempt": 1,
                         "retry_count": 0,
-                        "fallback_component": type(self.fallback).__name__,
+                        "fallback_component": type(self.base).__name__,
                         **exception_details(exc),
                     },
                 )
@@ -622,19 +748,18 @@ class ResilientLyricProcessor:
                     event="stage.fallback",
                     level="WARNING",
                     category="pipeline",
-                    message="歌词处理切换到本地注音处理器",
+                    message="DeepSeek 审阅失败，保留本地结果",
                     component="deepseek",
                     details={
-                        "reason": "deepseek_unavailable",
-                        "fallback_component": type(self.fallback).__name__,
+                        "reason": "deepseek_review_failed",
+                        "fallback_component": type(self.base).__name__,
                     },
                 )
-            document = self.fallback.process(text)
             return replace(
                 document,
                 warnings=[
                     *document.warnings,
-                    f"deepseek_fallback:{type(exc).__name__}",
+                    f"deepseek_review_failed:{type(exc).__name__}",
                 ],
             )
         if self.event_logger is not None:
@@ -642,14 +767,14 @@ class ResilientLyricProcessor:
                 event="external.completed",
                 level="INFO",
                 category="external",
-                message="DeepSeek 歌词注音处理完成",
+                message="DeepSeek 完成本地读音审阅",
                 component="deepseek",
                 duration_ms=(time.perf_counter() - started) * 1000,
                 details={
                     "attempt": 1,
-                    "provider": document.provider,
-                    "result_line_count": len(document.lines),
-                    "warning_count": len(document.warnings),
+                    "provider": reviewed.provider,
+                    "result_line_count": len(reviewed.lines),
+                    "warning_count": len(reviewed.warnings),
                 },
             )
-        return document
+        return reviewed

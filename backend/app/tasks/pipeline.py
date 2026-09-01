@@ -556,6 +556,7 @@ class TranscriptionPipeline:
                         warning
                         for warning in processed_lyrics.warnings
                         if "fallback" in warning.lower()
+                        or warning.startswith("deepseek_review_failed:")
                     ]
                     if fallback_warnings:
                         lyric_trace.fallback(
@@ -1274,22 +1275,22 @@ class TranscriptionPipeline:
         )
 
     def _lyric_component(self) -> str:
-        primary = getattr(self.lyric_processor, "primary", None)
-        return "deepseek" if primary is not None else type(
+        reviewer = getattr(self.lyric_processor, "reviewer", None)
+        return "deepseek" if reviewer is not None else type(
             self.lyric_processor
         ).__name__
 
     def _lyric_processor_details(self) -> dict[str, Any]:
-        primary = getattr(self.lyric_processor, "primary", None)
-        fallback = getattr(self.lyric_processor, "fallback", None)
-        client = getattr(primary, "client", None)
+        reviewer = getattr(self.lyric_processor, "reviewer", None)
+        base = getattr(self.lyric_processor, "base", None)
+        client = getattr(reviewer, "client", None)
         return {
             "processor": type(self.lyric_processor).__name__,
-            "primary_processor": type(primary).__name__
-            if primary is not None
+            "reviewer": type(reviewer).__name__
+            if reviewer is not None
             else None,
-            "fallback_processor": type(fallback).__name__
-            if fallback is not None
+            "base_processor": type(base).__name__
+            if base is not None
             else None,
             "model": getattr(client, "model", None),
             "timeout_seconds": getattr(client, "timeout_seconds", None),
