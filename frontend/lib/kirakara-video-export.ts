@@ -1,15 +1,18 @@
 import {
   ALL_FORMATS,
-  AppendOnlyStreamTarget,
   BlobSource,
+  BufferTarget,
   Conversion,
   Input,
   Mp4OutputFormat,
   Output,
   Quality,
+  StreamTarget,
+  type Target,
   type VideoSample,
 } from "mediabunny";
 
+import type { BrowserFileDestination } from "./browser-file-destination";
 import type { KirakaraExportProfile } from "./kirakara-capabilities";
 import {
   drawKirakaraFrame,
@@ -27,8 +30,9 @@ export type KirakaraVideoExportOptions = {
   timeline: KirakaraTimeline;
   style?: KirakaraStyle;
   profile: KirakaraExportProfile;
-  destination?: WritableStream<Uint8Array>;
+  destination?: BrowserFileDestination;
   onProgress?: (progress: number) => void;
+  onValidationStart?: () => void;
   signal?: AbortSignal;
 };
 
@@ -40,15 +44,20 @@ export type KirakaraVideoExportResult = {
 
 type RuntimeTranscodeOptions = Omit<
   KirakaraVideoExportOptions,
-  "destination" | "onProgress"
+  "destination" | "onProgress" | "onValidationStart"
 > & {
-  writable: WritableStream<Uint8Array>;
+  target: Target;
   onProgress: (progress: number) => void;
 };
 
 export type KirakaraVideoExportRuntime = {
   transcode(options: RuntimeTranscodeOptions): Promise<void>;
 };
+
+export type KirakaraVideoOutputValidator = (
+  source: File,
+  output: File,
+) => Promise<void>;
 
 type DrawableVideoSample = Pick<VideoSample, "timestamp" | "drawWithFit">;
 type ConversionInitOptions = Parameters<typeof Conversion.init>[0];
@@ -87,19 +96,101 @@ function outputFileName(videoName: string): string {
   return `${baseName}.nicokara.mp4`;
 }
 
-export function createChunkedBlobWriter(type: string): {
-  writable: WritableStream<Uint8Array>;
-  toBlob: () => Blob;
-} {
-  const chunks: Uint8Array[] = [];
-  return {
-    writable: new WritableStream<Uint8Array>({
-      write(chunk) {
-        chunks.push(chunk.slice());
-      },
-    }),
-    toBlob: () => new Blob(chunks, { type }),
-  };
+async function topLevelMp4BoxTypes(file: File): Promise<string[]> {
+  const types: string[] = [];
+  let position = 0;
+  while (position < file.size) {
+    if (file.size - position < 8) {
+      throw new Error("导出文件的 MP4 结构不完整");
+    }
+    const header = new Uint8Array(
+      await file.slice(position, Math.min(file.size, position + 16)).arrayBuffer(),
+    );
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    let size = view.getUint32(0);
+    const type = String.fromCharCode(...header.slice(4, 8));
+    let headerSize = 8;
+    if (size === 1) {
+      if (header.byteLength < 16) {
+        throw new Error("导出文件的 MP4 扩展头不完整");
+      }
+      const high = view.getUint32(8);
+      const low = view.getUint32(12);
+      size = high * 2 ** 32 + low;
+      headerSize = 16;
+    } else if (size === 0) {
+      size = file.size - position;
+    }
+    if (
+      !Number.isSafeInteger(size) ||
+      size < headerSize ||
+      position + size > file.size
+    ) {
+      throw new Error("导出文件包含无效的 MP4 区块");
+    }
+    types.push(type);
+    position += size;
+  }
+  return types;
+}
+
+export async function assertStandardMp4(file: File): Promise<void> {
+  const boxTypes = await topLevelMp4BoxTypes(file);
+  if (
+    !boxTypes.includes("ftyp") ||
+    !boxTypes.includes("moov") ||
+    !boxTypes.includes("mdat")
+  ) {
+    throw new Error("导出文件不是完整的标准 MP4");
+  }
+  if (boxTypes.includes("moof") || boxTypes.includes("mfra")) {
+    throw new Error("导出文件仍是分片 MP4，无法保证播放器兼容性");
+  }
+}
+
+async function primaryVideoDuration(file: File): Promise<number> {
+  const input = new Input({
+    source: new BlobSource(file),
+    formats: ALL_FORMATS,
+  });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error("视频文件中没有可读取的视频轨道");
+    const [firstTimestamp, endTimestamp] = await Promise.all([
+      track.getFirstTimestamp(),
+      track.computeDuration(),
+    ]);
+    return Math.max(0, endTimestamp - firstTimestamp);
+  } finally {
+    input.dispose();
+  }
+}
+
+export async function validateKirakaraVideoOutput(
+  source: File,
+  output: File,
+  durationProbe: (file: File) => Promise<number> = primaryVideoDuration,
+): Promise<void> {
+  await assertStandardMp4(output);
+  const [sourceDuration, outputDuration] = await Promise.all([
+    durationProbe(source),
+    durationProbe(output),
+  ]);
+  if (
+    !Number.isFinite(sourceDuration) ||
+    !Number.isFinite(outputDuration) ||
+    sourceDuration <= 0 ||
+    outputDuration <= 0
+  ) {
+    throw new Error("无法确认导出视频的完整时长");
+  }
+  const tolerance = Math.max(1, sourceDuration * 0.005);
+  if (Math.abs(outputDuration - sourceDuration) > tolerance) {
+    throw new Error(
+      `导出视频时长校验失败：源视频 ${sourceDuration.toFixed(1)} 秒，` +
+      `导出结果 ${outputDuration.toFixed(1)} 秒`,
+    );
+  }
 }
 
 export function paintKirakaraVideoFrame(
@@ -128,7 +219,7 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
     timeline,
     style,
     profile,
-    writable,
+    target,
     onProgress,
     signal,
   }) {
@@ -144,11 +235,8 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
       formats: ALL_FORMATS,
     });
     const output = new Output({
-      format: new Mp4OutputFormat({
-        fastStart: "fragmented",
-        minimumFragmentDuration: 1,
-      }),
-      target: new AppendOnlyStreamTarget(writable),
+      format: new Mp4OutputFormat({ fastStart: false }),
+      target,
     });
     const videoOptions: ConversionOptionsWithoutOwnership = {
       input: videoInput,
@@ -253,13 +341,17 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
 export async function exportKirakaraVideo(
   options: KirakaraVideoExportOptions,
   runtime: KirakaraVideoExportRuntime = mediabunnyRuntime,
+  validator: KirakaraVideoOutputValidator = validateKirakaraVideoOutput,
 ): Promise<KirakaraVideoExportResult> {
   ensureNotAborted(options.signal);
-  const collector = options.destination
-    ? null
-    : createChunkedBlobWriter("video/mp4");
-  const writable = options.destination ?? collector?.writable;
-  if (!writable) throw new Error("未找到视频输出目标");
+  const bufferTarget = options.destination ? null : new BufferTarget();
+  const target = options.destination
+    ? new StreamTarget(options.destination.writable, {
+        chunked: true,
+        chunkSize: 8 * 1024 * 1024,
+      })
+    : bufferTarget;
+  if (!target) throw new Error("未找到视频输出目标");
 
   options.onProgress?.(0);
   await runtime.transcode({
@@ -268,26 +360,35 @@ export async function exportKirakaraVideo(
     timeline: options.timeline,
     style: options.style,
     profile: options.profile,
-    writable,
+    target,
     signal: options.signal,
     onProgress(progress) {
       options.onProgress?.(
-        Math.round(Math.min(1, Math.max(0, progress)) * 100),
+        Math.min(99, Math.round(Math.min(1, Math.max(0, progress)) * 100)),
       );
     },
   });
   ensureNotAborted(options.signal);
-  options.onProgress?.(100);
 
   const fileName = outputFileName(options.video.name);
-  return {
-    fileName,
-    file: collector
-      ? new File([collector.toBlob()], fileName, {
+  const outputFile = options.destination
+    ? await options.destination.getFile()
+    : bufferTarget?.buffer
+      ? new File([bufferTarget.buffer], fileName, {
           type: "video/mp4",
           lastModified: Date.now(),
         })
-      : null,
+      : null;
+  if (!outputFile) throw new Error("本地视频导出没有生成可校验的文件");
+
+  options.onValidationStart?.();
+  await validator(options.video, outputFile);
+  ensureNotAborted(options.signal);
+  options.onProgress?.(100);
+
+  return {
+    fileName,
+    file: options.destination ? null : outputFile,
     streamed: Boolean(options.destination),
   };
 }

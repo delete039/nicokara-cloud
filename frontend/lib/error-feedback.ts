@@ -6,7 +6,11 @@ export type ErrorFeedback = {
   retryable: boolean;
 };
 
-export type ErrorContext = "upload" | "job" | "cloud_render";
+export type ErrorContext =
+  | "upload"
+  | "job"
+  | "cloud_render"
+  | "timeline_review";
 
 export type ValidationErrorCode =
   | "video_required"
@@ -226,7 +230,9 @@ export function networkErrorFeedback(context: ErrorContext): ErrorFeedback {
     description:
       context === "upload"
         ? "视频尚未成功提交。浏览器没有收到服务器响应，可能是网络中断、反向代理超时或服务正在重启。"
-        : "暂时无法读取任务状态。任务可能仍在服务器上继续处理，页面会自动尝试恢复连接。",
+        : context === "timeline_review"
+          ? "暂时无法同步时间轴草稿。当前页面中的修改仍会保留，可以稍后重试保存。"
+          : "暂时无法读取任务状态。任务可能仍在服务器上继续处理，页面会自动尝试恢复连接。",
     solutions: [
       "确认网络正常后刷新页面或重新尝试。",
       "如果其他设备也无法访问，请联系管理员检查 Nginx 和 Nicokara 服务状态。",
@@ -273,6 +279,39 @@ export function httpErrorFeedback(
     };
   }
 
+  if (context === "timeline_review" && (status === 400 || status === 422)) {
+    const lineNumber = detail?.match(/line\s+(\d+)/iu)?.[1];
+    const tokenNumber = detail?.match(/token\s+(\d+)/iu)?.[1];
+    const moraNumber = detail?.match(/mora\s+(\d+)/iu)?.[1];
+    const location = lineNumber
+      ? `第 ${lineNumber} 行${tokenNumber ? `第 ${tokenNumber} 个词元` : ""}${
+          moraNumber ? `的第 ${moraNumber} 个 Mora` : ""
+        }`
+      : null;
+    let problem = "时间范围或歌词结构不符合要求";
+    if (detail?.match(/overlap/iu)) problem = "与上一行时间重叠";
+    else if (detail?.match(/mora count/iu)) problem = "Mora 数量与读音不一致";
+    else if (detail?.match(/mora timing/iu)) problem = "Mora 时间无效或相互重叠";
+    else if (detail?.match(/token count/iu)) problem = "词元数量与原始歌词不一致";
+    else if (detail?.match(/token.*timing/iu)) problem = "词元时间无效或相互重叠";
+    else if (detail?.match(/time range/iu)) problem = "结束时间没有晚于开始时间";
+
+    return {
+      title: "调整后的时间轴无效",
+      description: location
+        ? `${location}${problem}，因此暂时不能生成下载文件。`
+        : "调整后的时间轴与服务器保存的原始歌词结构不一致，因此暂时不能生成下载文件。",
+      solutions: [
+        lineNumber
+          ? `返回时间轴检查并修正第 ${lineNumber} 行，再重新下载。`
+          : "刷新任务页重新读取原始时间轴后再调整。",
+        "确认相邻歌词不重叠，并且每个结束时间都晚于对应的开始时间。",
+      ],
+      technicalDetails,
+      retryable: false,
+    };
+  }
+
   if (context === "cloud_render" && (status === 400 || status === 422)) {
     const lineMatch = detail?.match(/line\s+(\d+)/iu);
     const lineNumber = lineMatch?.[1];
@@ -298,6 +337,20 @@ export function httpErrorFeedback(
       solutions: [
         "刷新任务页查看排队位置或渲染进度，不要连续重复提交同一视频。",
         "如果任务仍可编辑，请重新选择名称和大小都与最初上传记录一致的原视频。",
+      ],
+      technicalDetails,
+      retryable: true,
+    };
+  }
+
+  if (context === "timeline_review" && status === 409) {
+    return {
+      title: "云端时间轴草稿暂时不可用",
+      description:
+        "服务器上的原始时间轴或草稿状态已经变化，当前页面暂时不能恢复或保存草稿。",
+      solutions: [
+        "刷新任务页重新读取服务器时间轴后再继续调整。",
+        "如果页面仍保留尚未保存的修改，可先下载调整后时间轴作为备份。",
       ],
       technicalDetails,
       retryable: true,

@@ -293,8 +293,46 @@ describe("Kirakara timeline review", () => {
   it("offsets the complete timeline without producing negative timestamps", () => {
     const updated = applyTimelineOffset(timeline, -1500);
 
-    expect(updated.lines[0]).toMatchObject({ startMs: 0, endMs: 1500 });
-    expect(updated.lines[0].units[0]).toMatchObject({ startMs: 0, endMs: 500 });
+    expect(updated.lines[0]).toMatchObject({ startMs: 0, endMs: 2000 });
+    expect(updated.lines[0].units[0]).toMatchObject({ startMs: 0, endMs: 1000 });
+    expect(updated.lines[0].units[0].moras).toEqual([
+      { reading: "き", startMs: 0, endMs: 500, matched: true },
+      { reading: "み", startMs: 500, endMs: 1000, matched: true },
+    ]);
+  });
+
+  it("rejects a manually entered line range that overlaps a neighbor", () => {
+    const withNext: KirakaraTimeline = {
+      ...timeline,
+      durationMs: 5000,
+      lines: [
+        timeline.lines[0],
+        {
+          text: "次",
+          reading: "つぎ",
+          startMs: 3500,
+          endMs: 5000,
+          units: [
+            { text: "次", reading: "つぎ", startMs: 3500, endMs: 5000, moras: [] },
+          ],
+        },
+      ],
+    };
+
+    expect(() => updateLineRange(withNext, 0, 1000, 3600)).toThrow(
+      "第 1 行不能与下一行重叠",
+    );
+    expect(() => updateLineRange(withNext, 1, 2900, 5000)).toThrow(
+      "第 2 行不能与上一行重叠",
+    );
+  });
+
+  it("rejects zero-duration mora timing before sending a review", () => {
+    const compressed = updateLineRange(timeline, 0, 0, 1);
+
+    expect(() => timelineReviewPayload(compressed)).toThrow(
+      "第 1 行第 1 个词元的第 1 个 Mora 时间无效",
+    );
   });
 
   it("updates a token reading and rebuilds the line reading", () => {

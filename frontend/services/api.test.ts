@@ -696,6 +696,48 @@ describe("getTimeline", () => {
   });
 });
 
+describe("timeline review drafts", () => {
+  it("returns null when no cloud draft has been saved", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getTimelineReviewDraft } = await import("./api");
+
+    await expect(getTimelineReviewDraft("job-1")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/jobs/job-1/timeline-review",
+      { cache: "no-store" },
+    );
+  });
+
+  it("saves and loads the complete cloud timeline draft", async () => {
+    const draft = {
+      timeline: { confidence: 1, lines: [], warnings: ["browser_reviewed"] },
+      saved_at: "2026-08-20T12:00:00+00:00",
+    };
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify(draft), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getTimelineReviewDraft, saveTimelineReviewDraft } = await import("./api");
+    const review = { lines: [] };
+
+    await expect(saveTimelineReviewDraft("job-1", review)).resolves.toEqual(draft);
+    await expect(getTimelineReviewDraft("job-1")).resolves.toEqual(draft);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/jobs/job-1/timeline-review",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify(review),
+        cache: "no-store",
+      }),
+    );
+  });
+});
+
 describe("getReviewedArtifact", () => {
   it("posts the current editor review instead of downloading the stored file", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

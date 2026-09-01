@@ -11,7 +11,7 @@ import { exportKirakaraVideo } from "@/lib/kirakara-video-export";
 import { getInstrumentalAudio } from "@/services/api";
 
 type ExportState = "idle" | "exporting" | "completed" | "error";
-type ExportPhase = "audio" | "rendering";
+type ExportPhase = "audio" | "rendering" | "validating";
 
 export async function resolveExportAudio(
   jobId: string,
@@ -86,6 +86,7 @@ export function KirakaraExportControls({
         destination: destination ?? undefined,
         signal: controller.signal,
         onProgress: setProgress,
+        onValidationStart: () => setPhase("validating"),
       });
       setOutputName(result.fileName);
       setStreamed(result.streamed);
@@ -147,7 +148,11 @@ export function KirakaraExportControls({
           <div className="mb-2 flex items-center justify-between gap-4 text-sm">
             <span className="flex items-center gap-2">
               <LoaderCircle className="size-4 animate-spin" />
-              {phase === "audio" ? "正在下载云端伴奏" : "正在本地渲染视频"}
+              {phase === "audio"
+                ? "正在下载云端伴奏"
+                : phase === "validating"
+                  ? "正在校验输出视频"
+                  : "正在本地渲染视频"}
             </span>
             <span className="font-medium">{progress}%</span>
           </div>
