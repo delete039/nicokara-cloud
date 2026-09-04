@@ -75,6 +75,32 @@ def test_applies_reviewed_timing_and_rebuilds_moras() -> None:
     assert reviewed.lines[0].tokens[0].moras[-1].end_ms == 3200
 
 
+def test_applies_reviewed_token_surface_and_rebuilds_line_surface() -> None:
+    reviewed = apply_timeline_review(
+        source_timeline(),
+        {
+            "lines": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 2000,
+                    "tokens": [
+                        {
+                            "surface": "明日",
+                            "reading": "あした",
+                            "start_ms": 1000,
+                            "end_ms": 2000,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert reviewed.lines[0].surface == "明日"
+    assert reviewed.lines[0].tokens[0].surface == "明日"
+    assert reviewed.lines[0].reading == "あした"
+
+
 def test_preserves_reviewed_mora_boundaries() -> None:
     reviewed = apply_timeline_review(
         source_timeline(),

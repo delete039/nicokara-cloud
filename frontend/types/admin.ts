@@ -69,6 +69,24 @@ export type AdminAuditEvent = {
 
 export type AdminOverview = {
   generated_at: string;
+  traffic: {
+    tracking_started_at: string;
+    pageviews: number;
+    visits: number;
+    pageviews_24h: number;
+    visits_24h: number;
+    active_visits: number;
+    pages_per_visit: number;
+    periods: Array<{
+      key: string;
+      label: string;
+      started_at: string;
+      ended_at: string;
+      pageviews: number;
+      visits: number;
+      source: string;
+    }>;
+  };
   upload_counts: Record<string, number>;
   job_counts: Record<string, number>;
   upload_tickets: AdminUploadTicket[];

@@ -4,15 +4,18 @@ import {
   Activity,
   CircleX,
   Cpu,
+  Eye,
   HardDrive,
   ListVideo,
   LoaderCircle,
   LogOut,
   MemoryStick,
+  Radio,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
   Upload,
+  Users,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
@@ -75,6 +78,16 @@ export function AdminDashboardView({
   const memory = overview.resources.memory;
   const disk = overview.resources.disk;
   const load = overview.resources.load_average;
+  const trafficScale = Math.max(
+    1,
+    ...overview.traffic.periods.flatMap((period) => [period.pageviews, period.visits]),
+  );
+  const trafficStats = [
+    { label: "近 24 小时浏览", value: overview.traffic.pageviews_24h.toLocaleString("zh-CN"), detail: "Pageviews", icon: Eye },
+    { label: "近 24 小时访问", value: overview.traffic.visits_24h.toLocaleString("zh-CN"), detail: "Visits", icon: Users },
+    { label: "近 5 分钟活跃", value: overview.traffic.active_visits.toLocaleString("zh-CN"), detail: "访问会话", icon: Radio },
+    { label: "平均浏览深度", value: overview.traffic.pages_per_visit.toFixed(2), detail: "页 / 次访问", icon: Activity },
+  ];
 
   return (
     <div className="space-y-8">
@@ -92,6 +105,80 @@ export function AdminDashboardView({
             <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
           </div>
         ))}
+      </section>
+
+      <section aria-labelledby="traffic-heading" className="border-y bg-card py-5">
+        <div className="flex flex-wrap items-end justify-between gap-3 px-4 sm:px-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <Activity className="size-5 text-primary" />
+              <h2 id="traffic-heading" className="text-lg font-semibold">访问分析</h2>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatTime(overview.traffic.tracking_started_at)} 至今 · 每 5 秒自动更新
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-primary" />Page Views</span>
+            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" />Visits</span>
+          </div>
+        </div>
+
+        <div className="mt-5 grid border-y sm:grid-cols-2">
+          <div className="border-b p-4 sm:border-b-0 sm:border-r sm:p-5">
+            <p className="flex items-center gap-2 text-sm font-semibold"><Eye className="size-4 text-primary" />Page Views summary</p>
+            <p className="mt-3 text-3xl font-bold tabular-nums">{overview.traffic.pageviews.toLocaleString("zh-CN")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">浏览器完成页面加载的累计次数</p>
+          </div>
+          <div className="p-4 sm:p-5">
+            <p className="flex items-center gap-2 text-sm font-semibold"><Users className="size-4 text-emerald-600" />Visits summary</p>
+            <p className="mt-3 text-3xl font-bold tabular-nums">{overview.traffic.visits.toLocaleString("zh-CN")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">一次访问可包含多个页面浏览</p>
+          </div>
+        </div>
+
+        <div className="px-4 py-5 sm:px-5">
+          <h3 className="text-sm font-semibold">访问趋势</h3>
+          <div className="mt-4 space-y-5" aria-label="Page Views 与 Visits 分期趋势">
+            {overview.traffic.periods.map((period) => (
+              <div key={period.key} data-traffic-period={period.key}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                  <span className="font-medium">{period.label}</span>
+                  <span className="text-muted-foreground">
+                    {period.source.startsWith("Cloudflare") ? "Cloudflare 历史数据" : "Nicokara 实时数据"}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-[5rem_minmax(0,1fr)_5rem] items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">Page Views</span>
+                  <div className="h-2 overflow-hidden rounded-sm bg-muted">
+                    <div className="h-full rounded-sm bg-primary" style={{ width: `${(period.pageviews / trafficScale) * 100}%` }} />
+                  </div>
+                  <span className="text-right font-semibold tabular-nums">{period.pageviews.toLocaleString("zh-CN")}</span>
+                  <span className="text-muted-foreground">Visits</span>
+                  <div className="h-2 overflow-hidden rounded-sm bg-muted">
+                    <div className="h-full rounded-sm bg-emerald-500" style={{ width: `${(period.visits / trafficScale) * 100}%` }} />
+                  </div>
+                  <span className="text-right font-semibold tabular-nums">{period.visits.toLocaleString("zh-CN")}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-px overflow-hidden border-t bg-border sm:grid-cols-2 lg:grid-cols-4">
+          {trafficStats.map(({ label, value, detail, icon: Icon }) => (
+            <div key={label} className="bg-card p-4">
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Icon className="size-4" />{label}
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">{value}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+            </div>
+          ))}
+        </div>
+        <p className="px-4 pt-3 text-xs text-muted-foreground sm:px-5">
+          统计起始：{formatTime(overview.traffic.tracking_started_at)} · 历史 PDF 汇总与实时记录已合并，数据持久保存
+        </p>
       </section>
 
       <section aria-labelledby="runtime-heading">

@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { rememberLocalVideo } from "@/lib/local-media-session";
 
 async function loadPreview() {
@@ -8,6 +8,38 @@ async function loadPreview() {
 }
 
 describe("KirakaraPreview", () => {
+  it("keeps a running preview loop on the latest frame callback", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    expect(preview.createPreviewFrameLoop).toBeTypeOf("function");
+    if (typeof preview.createPreviewFrameLoop !== "function") return;
+
+    const scheduledFrames: FrameRequestCallback[] = [];
+    const oldTimelineDraw = vi.fn();
+    const adjustedTimelineDraw = vi.fn();
+    const loop = preview.createPreviewFrameLoop({
+      draw: oldTimelineDraw,
+      isPlaying: () => true,
+      requestFrame: (callback: FrameRequestCallback) => {
+        scheduledFrames.push(callback);
+        return scheduledFrames.length;
+      },
+      cancelFrame: vi.fn(),
+    });
+
+    loop.start();
+    expect(oldTimelineDraw).toHaveBeenCalledTimes(1);
+    expect(scheduledFrames).toHaveLength(1);
+
+    loop.setDraw(adjustedTimelineDraw);
+    expect(adjustedTimelineDraw).toHaveBeenCalledTimes(1);
+
+    scheduledFrames.shift()?.(16);
+    expect(oldTimelineDraw).toHaveBeenCalledTimes(1);
+    expect(adjustedTimelineDraw).toHaveBeenCalledTimes(2);
+  });
+
   it("allows a refreshed job page to reconnect the original local video", async () => {
     const preview = await loadPreview();
     expect(preview, "Kirakara preview component should exist").not.toBeNull();

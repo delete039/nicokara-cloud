@@ -5,8 +5,30 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class AdminTrafficPeriodResponse(BaseModel):
+    key: str
+    label: str
+    started_at: str
+    ended_at: str
+    pageviews: int
+    visits: int
+    source: str
+
+
+class AdminTrafficResponse(BaseModel):
+    tracking_started_at: str
+    pageviews: int
+    visits: int
+    pageviews_24h: int
+    visits_24h: int
+    active_visits: int
+    pages_per_visit: float
+    periods: list[AdminTrafficPeriodResponse]
+
+
 class AdminOverviewResponse(BaseModel):
     generated_at: str
+    traffic: AdminTrafficResponse
     upload_counts: dict[str, int]
     job_counts: dict[str, int]
     upload_tickets: list[dict[str, Any]]

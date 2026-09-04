@@ -1578,10 +1578,7 @@ def _reviewed_lyrics_document(
         reviewed_timeline.lines,
         strict=True,
     ):
-        if (
-            document_line.surface != timeline_line.surface
-            or len(document_line.tokens) != len(timeline_line.tokens)
-        ):
+        if len(document_line.tokens) != len(timeline_line.tokens):
             raise TimelineReviewError("processed lyrics do not match timeline")
         reviewed_tokens = []
         for document_token, timeline_token in zip(
@@ -1589,15 +1586,17 @@ def _reviewed_lyrics_document(
             timeline_line.tokens,
             strict=True,
         ):
-            if document_token.surface != timeline_token.surface:
-                raise TimelineReviewError("processed lyrics do not match timeline")
             reviewed_tokens.append(
                 replace(
                     document_token,
+                    surface=timeline_token.surface,
                     reading=timeline_token.reading,
                     alignment_pronunciation=(
                         document_token.alignment_pronunciation
-                        if timeline_token.reading == document_token.reading
+                        if (
+                            timeline_token.surface == document_token.surface
+                            and timeline_token.reading == document_token.reading
+                        )
                         else None
                     ),
                 )
@@ -1605,6 +1604,7 @@ def _reviewed_lyrics_document(
         reviewed_lines.append(
             replace(
                 document_line,
+                surface=timeline_line.surface,
                 reading="".join(token.reading for token in reviewed_tokens),
                 tokens=reviewed_tokens,
             )

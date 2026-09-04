@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 
 import { AnnouncementDialog } from "@/components/announcement-dialog";
+import { PageviewTracker } from "@/components/pageview-tracker";
 import { HOME_COPY } from "@/lib/ui-copy";
 
 import "./globals.css";
@@ -41,6 +42,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className="min-h-screen">
+        <PageviewTracker />
         {children}
         <AnnouncementDialog />
       </body>

@@ -151,6 +151,102 @@ def test_admin_overview_reports_upload_processing_worker_and_resources(
     assert "private-client" not in response.text
 
 
+def test_pageviews_are_persistent_and_admin_overview_reports_traffic(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        first = client.post(
+            "/api/v1/analytics/pageview",
+            json={"path": "/"},
+        )
+        second = client.post(
+            "/api/v1/analytics/pageview",
+            json={"path": "/jobs/:jobId"},
+        )
+        first_visit_cookie = client.cookies.get("nicokara_visit")
+        client.cookies.clear()
+        third = client.post(
+            "/api/v1/analytics/pageview",
+            json={"path": "/"},
+        )
+        initial_overview = client.get(
+            "/api/v1/admin/overview",
+            headers=auth_headers(),
+        )
+        database = client.app.state.database
+        with database.connect() as connection:
+            stored_visits = connection.execute(
+                "SELECT DISTINCT visit_hash FROM pageviews ORDER BY visit_hash"
+            ).fetchall()
+            imported_periods = connection.execute(
+                "SELECT source_key, pageviews, visits FROM analytics_imports "
+                "ORDER BY period_start"
+            ).fetchall()
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        overview = client.get(
+            "/api/v1/admin/overview",
+            headers=auth_headers(),
+        )
+
+    assert first.status_code == 204
+    assert second.status_code == 204
+    assert third.status_code == 204
+    assert first_visit_cookie
+    assert overview.status_code == 200
+    assert (
+        overview.json()["traffic"]["tracking_started_at"]
+        == initial_overview.json()["traffic"]["tracking_started_at"]
+    )
+    assert overview.json()["traffic"] == {
+        "tracking_started_at": "2026-07-31T16:00:00+00:00",
+        "pageviews": 9851,
+        "visits": 6394,
+        "pageviews_24h": 3,
+        "visits_24h": 2,
+        "active_visits": 2,
+        "pages_per_visit": 1.54,
+        "periods": [
+            {
+                "key": "cloudflare-2026-08",
+                "label": "2026 年 8 月",
+                "started_at": "2026-07-31T16:00:00+00:00",
+                "ended_at": "2026-08-31T15:59:59+00:00",
+                "pageviews": 8720,
+                "visits": 6160,
+                "source": "Cloudflare Web Analytics PDF",
+            },
+            {
+                "key": "cloudflare-2026-09-partial",
+                "label": "2026 年 9 月 1-4 日",
+                "started_at": "2026-08-31T16:00:00+00:00",
+                "ended_at": "2026-09-04T06:50:00+00:00",
+                "pageviews": 1128,
+                "visits": 232,
+                "source": "Cloudflare Web Analytics PDF",
+            },
+            {
+                "key": "live",
+                "label": "实时统计",
+                "started_at": overview.json()["traffic"]["periods"][2]["started_at"],
+                "ended_at": overview.json()["traffic"]["periods"][2]["ended_at"],
+                "pageviews": 3,
+                "visits": 2,
+                "source": "Nicokara",
+            },
+        ],
+    }
+    assert [tuple(row) for row in imported_periods] == [
+        ("cloudflare-2026-08", 8720, 6160),
+        ("cloudflare-2026-09-partial", 1128, 232),
+    ]
+    assert len(stored_visits) == 2
+    assert all(len(row["visit_hash"]) == 64 for row in stored_visits)
+    assert all(row["visit_hash"] != first_visit_cookie for row in stored_visits)
+
+
 def test_admin_can_cancel_upload_and_requeue_failed_job_with_audit(
     tmp_path: Path,
 ) -> None:

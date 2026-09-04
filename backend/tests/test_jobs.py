@@ -988,6 +988,23 @@ def test_reviewed_lyrics_export_uses_current_user_readings(tmp_path: Path) -> No
     assert exported["lines"][0]["tokens"][0]["alignment_pronunciation"] is None
 
 
+def test_reviewed_lyrics_export_uses_current_user_surfaces(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        job_id, review = _prepare_reviewable_job(client, tmp_path)
+        review["lines"][0]["tokens"][0]["surface"] = "物語集"
+
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/exports/lyrics",
+            json=review,
+        )
+
+    assert response.status_code == 200
+    exported = response.json()
+    assert exported["lines"][0]["surface"] == "物語集"
+    assert exported["lines"][0]["tokens"][0]["surface"] == "物語集"
+    assert exported["lines"][0]["tokens"][0]["alignment_pronunciation"] is None
+
+
 def test_reviewed_ass_export_uses_current_timing_and_style(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         job_id, review = _prepare_reviewable_job(client, tmp_path)

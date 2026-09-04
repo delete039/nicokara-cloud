@@ -50,6 +50,47 @@ type TimelineSaveState = {
   message?: string;
 };
 
+type PreviewFrameLoopOptions = {
+  draw: () => void;
+  isPlaying: () => boolean;
+  requestFrame?: (callback: FrameRequestCallback) => number;
+  cancelFrame?: (handle: number) => void;
+};
+
+export function createPreviewFrameLoop({
+  draw: initialDraw,
+  isPlaying,
+  requestFrame = (callback) => globalThis.requestAnimationFrame(callback),
+  cancelFrame = (handle) => globalThis.cancelAnimationFrame(handle),
+}: PreviewFrameLoopOptions) {
+  let draw = initialDraw;
+  let scheduledFrame: number | null = null;
+  const stop = () => {
+    if (scheduledFrame === null) return;
+    cancelFrame(scheduledFrame);
+    scheduledFrame = null;
+  };
+  const tick: FrameRequestCallback = () => {
+    scheduledFrame = null;
+    draw();
+    if (isPlaying()) {
+      scheduledFrame = requestFrame(tick);
+    }
+  };
+
+  return {
+    setDraw(nextDraw: () => void) {
+      draw = nextDraw;
+      draw();
+    },
+    start() {
+      stop();
+      tick(0);
+    },
+    stop,
+  };
+}
+
 export function KirakaraPreview({
   jobId,
   expectedVideoName,
@@ -66,7 +107,7 @@ export function KirakaraPreview({
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const animationFrame = useRef<number | null>(null);
+  const frameLoop = useRef<ReturnType<typeof createPreviewFrameLoop> | null>(null);
   const componentActive = useRef(true);
   const activeJobId = useRef(jobId);
   const autosaveVersion = useRef(0);
@@ -276,7 +317,11 @@ export function KirakaraPreview({
   }, [timeline]);
 
   useEffect(() => {
-    updateFrame();
+    frameLoop.current ??= createPreviewFrameLoop({
+      draw: updateFrame,
+      isPlaying: () => videoRef.current?.paused === false,
+    });
+    frameLoop.current.setDraw(updateFrame);
   }, [updateFrame]);
 
   function updateStyle(nextStyle: KirakaraStyle) {
@@ -301,22 +346,12 @@ export function KirakaraPreview({
   }
 
   const stopDrawing = useCallback(() => {
-    if (animationFrame.current !== null) {
-      cancelAnimationFrame(animationFrame.current);
-      animationFrame.current = null;
-    }
+    frameLoop.current?.stop();
   }, []);
 
   const startDrawing = useCallback(() => {
-    stopDrawing();
-    const tick = () => {
-      updateFrame();
-      if (!videoRef.current?.paused) {
-        animationFrame.current = requestAnimationFrame(tick);
-      }
-    };
-    tick();
-  }, [stopDrawing, updateFrame]);
+    frameLoop.current?.start();
+  }, []);
 
   useEffect(() => stopDrawing, [stopDrawing]);
 

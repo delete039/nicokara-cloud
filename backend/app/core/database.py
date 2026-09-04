@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -82,7 +83,52 @@ CREATE TABLE IF NOT EXISTS event_logs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS analytics_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pageviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    visit_hash TEXT NOT NULL,
+    path TEXT NOT NULL,
+    viewed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS analytics_imports (
+    source_key TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    pageviews INTEGER NOT NULL,
+    visits INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+
 """
+
+
+ANALYTICS_IMPORTS = (
+    (
+        "cloudflare-2026-08",
+        "2026 年 8 月",
+        "2026-07-31T16:00:00+00:00",
+        "2026-08-31T15:59:59+00:00",
+        8720,
+        6160,
+        "Cloudflare Web Analytics PDF",
+    ),
+    (
+        "cloudflare-2026-09-partial",
+        "2026 年 9 月 1-4 日",
+        "2026-08-31T16:00:00+00:00",
+        "2026-09-04T06:50:00+00:00",
+        1128,
+        232,
+        "Cloudflare Web Analytics PDF",
+    ),
+)
 
 
 def utc_now() -> str:
@@ -240,6 +286,43 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_event_logs_request
                 ON event_logs(request_id, created_at DESC)
                 """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pageviews_viewed_at
+                ON pageviews(viewed_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pageviews_visit_viewed_at
+                ON pageviews(visit_hash, viewed_at)
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO analytics_meta (key, value)
+                VALUES ('tracking_started_at', ?)
+                """,
+                (utc_now(),),
+            )
+            imported_at = utc_now()
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO analytics_imports (
+                    source_key, label, period_start, period_end,
+                    pageviews, visits, source, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [(*item, imported_at) for item in ANALYTICS_IMPORTS],
+            )
+            connection.execute(
+                """
+                UPDATE analytics_meta
+                SET value = MIN(value, ?)
+                WHERE key = 'tracking_started_at'
+                """,
+                (ANALYTICS_IMPORTS[0][2],),
             )
 
     def create_job(
@@ -1007,6 +1090,111 @@ class Database:
                 """
             ).fetchall()
         return {row["status"]: int(row["count"]) for row in rows}
+
+    def record_pageview(self, *, visit_id: str, path: str) -> None:
+        visit_hash = hashlib.sha256(visit_id.encode("utf-8")).hexdigest()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO pageviews (visit_hash, path, viewed_at)
+                VALUES (?, ?, ?)
+                """,
+                (visit_hash, path, utc_now()),
+            )
+
+    def traffic_metrics(self) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        since_24h = (now - timedelta(hours=24)).isoformat()
+        active_since = (now - timedelta(minutes=5)).isoformat()
+        with self.connect() as connection:
+            tracking_row = connection.execute(
+                """
+                SELECT value FROM analytics_meta
+                WHERE key = 'tracking_started_at'
+                """
+            ).fetchone()
+            imports = connection.execute(
+                """
+                SELECT source_key, label, period_start, period_end,
+                       pageviews, visits, source
+                FROM analytics_imports
+                ORDER BY period_start
+                """
+            ).fetchall()
+            import_totals = connection.execute(
+                """
+                SELECT COALESCE(SUM(pageviews), 0) AS pageviews,
+                       COALESCE(SUM(visits), 0) AS visits,
+                       MAX(period_end) AS cutoff
+                FROM analytics_imports
+                """
+            ).fetchone()
+            cutoff = import_totals["cutoff"] or ""
+            live_totals = connection.execute(
+                """
+                SELECT COUNT(*) AS pageviews,
+                       COUNT(DISTINCT visit_hash) AS visits
+                FROM pageviews
+                WHERE viewed_at > ?
+                """,
+                (cutoff,),
+            ).fetchone()
+            recent = connection.execute(
+                """
+                SELECT COUNT(*) AS pageviews,
+                       COUNT(DISTINCT visit_hash) AS visits
+                FROM pageviews
+                WHERE viewed_at > ? AND viewed_at >= ?
+                """,
+                (cutoff, since_24h),
+            ).fetchone()
+            active = connection.execute(
+                """
+                SELECT COUNT(DISTINCT visit_hash) AS visits
+                FROM pageviews
+                WHERE viewed_at > ? AND viewed_at >= ?
+                """,
+                (cutoff, active_since),
+            ).fetchone()
+        live_pageviews = int(live_totals["pageviews"])
+        live_visits = int(live_totals["visits"])
+        pageviews = int(import_totals["pageviews"]) + live_pageviews
+        visits = int(import_totals["visits"]) + live_visits
+        periods = [
+            {
+                "key": row["source_key"],
+                "label": row["label"],
+                "started_at": row["period_start"],
+                "ended_at": row["period_end"],
+                "pageviews": int(row["pageviews"]),
+                "visits": int(row["visits"]),
+                "source": row["source"],
+            }
+            for row in imports
+        ]
+        periods.append(
+            {
+                "key": "live",
+                "label": "实时统计",
+                "started_at": cutoff or tracking_row["value"],
+                "ended_at": now.isoformat(),
+                "pageviews": live_pageviews,
+                "visits": live_visits,
+                "source": "Nicokara",
+            }
+        )
+        return {
+            "tracking_started_at": (
+                tracking_row["value"] if tracking_row else now.isoformat()
+            ),
+            "pageviews": pageviews,
+            "visits": visits,
+            "pageviews_24h": int(recent["pageviews"]),
+            "visits_24h": int(recent["visits"]),
+            "active_visits": int(active["visits"]),
+            "pages_per_visit": round(pageviews / visits, 2) if visits else 0.0,
+            "periods": periods,
+        }
 
     def list_active_upload_tickets(self, *, limit: int = 200) -> list[dict]:
         with self.connect() as connection:

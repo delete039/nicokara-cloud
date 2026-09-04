@@ -172,6 +172,12 @@ def apply_timeline_review(
             zip(source_line.tokens, reviewed_tokens, strict=True)
         ):
             try:
+                surface_value = reviewed_token.get(
+                    "surface", source_token.surface
+                )
+                if not isinstance(surface_value, str):
+                    raise TypeError("surface must be a string")
+                surface = surface_value
                 reading = str(reviewed_token["reading"]).strip()
                 token_start = int(reviewed_token["start_ms"])
                 token_finish = int(reviewed_token["end_ms"])
@@ -194,7 +200,7 @@ def apply_timeline_review(
                 )
             tokens.append(
                 AlignedToken(
-                    surface=source_token.surface,
+                    surface=surface,
                     reading=reading,
                     start_ms=token_start,
                     end_ms=token_finish,
@@ -213,7 +219,11 @@ def apply_timeline_review(
 
         lines.append(
             AlignedLine(
-                surface=source_line.surface,
+                surface=(
+                    "".join(token.surface for token in tokens)
+                    if tokens
+                    else source_line.surface
+                ),
                 reading="".join(token.reading for token in tokens),
                 start_ms=start_ms,
                 end_ms=end_ms,

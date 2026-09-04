@@ -10,6 +10,7 @@ import {
   updateLineRange,
   updateMoraBoundary,
   updateUnitReading,
+  updateUnitText,
 } from "./kirakara-review";
 import { DEFAULT_KIRAKARA_STYLE } from "./kirakara-style";
 
@@ -44,6 +45,30 @@ const timeline: KirakaraTimeline = {
       ],
     },
   ],
+};
+
+const overlappingBoundaryTimeline: KirakaraTimeline = {
+  confidence: 0.8,
+  warnings: ["overlapping_mora_boundaries"],
+  durationMs: 2000,
+  lines: [{
+    text: "あいうえ",
+    reading: "あいうえ",
+    startMs: 1000,
+    endMs: 2000,
+    units: [{
+      text: "あいうえ",
+      reading: "あいうえ",
+      startMs: 1000,
+      endMs: 2000,
+      moras: [
+        { reading: "あ", startMs: 1000, endMs: 1500, matched: true },
+        { reading: "い", startMs: 1500, endMs: 1500, matched: false },
+        { reading: "う", startMs: 1500, endMs: 1500, matched: false },
+        { reading: "え", startMs: 1500, endMs: 2000, matched: true },
+      ],
+    }],
+  }],
 };
 
 describe("Kirakara timeline review", () => {
@@ -259,6 +284,108 @@ describe("Kirakara timeline review", () => {
     expect(updated.lines[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
   });
 
+  it("moves a selected boundary right out of an overlapping mora cluster", () => {
+    const updated = updateMoraBoundary(overlappingBoundaryTimeline, 0, 1, 1600);
+    const moras = updated.lines[0].units[0].moras;
+
+    expect(moras[1].endMs).toBe(1600);
+    expect(moras[2].startMs).toBe(1600);
+    expect(moras[2].endMs).toBeGreaterThanOrEqual(1600);
+    expect(moras[3].startMs).toBe(moras[2].endMs);
+    expect(updated.lines[0]).toMatchObject({ startMs: 1000, endMs: 2000 });
+  });
+
+  it("moves a selected boundary left out of an overlapping mora cluster", () => {
+    const updated = updateMoraBoundary(overlappingBoundaryTimeline, 0, 1, 1400);
+    const moras = updated.lines[0].units[0].moras;
+
+    expect(moras[1].endMs).toBe(1400);
+    expect(moras[2].startMs).toBe(1400);
+    expect(moras[0].endMs).toBeLessThanOrEqual(1400);
+    expect(moras[1].startMs).toBe(moras[0].endMs);
+    expect(updated.lines[0]).toMatchObject({ startMs: 1000, endMs: 2000 });
+  });
+
+  it("keeps unit and punctuation timing continuous when expanding a boundary cluster", () => {
+    const source: KirakaraTimeline = {
+      ...overlappingBoundaryTimeline,
+      lines: [{
+        ...overlappingBoundaryTimeline.lines[0],
+        text: "あ、いう、え",
+        units: [
+          {
+            text: "あ",
+            reading: "あ",
+            startMs: 1000,
+            endMs: 1500,
+            moras: [
+              { reading: "あ", startMs: 1000, endMs: 1500, matched: true },
+            ],
+          },
+          { text: "、", reading: "、", startMs: 1500, endMs: 1500, moras: [] },
+          {
+            text: "いう",
+            reading: "いう",
+            startMs: 1500,
+            endMs: 1500,
+            moras: [
+              { reading: "い", startMs: 1500, endMs: 1500, matched: false },
+              { reading: "う", startMs: 1500, endMs: 1500, matched: false },
+            ],
+          },
+          { text: "、", reading: "、", startMs: 1500, endMs: 1500, moras: [] },
+          {
+            text: "え",
+            reading: "え",
+            startMs: 1500,
+            endMs: 2000,
+            moras: [
+              { reading: "え", startMs: 1500, endMs: 2000, matched: true },
+            ],
+          },
+        ],
+      }],
+    };
+
+    const updated = updateMoraBoundary(source, 0, 1, 1600);
+    const units = updated.lines[0].units;
+
+    expect(units[1]).toMatchObject({ startMs: 1500, endMs: 1500 });
+    expect(units[2]).toMatchObject({ startMs: 1500, endMs: 1610 });
+    expect(units[2].moras).toEqual([
+      { reading: "い", startMs: 1500, endMs: 1600, matched: false },
+      { reading: "う", startMs: 1600, endMs: 1610, matched: false },
+    ]);
+    expect(units[3]).toMatchObject({ startMs: 1610, endMs: 1610 });
+    expect(units[4]).toMatchObject({ startMs: 1610, endMs: 2000 });
+    expect(units[4].moras[0]).toMatchObject({ startMs: 1610, endMs: 2000 });
+  });
+
+  it("clamps an ordinary boundary without pushing its neighbors", () => {
+    const source: KirakaraTimeline = {
+      ...overlappingBoundaryTimeline,
+      lines: [{
+        ...overlappingBoundaryTimeline.lines[0],
+        units: [{
+          ...overlappingBoundaryTimeline.lines[0].units[0],
+          moras: [
+            { reading: "あ", startMs: 1000, endMs: 1300, matched: true },
+            { reading: "い", startMs: 1300, endMs: 1500, matched: true },
+            { reading: "う", startMs: 1500, endMs: 1700, matched: true },
+            { reading: "え", startMs: 1700, endMs: 2000, matched: true },
+          ],
+        }],
+      }],
+    };
+
+    const updated = updateMoraBoundary(source, 0, 1, 1900);
+    const moras = updated.lines[0].units[0].moras;
+
+    expect(moras[1].endMs).toBe(1690);
+    expect(moras[2]).toMatchObject({ startMs: 1690, endMs: 1700 });
+    expect(moras[3]).toMatchObject({ startMs: 1700, endMs: 2000 });
+  });
+
   it("moves a mora boundary across token and punctuation units", () => {
     const source: KirakaraTimeline = {
       ...timeline,
@@ -342,6 +469,21 @@ describe("Kirakara timeline review", () => {
     expect(updated.lines[0].reading).toBe("きみの");
   });
 
+  it("updates a token surface and rebuilds the line text without changing timing", () => {
+    const updated = updateUnitText(timeline, 0, 0, "僕");
+
+    expect(updated.lines[0].text).toBe("僕の");
+    expect(updated.lines[0].units[0]).toMatchObject({
+      text: "僕",
+      reading: "きみ",
+      startMs: 1000,
+      endMs: 2000,
+    });
+    expect(updated.lines[0].units[0].moras).toEqual(
+      timeline.lines[0].units[0].moras,
+    );
+  });
+
   it("rebuilds mora segments when a token reading changes", () => {
     const updated = updateUnitReading(timeline, 0, 0, "きょう");
 
@@ -359,6 +501,7 @@ describe("Kirakara timeline review", () => {
           end_ms: 3000,
           tokens: [
             {
+              surface: "君",
               reading: "きみ",
               start_ms: 1000,
               end_ms: 2000,
@@ -367,7 +510,13 @@ describe("Kirakara timeline review", () => {
                 { reading: "み", start_ms: 1500, end_ms: 2000 },
               ],
             },
-            { reading: "の", start_ms: 2000, end_ms: 3000, moras: [] },
+            {
+              surface: "の",
+              reading: "の",
+              start_ms: 2000,
+              end_ms: 3000,
+              moras: [],
+            },
           ],
         },
       ],

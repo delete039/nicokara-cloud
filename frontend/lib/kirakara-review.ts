@@ -14,6 +14,7 @@ export type TimelineReviewPayload = {
     start_ms: number;
     end_ms: number;
     tokens: Array<{
+      surface: string;
       reading: string;
       start_ms: number;
       end_ms: number;
@@ -314,6 +315,20 @@ function lineMoraReferences(line: KirakaraLine): MoraReference[] {
   );
 }
 
+function moraStartTime(line: KirakaraLine, reference: MoraReference): number {
+  const unit = line.units[reference.unitIndex];
+  return reference.moraIndex === 0
+    ? unit.startMs
+    : unit.moras[reference.moraIndex - 1].endMs;
+}
+
+function moraEndTime(line: KirakaraLine, reference: MoraReference): number {
+  const unit = line.units[reference.unitIndex];
+  return reference.moraIndex === unit.moras.length - 1
+    ? unit.endMs
+    : unit.moras[reference.moraIndex].endMs;
+}
+
 export function updateMoraBoundary(
   timeline: KirakaraTimeline,
   lineIndex: number,
@@ -327,53 +342,108 @@ export function updateMoraBoundary(
   const right = references[boundaryIndex + 1];
   if (!left || !right) throw new RangeError("Mora 分界不存在");
 
-  const leftUnit = line.units[left.unitIndex];
-  const rightUnit = line.units[right.unitIndex];
-  const leftStart = left.moraIndex === 0
-    ? leftUnit.startMs
-    : leftUnit.moras[left.moraIndex - 1].endMs;
-  const rightEnd = right.moraIndex === rightUnit.moras.length - 1
-    ? rightUnit.endMs
-    : rightUnit.moras[right.moraIndex].endMs;
-  const availableDuration = Math.max(0, rightEnd - leftStart);
-  const minimumDuration = Math.min(
-    MIN_MORA_DURATION_MS,
-    Math.floor(availableDuration / 2),
+  const boundaryTimes = references.slice(0, -1).map((reference) =>
+    moraEndTime(line, reference),
   );
-  const nextBoundary = Math.min(
-    rightEnd - minimumDuration,
-    Math.max(leftStart + minimumDuration, Math.round(timeMs)),
-  );
+  const currentBoundary = boundaryTimes[boundaryIndex];
+  const requestedBoundary = Number.isFinite(timeMs)
+    ? Math.round(timeMs)
+    : currentBoundary;
+  let clusterStart = boundaryIndex;
+  let clusterEnd = boundaryIndex;
+  while (clusterStart > 0 && boundaryTimes[clusterStart - 1] === currentBoundary) {
+    clusterStart -= 1;
+  }
+  while (
+    clusterEnd < boundaryTimes.length - 1
+    && boundaryTimes[clusterEnd + 1] === currentBoundary
+  ) {
+    clusterEnd += 1;
+  }
+
+  const nextBoundaryTimes = [...boundaryTimes];
+  if (clusterStart === clusterEnd) {
+    const leftStart = moraStartTime(line, left);
+    const rightEnd = moraEndTime(line, right);
+    const availableDuration = Math.max(0, rightEnd - leftStart);
+    const minimumDuration = Math.min(
+      MIN_MORA_DURATION_MS,
+      Math.floor(availableDuration / 2),
+    );
+    nextBoundaryTimes[boundaryIndex] = Math.min(
+      rightEnd - minimumDuration,
+      Math.max(leftStart + minimumDuration, requestedBoundary),
+    );
+  } else {
+    const leftAnchor = moraStartTime(line, references[clusterStart]);
+    const rightAnchor = moraEndTime(line, references[clusterEnd + 1]);
+    const intervalCount = clusterEnd - clusterStart + 2;
+    const minimumDuration = Math.min(
+      MIN_MORA_DURATION_MS,
+      Math.floor(Math.max(0, rightAnchor - leftAnchor) / intervalCount),
+    );
+    const intervalsBeforeTarget = boundaryIndex - clusterStart + 1;
+    const intervalsAfterTarget = clusterEnd - boundaryIndex + 1;
+    nextBoundaryTimes[boundaryIndex] = Math.min(
+      rightAnchor - minimumDuration * intervalsAfterTarget,
+      Math.max(
+        leftAnchor + minimumDuration * intervalsBeforeTarget,
+        requestedBoundary,
+      ),
+    );
+
+    // Spread only the original overlap cluster; ordinary neighboring boundaries stay fixed.
+    for (let index = boundaryIndex - 1; index >= clusterStart; index -= 1) {
+      nextBoundaryTimes[index] = Math.min(
+        boundaryTimes[index],
+        nextBoundaryTimes[index + 1] - minimumDuration,
+      );
+    }
+    for (let index = boundaryIndex + 1; index <= clusterEnd; index += 1) {
+      nextBoundaryTimes[index] = Math.max(
+        boundaryTimes[index],
+        nextBoundaryTimes[index - 1] + minimumDuration,
+      );
+    }
+  }
+
+  const updatedBoundaries = clusterStart === clusterEnd
+    ? [boundaryIndex]
+    : Array.from(
+        { length: clusterEnd - clusterStart + 1 },
+        (_, offset) => clusterStart + offset,
+      );
 
   const lines = timeline.lines.map((candidate, candidateIndex): KirakaraLine => {
     if (candidateIndex !== lineIndex) return candidate;
+    const units = candidate.units.map((unit) => ({
+      ...unit,
+      moras: unit.moras.map((mora) => ({ ...mora })),
+    }));
+    for (const currentBoundaryIndex of updatedBoundaries) {
+      const currentLeft = references[currentBoundaryIndex];
+      const currentRight = references[currentBoundaryIndex + 1];
+      const nextBoundary = nextBoundaryTimes[currentBoundaryIndex];
+      const leftUnit = units[currentLeft.unitIndex];
+      const rightUnit = units[currentRight.unitIndex];
+      leftUnit.moras[currentLeft.moraIndex].endMs = nextBoundary;
+      rightUnit.moras[currentRight.moraIndex].startMs = nextBoundary;
+      if (currentLeft.unitIndex === currentRight.unitIndex) continue;
+
+      leftUnit.endMs = nextBoundary;
+      rightUnit.startMs = nextBoundary;
+      for (
+        let unitIndex = currentLeft.unitIndex + 1;
+        unitIndex < currentRight.unitIndex;
+        unitIndex += 1
+      ) {
+        units[unitIndex].startMs = nextBoundary;
+        units[unitIndex].endMs = nextBoundary;
+      }
+    }
     return {
       ...candidate,
-      units: candidate.units.map((unit, unitIndex) => {
-        if (unitIndex < left.unitIndex || unitIndex > right.unitIndex) return unit;
-        if (unitIndex > left.unitIndex && unitIndex < right.unitIndex) {
-          return { ...unit, startMs: nextBoundary, endMs: nextBoundary };
-        }
-        const moras = unit.moras.map((mora, moraIndex) => {
-          if (unitIndex === left.unitIndex && moraIndex === left.moraIndex) {
-            return { ...mora, endMs: nextBoundary };
-          }
-          if (unitIndex === right.unitIndex && moraIndex === right.moraIndex) {
-            return { ...mora, startMs: nextBoundary };
-          }
-          return mora;
-        });
-        return {
-          ...unit,
-          ...(unitIndex === left.unitIndex && left.unitIndex !== right.unitIndex
-            ? { endMs: nextBoundary }
-            : {}),
-          ...(unitIndex === right.unitIndex && left.unitIndex !== right.unitIndex
-            ? { startMs: nextBoundary }
-            : {}),
-          moras,
-        };
-      }),
+      units,
     };
   });
   return { ...timeline, lines };
@@ -417,6 +487,28 @@ export function updateUnitReading(
   return { ...timeline, lines };
 }
 
+export function updateUnitText(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  unitIndex: number,
+  text: string,
+): KirakaraTimeline {
+  const line = timeline.lines[lineIndex];
+  if (!line?.units[unitIndex]) throw new RangeError("歌词词元不存在");
+  const lines = timeline.lines.map((candidate, candidateIndex) => {
+    if (candidateIndex !== lineIndex) return candidate;
+    const units = candidate.units.map((unit, index) => index === unitIndex
+      ? {
+          ...unit,
+          text,
+          ruby: kanjiRuby(text, unit.reading),
+        }
+      : unit);
+    return { ...candidate, units, text: units.map((unit) => unit.text).join("") };
+  });
+  return { ...timeline, lines };
+}
+
 export function timelineReviewPayload(
   timeline: KirakaraTimeline,
   style?: KirakaraStyle,
@@ -428,6 +520,7 @@ export function timelineReviewPayload(
         start_ms: line.startMs,
         end_ms: line.endMs,
         tokens: line.units.map((unit) => ({
+          surface: unit.text,
           reading: unit.reading,
           start_ms: unit.startMs,
           end_ms: unit.endMs,
@@ -470,6 +563,11 @@ export function assertTimelineReviewPayload(
     let previousTokenEnd = line.start_ms;
     line.tokens.forEach((token, tokenIndex) => {
       const tokenNumber = tokenIndex + 1;
+      if (typeof token.surface !== "string") {
+        throw new TimelineReviewValidationError(
+          `第 ${lineNumber} 行第 ${tokenNumber} 个词元的主歌词无效`,
+        );
+      }
       if (
         !Number.isFinite(token.start_ms)
         || !Number.isFinite(token.end_ms)

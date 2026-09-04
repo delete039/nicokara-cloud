@@ -111,6 +111,7 @@ def overview(request: Request) -> AdminOverviewResponse:
         )
     return AdminOverviewResponse(
         generated_at=generated_at.isoformat(),
+        traffic=database.traffic_metrics(),
         upload_counts=database.count_upload_tickets_by_status(),
         job_counts=database.count_jobs_by_status(),
         upload_tickets=upload_tickets,

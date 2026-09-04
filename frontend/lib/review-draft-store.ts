@@ -1,4 +1,7 @@
-import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
+import {
+  splitReadingMoras,
+  type KirakaraTimeline,
+} from "@/lib/kirakara-timeline";
 import type { ProcessedLyrics } from "@/types/job";
 
 export type ReviewDraftKind = "readings" | "timeline";
@@ -171,32 +174,45 @@ function sameTimelineStructure(
     const candidateLine = candidate.lines[lineIndex];
     if (
       !isRecord(candidateLine)
-      || candidateLine.text !== sourceLine.text
-      || candidateLine.reading !== sourceLine.reading
+      || typeof candidateLine.text !== "string"
+      || typeof candidateLine.reading !== "string"
       || !Array.isArray(candidateLine.units)
       || candidateLine.units.length !== sourceLine.units.length
     ) {
       return false;
     }
-    return sourceLine.units.every((sourceUnit, unitIndex) => {
+    const unitsAreValid = sourceLine.units.every((_sourceUnit, unitIndex) => {
       const candidateUnit = candidateLine.units[unitIndex];
       if (
         !isRecord(candidateUnit)
-        || candidateUnit.text !== sourceUnit.text
-        || candidateUnit.reading !== sourceUnit.reading
+        || typeof candidateUnit.text !== "string"
+        || typeof candidateUnit.reading !== "string"
         || !Array.isArray(candidateUnit.moras)
-        || candidateUnit.moras.length !== sourceUnit.moras.length
       ) {
         return false;
       }
-      return sourceUnit.moras.every(
-        (sourceMora, moraIndex) => {
+      const expectedMoras = splitReadingMoras(candidateUnit.reading);
+      if (
+        candidateUnit.moras.length > 0
+        && candidateUnit.moras.length !== expectedMoras.length
+      ) {
+        return false;
+      }
+      return candidateUnit.moras.every(
+        (_candidateMora, moraIndex) => {
           const candidateMora = candidateUnit.moras[moraIndex];
           return isRecord(candidateMora)
-            && candidateMora.reading === sourceMora.reading;
+            && candidateMora.reading === expectedMoras[moraIndex];
         },
       );
     });
+    return unitsAreValid
+      && candidateLine.text === candidateLine.units
+        .map((unit) => (unit as Record<string, unknown>).text)
+        .join("")
+      && candidateLine.reading === candidateLine.units
+        .map((unit) => (unit as Record<string, unknown>).reading)
+        .join("");
   });
 }
 

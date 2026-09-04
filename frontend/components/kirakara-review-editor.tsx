@@ -1,6 +1,12 @@
 "use client";
 
-import { GripVertical, RotateCcw, TimerReset } from "lucide-react";
+import {
+  ChevronDown,
+  GripVertical,
+  Languages,
+  RotateCcw,
+  TimerReset,
+} from "lucide-react";
 import {
   useMemo,
   useRef,
@@ -14,6 +20,8 @@ import {
   timelineDragOffsetMs,
   updateLineRange,
   updateMoraBoundary,
+  updateUnitReading,
+  updateUnitText,
 } from "@/lib/kirakara-review";
 import type {
   KirakaraLine,
@@ -100,6 +108,27 @@ function lineTimingSegments(line: KirakaraLine): TimingSegment[] {
       return segment;
     });
   });
+}
+
+export function timingDragPreviewMs(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  target:
+    | { kind: "line-edge"; edge: "start" | "end" }
+    | { kind: "mora-boundary"; boundaryIndex: number },
+): number {
+  const line = timeline.lines[lineIndex];
+  if (!line) throw new RangeError("歌词行不存在");
+  if (target.kind === "line-edge") {
+    return target.edge === "start" ? line.startMs : line.endMs;
+  }
+
+  const boundary = lineTimingSegments(line).find(
+    (segment) => segment.kind === "mora"
+      && segment.boundaryIndex === target.boundaryIndex,
+  );
+  if (!boundary) throw new RangeError("Mora 分界不存在");
+  return boundary.endMs;
 }
 
 function moraBoundaryMarkers(
@@ -209,6 +238,16 @@ export function KirakaraReviewEditor({
     setError(null);
   }
 
+  function changeUnitText(unitIndex: number, text: string) {
+    onChange(updateUnitText(timeline, activeLineIndex, unitIndex, text));
+    setError(null);
+  }
+
+  function changeUnitReading(unitIndex: number, reading: string) {
+    onChange(updateUnitReading(timeline, activeLineIndex, unitIndex, reading));
+    setError(null);
+  }
+
   function startTimingDrag(
     event: ReactPointerEvent<HTMLElement>,
     target: TimingDragTarget,
@@ -277,7 +316,11 @@ export function KirakaraReviewEditor({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (drag.moved && !canceled) {
-      onSeek(drag.latestTimeline.lines[drag.lineIndex].startMs);
+      onSeek(timingDragPreviewMs(
+        drag.latestTimeline,
+        drag.lineIndex,
+        drag.target,
+      ));
     }
   }
 
@@ -308,7 +351,7 @@ export function KirakaraReviewEditor({
 
       <div
         data-review-panels="true"
-        className="mt-4"
+        className="mt-4 space-y-5"
       >
         <section data-timing-panel="true" className="min-w-0 border-t pt-4">
           <div className="flex items-baseline justify-between gap-3">
@@ -471,6 +514,61 @@ export function KirakaraReviewEditor({
               应用偏移
             </button>
           </div>
+        </section>
+
+        <section
+          data-lyrics-disclosure="true"
+          className="min-w-0 border-t pt-4"
+        >
+          <details className="group">
+            <summary
+              data-lyrics-toggle="true"
+              className="focus-ring flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 text-sm font-bold hover:bg-muted [&::-webkit-details-marker]:hidden"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <Languages className="size-4 shrink-0" />
+                <span>编辑歌词与读音</span>
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+            </summary>
+
+            <div
+              data-lyrics-panel="true"
+              className="mt-3 divide-y rounded-sm border"
+            >
+              {line.units.map((unit, unitIndex) => (
+                <div
+                  key={`unit-editor-${unitIndex}`}
+                  className="grid min-w-0 gap-3 p-3 sm:grid-cols-2"
+                >
+                  <label className="min-w-0 text-xs font-medium text-muted-foreground">
+                    主歌词
+                    <input
+                      type="text"
+                      data-unit-surface={unitIndex}
+                      value={unit.text}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => changeUnitText(unitIndex, event.target.value)}
+                      className="focus-ring mt-1 block w-full min-w-0 rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                    />
+                  </label>
+                  <label className="min-w-0 text-xs font-medium text-muted-foreground">
+                    读音
+                    <input
+                      type="text"
+                      data-unit-reading={unitIndex}
+                      value={unit.reading}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => changeUnitReading(unitIndex, event.target.value)}
+                      className="focus-ring mt-1 block w-full min-w-0 rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+          </details>
         </section>
       </div>
 

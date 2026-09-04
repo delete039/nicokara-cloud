@@ -90,6 +90,20 @@ describe("ReviewDraftStore", () => {
     expect(compatibleTimelineDraft(timeline, edited)).toEqual(edited);
   });
 
+  it("restores edited lyric text and a rebuilt reading timeline", () => {
+    const edited = structuredClone(timeline);
+    edited.lines[0].text = "僕";
+    edited.lines[0].reading = "ぼく";
+    edited.lines[0].units[0].text = "僕";
+    edited.lines[0].units[0].reading = "ぼく";
+    edited.lines[0].units[0].moras = [
+      { reading: "ぼ", startMs: 1000, endMs: 1500, matched: true },
+      { reading: "く", startMs: 1500, endMs: 2000, matched: true },
+    ];
+
+    expect(compatibleTimelineDraft(timeline, edited)).toEqual(edited);
+  });
+
   it("ignores incomplete browser data instead of interrupting editing", () => {
     expect(() => compatibleTimelineDraft(timeline, { lines: [{}] })).not.toThrow();
     expect(compatibleTimelineDraft(timeline, { lines: [{}] })).toBeNull();

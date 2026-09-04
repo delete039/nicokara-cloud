@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.jobs import router as jobs_router
 from app.api.jobs import upload_tickets_router
 from app.api.admin import router as admin_router
+from app.api.analytics import router as analytics_router
 from app.api.mobile import router as mobile_router
 from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
@@ -365,6 +366,7 @@ def create_app(
                 is not None
             )
             or path in {"/api/v1/admin/overview", "/api/v1/admin/logs"}
+            or path == "/api/v1/analytics/pageview"
             or (
                 method == "GET"
                 and path.startswith("/api/v1/admin/jobs/")
@@ -434,6 +436,7 @@ def create_app(
         prefix=resolved_settings.api_prefix,
     )
     app.include_router(admin_router, prefix=resolved_settings.api_prefix)
+    app.include_router(analytics_router, prefix=resolved_settings.api_prefix)
     app.include_router(mobile_router, prefix=resolved_settings.api_prefix)
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
