@@ -16,6 +16,7 @@ __pycache__/
 *.err.log
 
 outputs/
+output/
 work/
 
 frontend/.next/

@@ -135,6 +135,16 @@ export function jobPresentation(
       tone: "error",
     };
   }
+  if (stage === "OFF_VOCAL_QUEUED" || stage === "INSTRUMENTAL_QUEUED") {
+    return {
+      eyebrow: "伴奏版待生成",
+      title: "正在准备 OFF VOCAL",
+      description: "复用原任务，仅进行必要的伴奏分离和音轨替换，不会重新识别歌词或生成时间轴。",
+      progressLabel: "等待伴奏处理",
+      terminal: false,
+      tone: "pending",
+    };
+  }
   if (stage === "CLOUD_RENDER_QUEUED") {
     return {
       eyebrow: "云端渲染排队",

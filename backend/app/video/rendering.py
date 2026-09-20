@@ -49,6 +49,34 @@ class FFmpegVideoRenderer:
         self.preset = preset
         self.crf = crf
 
+    def replace_audio(self, input_path: Path, audio_path: Path, output_path: Path) -> None:
+        """Keep the completed video bitstream (including subtitles) unchanged."""
+        job_dir = input_path.parent.resolve()
+        if (audio_path.parent.resolve() != job_dir
+                or output_path.parent.resolve() != job_dir
+                or output_path.resolve() in {input_path.resolve(), audio_path.resolve()}):
+            raise ValueError("Audio replacement requires distinct files in the job directory")
+        cmd = [*self.command, "-y", "-i", input_path.name, "-i", audio_path.name,
+               "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+               "-c:a", "aac", "-b:a", "192k", "-af", "apad", "-shortest",
+               "-movflags", "+faststart", output_path.name]
+        try:
+            run_process(cmd, cwd=job_dir, check=True, capture_output=True,
+                        text=True, timeout=self.timeout_seconds)
+            if not output_path.is_file() or output_path.stat().st_size == 0:
+                raise VideoRenderingError("FFmpeg did not produce a non-empty OFF VOCAL video")
+        except (ProcessingInterrupted, VideoRenderingError):
+            output_path.unlink(missing_ok=True)
+            raise
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            output_path.unlink(missing_ok=True)
+            raise VideoRenderingError(
+                "OFF VOCAL audio replacement failed",
+                exit_code=getattr(exc, "returncode", None),
+                timeout_seconds=self.timeout_seconds if isinstance(exc, subprocess.TimeoutExpired) else None,
+                stderr_tail=str(exc.stderr or "")[-2000:], command=cmd,
+            ) from exc
+
     def render(
         self,
         input_path: Path,

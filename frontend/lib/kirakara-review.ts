@@ -89,6 +89,93 @@ function distributeMoras(
   }));
 }
 
+type LineMoraReference = {
+  unitIndex: number;
+  moraIndex: number;
+};
+
+function distributeMoraReferences(line: KirakaraLine): LineMoraReference[] {
+  return line.units.flatMap((unit, unitIndex) =>
+    unit.moras.map((_, moraIndex) => ({ unitIndex, moraIndex })),
+  );
+}
+
+function distributeMoraStart(line: KirakaraLine, reference: LineMoraReference): number {
+  const unit = line.units[reference.unitIndex];
+  return reference.moraIndex === 0
+    ? unit.startMs
+    : unit.moras[reference.moraIndex - 1].endMs;
+}
+
+function distributeMoraEnd(line: KirakaraLine, reference: LineMoraReference): number {
+  const unit = line.units[reference.unitIndex];
+  return reference.moraIndex === unit.moras.length - 1
+    ? unit.endMs
+    : unit.moras[reference.moraIndex].endMs;
+}
+
+/** Evenly distributes a continuous range of Mora while keeping its outer edges fixed. */
+export function distributeMoraRange(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  moraIndexes?: number[],
+): KirakaraTimeline {
+  const line = timeline.lines[lineIndex];
+  if (!line) throw new RangeError("歌词行不存在");
+  const references = distributeMoraReferences(line);
+  if (references.length === 0) throw new RangeError("当前歌词行没有可平分的字");
+
+  const indexes = [...new Set(moraIndexes ?? references.map((_, index) => index))]
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < references.length)
+    .sort((left, right) => left - right);
+  if (indexes.length === 0) throw new RangeError("当前没有选中的字");
+  for (let index = 1; index < indexes.length; index += 1) {
+    if (indexes[index] !== indexes[index - 1] + 1) {
+      throw new RangeError("请选择连续的字后再平分时长");
+    }
+  }
+
+  const first = references[indexes[0]];
+  const last = references[indexes.at(-1) as number];
+  const startMs = distributeMoraStart(line, first);
+  const endMs = distributeMoraEnd(line, last);
+  const duration = Math.max(0, endMs - startMs);
+  const units = line.units.map((unit) => ({
+    ...unit,
+    moras: unit.moras.map((mora) => ({ ...mora })),
+  }));
+
+  indexes.forEach((moraIndex, index) => {
+    const reference = references[moraIndex];
+    const mora = units[reference.unitIndex].moras[reference.moraIndex];
+    mora.startMs = startMs + Math.floor(duration * index / indexes.length);
+    mora.endMs = startMs + Math.floor(duration * (index + 1) / indexes.length);
+  });
+
+  // Keep token ranges valid when a selected range begins or ends on a token edge.
+  const firstUnit = units[first.unitIndex];
+  const lastUnit = units[last.unitIndex];
+  if (first.moraIndex === 0) firstUnit.startMs = firstUnit.moras[0]?.startMs ?? firstUnit.startMs;
+  if (last.moraIndex === lastUnit.moras.length - 1) lastUnit.endMs = lastUnit.moras.at(-1)?.endMs ?? lastUnit.endMs;
+  for (let unitIndex = first.unitIndex + 1; unitIndex < last.unitIndex; unitIndex += 1) {
+    const unit = units[unitIndex];
+    unit.startMs = unit.moras[0]?.startMs ?? unit.startMs;
+    unit.endMs = unit.moras.at(-1)?.endMs ?? unit.endMs;
+  }
+
+  const lines = timeline.lines.map((candidate, candidateIndex) =>
+    candidateIndex === lineIndex ? { ...candidate, units } : candidate,
+  );
+  return { ...timeline, lines };
+}
+
+export function distributeLineMoras(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+): KirakaraTimeline {
+  return distributeMoraRange(timeline, lineIndex);
+}
+
 function scaleUnit(
   unit: KirakaraRenderUnit,
   oldStart: number,

@@ -17,6 +17,12 @@ class JobResponse(BaseModel):
     video_sha256: str
     lyrics_source: str | None = None
     vocal_mode: str = "on"
+    off_vocal_conversion: bool = False
+    instrumental_ready: bool = False
+    has_timeline: bool = False
+    render_pending: bool = False
+    available_vocal_modes: list[str] = Field(default_factory=list)
+    render_vocal_mode: str | None = None
     client_submission_id: str | None = None
     input_mode: str = "VIDEO"
     source_upload_size_bytes: int | None = None

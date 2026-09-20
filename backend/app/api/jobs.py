@@ -111,9 +111,17 @@ def client_key_from_request(request: Request, settings: Settings) -> str:
 
 def job_response(database: Database, job: dict) -> JobResponse:
     queue_position, queue_size = database.queue_metrics(job["id"])
+    stem = Path(job["video_path"]).parent / "audio_instrumental.wav"
     return JobResponse.model_validate(
         {
             **job,
+            "off_vocal_conversion": job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"},
+            "instrumental_ready": stem.is_file() and stem.stat().st_size > 0,
+            "has_timeline": bool(job.get("timeline_path")),
+            "render_pending": job.get("resume_stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+                and job["status"] in {"UPLOADED", "PROCESSING"},
+            "available_vocal_modes": [mode for mode in ("on", "off")
+                if job.get(f"{mode}_output_path") and Path(job[f"{mode}_output_path"]).is_file()],
             "queue_position": queue_position,
             "queue_size": queue_size,
         }
@@ -1018,6 +1026,66 @@ async def cancel_job(request: Request, job_id: str) -> JobResponse:
     return job_response(database, canceled_job)
 
 
+@router.post("/{job_id}/off-vocal", response_model=JobResponse)
+async def generate_off_vocal(request: Request, job_id: str, audio_only: bool = False) -> JobResponse:
+    try:
+        UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(404, "任务不存在") from exc
+    settings, database = services(request)
+    job = database.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "任务不存在")
+    if job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"} and job["status"] in {"UPLOADED", "PROCESSING"}:
+        return job_response(database, job)
+    if audio_only and job_response(database, job).instrumental_ready:
+        return job_response(database, job)
+    if job["status"] not in {"COMPLETED", "SUBTITLE_GENERATED", "ALIGNED"}:
+        raise HTTPException(409, "请等待当前任务完成；失败的伴奏生成可以使用重试按钮继续。")
+    if not audio_only and job.get("vocal_mode") == "off":
+        return job_response(database, job)
+    source = Path(job["video_path"])
+    if source.resolve().parent != (settings.storage_dir / job_id).resolve():
+        raise HTTPException(410, "原任务素材已不可用，请重新上传。")
+    stem = source.parent / "audio_instrumental.wav"
+    if stem.is_file():
+        validated_job_file(settings, job_id, str(stem))
+    if not source.is_file() and not (stem.is_file() and stem.stat().st_size > 0):
+        raise HTTPException(410, "原任务音频已被清理，无法生成伴奏，请重新上传素材。")
+    if not audio_only and job["status"] == "COMPLETED" and (
+        not job.get("output_path")
+        or not validated_job_file(settings, job_id, job["output_path"]).is_file()
+    ):
+        raise HTTPException(410, "原视频结果已被清理，无法替换伴奏，请先重新生成视频。")
+    try:
+        reservation = request.app.state.active_job_limiter.reserve(job["client_key"])
+    except ActiveJobLimitError as exc:
+        raise HTTPException(429, "当前用户已有任务正在处理，请完成后再生成伴奏。") from exc
+    try:
+        queued = database.queue_off_vocal(job_id, audio_only=audio_only)
+        if queued is None:
+            current = database.get_job(job_id)
+            if current and current.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"}:
+                return job_response(database, current)
+            raise HTTPException(409, "任务状态已改变，请刷新页面后重试。")
+        reservation.commit()
+    finally:
+        reservation.release()
+    runner = getattr(request.app.state, "runner", None)
+    if runner is not None:
+        try:
+            await runner.enqueue(job_id)
+        except QueueCapacityError:
+            # Persisted UPLOADED jobs are picked up by the queue heartbeat.
+            logger.info("OFF VOCAL job %s is waiting for queue capacity", job_id)
+        except Exception:
+            database.update_job_state(job_id, status="FAILED", stage="REMOVING_VOCALS",
+                                      progress=0, error_code="VOCAL_REMOVAL_FAILED",
+                                      error_message="伴奏生成暂时无法启动，请点击重试。")
+            raise HTTPException(503, "伴奏生成暂时无法启动，请点击重试。")
+    return job_response(database, database.get_job(job_id) or queued)
+
+
 @router.post("/{job_id}/retry", response_model=JobResponse)
 async def retry_failed_job(request: Request, job_id: str) -> JobResponse:
     try:
@@ -1520,9 +1588,12 @@ def save_timeline_review(
     with database.locked_job(job_id) as job:
         if job is None:
             raise HTTPException(status_code=404, detail="任务不存在")
-        if not job.get("timeline_path") or job["status"] not in {
+        # Audio-only conversion never rewrites the source timeline. Keep draft
+        # autosave available while UVR/mux runs or waits to be retried.
+        converting_audio = job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+        if not job.get("timeline_path") or (not converting_audio and job["status"] not in {
             "ALIGNED", "SUBTITLE_GENERATED", "COMPLETED",
-        }:
+        }):
             raise HTTPException(status_code=409, detail="任务状态已变化，请刷新页面后重试。")
         timeline_path = validated_job_file(settings, job_id, job["timeline_path"])
         source_content = timeline_path.read_bytes()
@@ -1789,11 +1860,6 @@ def get_instrumental_audio(request: Request, job_id: str) -> FileResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="任务不存在",
         )
-    if job.get("vocal_mode", "on") != "off":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="ON VOCAL 任务不生成云端伴奏",
-        )
     instrumental_path = settings.storage_dir / job_id / "audio_instrumental.wav"
     if not instrumental_path.is_file():
         raise HTTPException(
@@ -1813,8 +1879,8 @@ def get_instrumental_audio(request: Request, job_id: str) -> FileResponse:
 
 
 @router.get("/{job_id}/result", response_class=FileResponse)
-def get_result_video(request: Request, job_id: str) -> FileResponse:
-    output_path = result_video_path(request, job_id)
+def get_result_video(request: Request, job_id: str, vocal_mode: str | None = None) -> FileResponse:
+    output_path = result_video_path(request, job_id, vocal_mode)
     return FileResponse(
         output_path,
         media_type="video/mp4",
@@ -1823,12 +1889,12 @@ def get_result_video(request: Request, job_id: str) -> FileResponse:
 
 
 @router.get("/{job_id}/download", response_class=FileResponse)
-def download_result_video(request: Request, job_id: str) -> FileResponse:
-    output_path = result_video_path(request, job_id)
+def download_result_video(request: Request, job_id: str, vocal_mode: str | None = None) -> FileResponse:
+    output_path = result_video_path(request, job_id, vocal_mode)
     return FileResponse(
         output_path,
         media_type="video/mp4",
-        filename="final_karaoke.mp4",
+        filename=f"final_karaoke_{vocal_mode}.mp4" if vocal_mode else "final_karaoke.mp4",
         headers=result_video_cache_headers(),
     )
 
@@ -1841,7 +1907,9 @@ def result_video_cache_headers() -> dict[str, str]:
     }
 
 
-def result_video_path(request: Request, job_id: str) -> Path:
+def result_video_path(request: Request, job_id: str, vocal_mode: str | None = None) -> Path:
+    if vocal_mode not in {None, "on", "off"}:
+        raise HTTPException(422, "请选择 ON VOCAL 或 OFF VOCAL。")
     try:
         UUID(job_id)
     except ValueError as exc:
@@ -1856,7 +1924,7 @@ def result_video_path(request: Request, job_id: str) -> Path:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="任务不存在",
         )
-    output_path_value = job.get("output_path")
+    output_path_value = job.get(f"{vocal_mode}_output_path") if vocal_mode else job.get("output_path")
     if not output_path_value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

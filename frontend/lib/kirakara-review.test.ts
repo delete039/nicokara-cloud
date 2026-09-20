@@ -5,6 +5,7 @@ import {
   applyLineEdgeOffset,
   applyLineOffset,
   applyTimelineOffset,
+  distributeMoraRange,
   timelineDragOffsetMs,
   timelineReviewPayload,
   updateLineRange,
@@ -153,6 +154,50 @@ describe("Kirakara timeline review", () => {
     expect(updated.lines[0].units.flatMap((unit) => unit.moras).at(-1)).toMatchObject({ endMs: 2800 });
     expect(updated.lines[0].units[0].moras[0]).toEqual(timeline.lines[0].units[0].moras[0]);
     expect(updated.durationMs).toBe(2800);
+  });
+
+  it("evenly distributes all Mora in a line without changing its outer range", () => {
+    const uneven: KirakaraTimeline = {
+      ...timeline,
+      lines: [{
+        ...timeline.lines[0],
+        units: [{
+          ...timeline.lines[0].units[0],
+          moras: [
+            { reading: "き", startMs: 1000, endMs: 1200, matched: true },
+            { reading: "み", startMs: 1800, endMs: 2000, matched: true },
+          ],
+        }, timeline.lines[0].units[1]],
+      }],
+    };
+    const updated = distributeMoraRange(uneven, 0);
+    expect(updated.lines[0].units[0].moras).toEqual([
+      { reading: "き", startMs: 1000, endMs: 1500, matched: true },
+      { reading: "み", startMs: 1500, endMs: 2000, matched: true },
+    ]);
+  });
+
+  it("distributes a selected continuous Mora range and rejects gaps", () => {
+    const source: KirakaraTimeline = {
+      ...timeline,
+      lines: [{
+        ...timeline.lines[0],
+        units: [{
+          ...timeline.lines[0].units[0],
+          moras: [
+            { reading: "き", startMs: 1000, endMs: 1100, matched: true },
+            { reading: "み", startMs: 1400, endMs: 1500, matched: true },
+            { reading: "の", startMs: 1900, endMs: 2000, matched: true },
+          ],
+        }],
+      }],
+    };
+    const updated = distributeMoraRange(source, 0, [0, 1]);
+    expect(updated.lines[0].units[0].moras.slice(0, 2)).toEqual([
+      { reading: "き", startMs: 1000, endMs: 1250, matched: true },
+      { reading: "み", startMs: 1250, endMs: 1500, matched: true },
+    ]);
+    expect(() => distributeMoraRange(source, 0, [0, 2])).toThrow("连续的字");
   });
 
   it("keeps a dragged line between its neighboring lines", () => {

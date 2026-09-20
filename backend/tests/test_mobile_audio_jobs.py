@@ -598,7 +598,8 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         job = client.app.state.database.get_job(job_id)
         assert job is not None
         assert Path(job["video_path"]).read_bytes() == video
-        assert json.loads(Path(job["timeline_path"]).read_text(encoding="utf-8"))["lines"][0][
+        assert Path(job["timeline_path"]) == timeline_path
+        assert json.loads(Path(job["render_timeline_path"]).read_text(encoding="utf-8"))["lines"][0][
             "reading"
         ] == "こんにち"
         assert json.loads(timeline_path.read_text(encoding="utf-8"))["lines"][0]["reading"] == "きょう"
@@ -606,8 +607,10 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         ass_content = Path(job["ass_path"]).read_text(
             encoding="utf-8-sig"
         )
-        assert "Style: KirakaraBase,Yu Gothic,108" in ass_content
-        assert r"\an7\pos(192,615)" in ass_content
+        from app.subtitle.font_metrics import ass_font_geometry
+        geometry = ass_font_geometry("Yu Gothic", True)
+        assert f"Style: KirakaraBase,{geometry.family},{round(108 * geometry.size_ratio, 4)}" in ass_content
+        assert rf"\an7\pos(192,{615 + geometry.top_offset(108, 1.2):g})" in ass_content
         assert "&H00563412" in ass_content
 
 

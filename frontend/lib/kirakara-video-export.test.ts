@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as Mediabunny from "mediabunny";
 import {
   ALL_FORMATS,
   BlobSource,
@@ -19,6 +20,11 @@ import {
 } from "./kirakara-video-export";
 import type { KirakaraTimeline } from "./kirakara-timeline";
 import { DEFAULT_KIRAKARA_STYLE } from "./kirakara-style";
+
+vi.mock("mediabunny", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("mediabunny")>();
+  return { ...actual, canEncodeAudio: vi.fn(actual.canEncodeAudio) };
+});
 
 const timeline: KirakaraTimeline = {
   confidence: 1,
@@ -78,6 +84,31 @@ function bufferedRuntime(output = mp4File(["ftyp", "mdat", "moov"])): KirakaraVi
 }
 
 describe("standard MP4 validation", () => {
+  it("checks AAC using the media library codec name before rendering", async () => {
+    const probe = vi.mocked(Mediabunny.canEncodeAudio).mockResolvedValue(false);
+    try {
+      await expect(exportKirakaraVideo({
+        video: new File(["test"], "test.mp4"), timeline, profile,
+      })).rejects.toThrow("AAC");
+      expect(probe).toHaveBeenCalledWith("aac", {
+        sampleRate: 48_000, numberOfChannels: 2, bitrate: 192_000,
+      });
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("accepts AAC and rejects silent output instead of offering a broken download", async () => {
+    const output = mp4File(["ftyp", "mdat", "moov"]);
+    await expect(validateKirakaraVideoOutput(output, output, async () => 2, async () => ["aac"])).resolves.toBeUndefined();
+    await expect(validateKirakaraVideoOutput(output, output, async () => 2, async () => [])).rejects.toThrow("AAC");
+  });
+  it("rejects PCM audio even when the MP4 structure and duration are valid", async () => {
+    await expect(validateKirakaraVideoOutput(
+      new File(["source"], "source.mp4"), mp4File(["ftyp", "mdat", "moov"]),
+      async () => 2, async () => ["pcm-s16"],
+    )).rejects.toThrow("AAC");
+  });
   it("accepts a regular MP4 and rejects fragmented MP4 boxes", async () => {
     await expect(
       assertStandardMp4(mp4File(["ftyp", "mdat", "moov"])),

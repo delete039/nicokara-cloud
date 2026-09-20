@@ -1,4 +1,6 @@
 from pathlib import Path
+import pytest
+from PIL import ImageFont
 
 from app.subtitle import font_metrics
 from app.subtitle.font_metrics import font_candidates
@@ -39,6 +41,16 @@ def test_fontconfig_query_requests_the_rendered_weight(monkeypatch) -> None:
     font_metrics._font.cache_clear()
 
     font_metrics.text_measurer("Noto Sans CJK JP", 96, bold=True)
-
     assert commands[0][-1] == "Noto Sans CJK JP:style=Bold"
     font_metrics._font.cache_clear()
+
+
+@pytest.mark.parametrize("bold,weight", [(False, 400), (True, 700)])
+def test_variable_noto_uses_requested_weight(bold, weight):
+    path = Path("C:/Windows/Fonts/NotoSansJP-VF.ttf")
+    if not path.is_file():
+        pytest.skip("Windows variable Noto fixture unavailable")
+    expected = ImageFont.truetype(str(path), size=96)
+    expected.set_variation_by_axes([weight])
+    actual = font_metrics._font("Noto Sans JP", 96, bold)
+    assert bytes(actual.getmask("国")) == bytes(expected.getmask("国"))

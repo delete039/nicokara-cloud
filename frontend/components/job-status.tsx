@@ -31,7 +31,6 @@ import {
   queueStatusLabel,
 } from "@/lib/job-queue";
 import { JOB_COPY } from "@/lib/ui-copy";
-import { synchronizeMediaPair } from "@/lib/synchronized-media";
 import {
   compatibleReadingDraft,
   deleteBrowserReviewDraft,
@@ -42,11 +41,9 @@ import {
   ApiRequestError,
   cancelJob,
   confirmReadings,
-  downloadVideoUrl,
   getJob,
   getProcessedLyrics,
   processedLyricsUrl,
-  resultVideoUrl,
   retryJob,
   reopenReadingReview,
   subtitleUrl,
@@ -66,15 +63,6 @@ export function JobStatus({ jobId }: { jobId: string }) {
   const [submittingReadings, setSubmittingReadings] = useState(false);
   const [reopeningReadings, setReopeningReadings] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [resultVideoElement, setResultVideoElement] =
-    useState<HTMLVideoElement | null>(null);
-  const [previewVideoElement, setPreviewVideoElement] =
-    useState<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    if (!resultVideoElement || !previewVideoElement) return;
-    return synchronizeMediaPair(resultVideoElement, previewVideoElement);
-  }, [previewVideoElement, resultVideoElement]);
 
   useEffect(() => {
     let active = true;
@@ -202,6 +190,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
 
   const presentation = jobPresentation(job.status, job.stage, job.input_mode);
   const queueLabel = queueStatusLabel(job.queue_position, job.queue_size);
+  const cloudExportJob = Boolean(job.has_timeline && (job.render_vocal_mode || job.render_pending || job.off_vocal_conversion));
   const cancelLabel = cancelJobLabel(job.status);
   const StatusIcon =
     presentation.tone === "canceled"
@@ -392,7 +381,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           </div>
         </div>
 
-        <div className="mt-8 h-2 overflow-hidden rounded-full bg-muted">
+        {!cloudExportJob && <><div className="mt-8 h-2 overflow-hidden rounded-full bg-muted">
           <div
             className={`h-full rounded-full transition-[width] ${
               presentation.tone === "error"
@@ -411,6 +400,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           <span>{job.progress}%</span>
         </div>
 
+        </>}
         <JobMetadata job={job} />
 
         {job.status === "CANCELED" && (
@@ -515,45 +505,18 @@ export function JobStatus({ jobId }: { jobId: string }) {
           </div>
         )}
 
-        {job.status === "COMPLETED" && (
-          <section className="mt-8" aria-labelledby="result-video-heading">
-            <h2
-              id="result-video-heading"
-              className="font-display text-xl font-bold"
-            >
-              {JOB_COPY.resultHeading}
-            </h2>
-            <video
-              key={job.updated_at}
-              ref={setResultVideoElement}
-              className="mt-4 aspect-video w-full rounded-2xl bg-black"
-              controls
-              playsInline
-              preload="metadata"
-              src={resultVideoUrl(job.id, job.updated_at)}
-            >
-              {JOB_COPY.unsupportedVideo}
-            </video>
-            <a
-              href={downloadVideoUrl(job.id, job.updated_at)}
-              className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground"
-            >
-              <Download className="size-4" />
-              {JOB_COPY.downloadVideo}
-            </a>
-          </section>
-        )}
-
-        {job.input_mode === "AUDIO_ONLY" &&
+        {(job.input_mode === "AUDIO_ONLY" || job.has_timeline) &&
           (job.status === "ALIGNED" ||
             job.status === "SUBTITLE_GENERATED" ||
-            job.status === "COMPLETED") && (
+            job.status === "COMPLETED" || cloudExportJob) && (
             <KirakaraPreview
               jobId={job.id}
               expectedVideoName={job.original_video_name}
-              vocalMode={job.vocal_mode ?? "on"}
               hasCloudResult={job.status === "COMPLETED"}
-              onVideoElementChange={setPreviewVideoElement}
+              exportDisabled={Boolean(job.render_pending || (job.off_vocal_conversion && job.status !== "COMPLETED" && job.status !== "SUBTITLE_GENERATED"))}
+              availableModes={job.available_vocal_modes}
+              resultVersion={job.updated_at}
+              job={job}
               onCloudRenderQueued={(queuedJob) => {
                 setJob(queuedJob);
                 setRefreshKey((value) => value + 1);

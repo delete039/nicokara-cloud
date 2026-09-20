@@ -327,6 +327,39 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(onSeek).toHaveBeenCalledWith(910);
   });
 
+  it("REQ-BULK-01 selects a continuous Mora range with Shift and distributes it", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
+    fireEvent.click(screen.getByRole("button", { name: "う" }), { shiftKey: true });
+    fireEvent.click(screen.getByRole("button", { name: /选中字数平分/ }));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({
+        units: expect.arrayContaining([expect.objectContaining({
+          moras: expect.arrayContaining([
+            expect.objectContaining({ reading: "きょ", startMs: 1000, endMs: 1500 }),
+            expect.objectContaining({ reading: "う", startMs: 1500, endMs: 2000 }),
+          ]),
+        })]),
+      })]),
+    }));
+  });
+
+  it("REQ-BULK-02 exposes independent first and last Mora nudges", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    fireEvent.click(screen.getByRole("button", { name: "句首字延后" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({
+        startMs: 1010,
+        units: expect.arrayContaining([expect.objectContaining({
+          moras: expect.arrayContaining([expect.objectContaining({ reading: "きょ", startMs: 1010, endMs: 1600 })]),
+        })]),
+      })]),
+    }));
+  });
+
   it("REQ-STYLE-LAYOUT-02 lets the timeline fill the timing card content width", () => {
     const { container } = renderEditor();
     const wrapper = container.querySelector('[data-timeline-track-wrapper="true"]');

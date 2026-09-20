@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 
 from app.alignment.models import AlignedLine, LyricTimeline
@@ -12,7 +12,7 @@ from app.subtitle.karaoke_effect import (
     ruby_chunks,
     ruby_start_ms,
 )
-from app.subtitle.font_metrics import text_ink_measurer, text_measurer
+from app.subtitle.font_metrics import ass_font_geometry, text_ink_measurer, text_measurer
 from app.subtitle.ruby import kanji_readings
 
 
@@ -22,7 +22,7 @@ _UNSAFE_FONT_NAME = re.compile(r"[,;\r\n{}\[\]'\"]")
 @dataclass(frozen=True)
 class _CharacterLayout:
     text: str
-    x: int
+    x: float
     ink_left: float
     ink_right: float
 
@@ -30,9 +30,9 @@ class _CharacterLayout:
 @dataclass(frozen=True)
 class _RubyLayout:
     text: str
-    character_x: tuple[int, ...]
+    character_x: tuple[float, ...]
     character_ink: tuple[tuple[float, float], ...]
-    y: int
+    y: float
     token_index: int
 
 
@@ -40,7 +40,7 @@ class _RubyLayout:
 class _LineLayout:
     characters: tuple[_CharacterLayout, ...]
     ruby: tuple[_RubyLayout, ...]
-    y: int
+    y: float
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class KirakaraAssConfig:
     upper_left_x: int = 192
     upper_y: int = 645
     lower_right_x: int = 1728
-    lower_y: int = 845
+    lower_y: float = 844.5
     entry_buffer_ms: int = 4166
     exit_hold_ms: int = 2000
     fade_duration_ms: int = 666
@@ -81,12 +81,12 @@ class KirakaraAssConfig:
     unsung_color: str = "&H00FFFFFF"
     unsung_outline_color: str = "&H00000000"
     sung_outline_color: str = "&H00FFFFFF"
-    outline_width: int = 8
-    ruby_outline_width: int = 6
+    outline_width: float = 7.5
+    ruby_outline_width: float = 6
     shadow_color: str = "&H00000000"
     shadow_depth: int = 0
-    base_letter_spacing: int = 14
-    ruby_letter_spacing: int = 8
+    base_letter_spacing: float = 13.5
+    ruby_letter_spacing: float = 7.5
 
     @classmethod
     def from_browser_style(cls, value: object) -> "KirakaraAssConfig":
@@ -128,9 +128,10 @@ class KirakaraAssConfig:
             or _UNSAFE_FONT_NAME.search(font_name)
         ):
             font_name = cls.font_name
-        def scaled(number: int | float) -> int:
-            # JavaScript Math.round semantics used by the browser renderer.
-            return int(float(number) * 1.5 + 0.5)
+        def scaled(number: int | float) -> float:
+            # Kirakara uses CSS/subpixel coordinates; rounding here accumulates
+            # visible drift across long lines, especially with negative spacing.
+            return float(number) * 1.5
 
         font_size = number("font_size", 64, 24, 120)
         ruby_size = number("ruby_size", 26, 10, 60)
@@ -155,7 +156,7 @@ class KirakaraAssConfig:
                 "stroke_color_after", cls.sung_outline_color
             ),
             outline_width=scaled(stroke_width),
-            ruby_outline_width=scaled(stroke_width * 0.8),
+            ruby_outline_width=scaled(int(stroke_width * 0.8 + 0.5)),
             shadow_color=ass_color("shadow_color", cls.shadow_color),
             shadow_depth=scaled(number("shadow_depth", 0, 0, 12)),
             base_letter_spacing=scaled(number("letter_spacing", 9, -4, 32)),
@@ -340,7 +341,7 @@ class KirakaraAssGenerator:
         fade_in: bool = False,
         fade_out: bool = False,
     ) -> str:
-        tags = rf"\an{alignment}\pos({x},{y})"
+        tags = rf"\an{alignment}\pos({x:g},{y:g})"
         if fade_in or fade_out:
             tags += (
                 rf"\fad({self.config.fade_duration_ms if fade_in else 0},"
@@ -445,8 +446,11 @@ class KirakaraAssGenerator:
         ruby_layouts: list[_RubyLayout] = []
         ruby_y = (
             self._line_y(index)
-            - self.config.ruby_font_size
+            - self.config.ruby_font_size * 1.1
             - self.config.ruby_offset
+            + ass_font_geometry(self.config.font_name).top_offset(
+                self.config.ruby_font_size, 1.1
+            )
         )
         for surface, reading, token_index, base_width, effective_width in group_layouts:
             main_cursor = cursor + (effective_width - base_width) / 2
@@ -455,7 +459,7 @@ class KirakaraAssGenerator:
                 characters.append(
                     _CharacterLayout(
                         text=character,
-                        x=round(main_cursor),
+                        x=main_cursor,
                         ink_left=ink_left,
                         ink_right=ink_right,
                     )
@@ -469,10 +473,10 @@ class KirakaraAssGenerator:
                     self.config.ruby_letter_spacing,
                 )
                 ruby_cursor = cursor + (effective_width - ruby_width) / 2
-                ruby_character_x: list[int] = []
+                ruby_character_x: list[float] = []
                 ruby_character_ink: list[tuple[float, float]] = []
                 for character in reading:
-                    ruby_character_x.append(round(ruby_cursor))
+                    ruby_character_x.append(ruby_cursor)
                     ruby_character_ink.append(ruby_ink_measure(character))
                     ruby_cursor += ruby_measure(character) + self.config.ruby_letter_spacing
                 ruby_layouts.append(
@@ -489,7 +493,9 @@ class KirakaraAssGenerator:
         return _LineLayout(
             characters=tuple(characters),
             ruby=tuple(ruby_layouts),
-            y=self._line_y(index),
+            y=self._line_y(index) + ass_font_geometry(
+                self.config.font_name, self.config.base_font_bold
+            ).top_offset(self.config.base_font_size, 1.2),
         )
 
     def _indicator_events(
@@ -778,7 +784,17 @@ class KirakaraAssGenerator:
         )
 
     def _header(self) -> str:
-        config = self.config
+        base_geometry = ass_font_geometry(self.config.font_name, self.config.base_font_bold)
+        ruby_geometry = ass_font_geometry(self.config.font_name)
+        config = replace(
+            self.config,
+            font_name=base_geometry.family,
+            base_font_size=round(self.config.base_font_size * base_geometry.size_ratio, 4),
+            ruby_font_size=round(self.config.ruby_font_size * ruby_geometry.size_ratio, 4),
+            # Canvas stroke is centered and uses lineWidth = stroke * 2.2.
+            outline_width=self.config.outline_width * 1.1,
+            ruby_outline_width=self.config.ruby_outline_width * 1.1,
+        )
         base_bold = -1 if config.base_font_bold else 0
         return f"""[Script Info]
 Title: Nicokara Kirakara Render

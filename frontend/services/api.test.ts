@@ -5,6 +5,11 @@ afterEach(() => {
 });
 
 describe("result video URLs", () => {
+  it("addresses each vocal version independently", async () => {
+    const api = await import("./api");
+    expect(api.downloadVideoUrl("job-1", "v2", "off")).toBe("/api/v1/jobs/job-1/download?v=v2&vocal_mode=off");
+    expect(api.resultVideoUrl("job-1", undefined, "on")).toBe("/api/v1/jobs/job-1/result?vocal_mode=on");
+  });
   it("uses the deployed reverse proxy by default", async () => {
     const api = await import("./api");
 
@@ -25,6 +30,38 @@ describe("result video URLs", () => {
     expect(api.downloadVideoUrl("job-1", "render attempt 2")).toBe(
       "/api/v1/jobs/job-1/download?v=render%20attempt%202",
     );
+  });
+});
+
+describe("automatic OFF VOCAL preparation", () => {
+  it("prepares the same job before downloading the instrumental", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "job-1", status: "SUBTITLE_GENERATED", instrumental_ready: true })))
+      .mockResolvedValueOnce(new Response(new Blob(["wav"], { type: "audio/wav" })));
+    vi.stubGlobal("fetch", fetcher);
+    const api = await import("./api");
+    const result = await api.getOrPrepareInstrumentalAudio("job-1");
+    expect(fetcher.mock.calls[0][0]).toBe("/api/v1/jobs/job-1/off-vocal?audio_only=true");
+    expect(fetcher.mock.calls[1][0]).toBe("/api/v1/jobs/job-1/instrumental");
+    expect(result.name).toBe("instrumental.wav");
+  });
+
+  it("waits for preparation to finish without requesting transcription", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ id: "job-1", status: "UPLOADED", instrumental_ready: false })))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ id: "job-1", status: "SUBTITLE_GENERATED", instrumental_ready: true })))
+        .mockResolvedValueOnce(new Response(new Blob(["wav"], { type: "audio/wav" })));
+      vi.stubGlobal("fetch", fetcher);
+      const api = await import("./api");
+      const result = api.getOrPrepareInstrumentalAudio("job-1");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect((await result).name).toBe("instrumental.wav");
+      expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+        "/api/v1/jobs/job-1/off-vocal?audio_only=true", "/api/v1/jobs/job-1", "/api/v1/jobs/job-1/instrumental",
+      ]);
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -921,10 +958,14 @@ describe("submitCloudRender", () => {
         new File(["video"], "song.mp4", { type: "video/mp4" }),
         { lines: [{ start_ms: 1000, end_ms: 2000, tokens: [] }] },
         vi.fn(),
+        undefined,
+        undefined,
+        "off",
       ),
     ).resolves.toMatchObject(queued);
     const body = fetcher.mock.calls[2][1].body as FormData;
     expect(body.get("upload_ticket_id")).toBe("ticket-cloud");
+    expect(body.get("vocal_mode")).toBe("off");
     expect(JSON.parse(String(body.get("timeline_review")))).toMatchObject({ lines: [{ start_ms: 1000, end_ms: 2000 }] });
   });
 

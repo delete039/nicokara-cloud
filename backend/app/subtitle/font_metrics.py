@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import subprocess
+import struct
 
 from PIL import ImageFont
 
@@ -48,13 +50,13 @@ def font_candidates(font_name: str, *, bold: bool) -> list[str]:
 
 @lru_cache(maxsize=16)
 def _font(font_name: str, size: int, bold: bool):
-    candidates: list[str] = []
+    candidates: list[tuple[str, int]] = []
     try:
         result = subprocess.run(
             [
                 "fc-match",
                 "-f",
-                "%{file}",
+                "%{file}\n%{index}",
                 f"{font_name}:style={'Bold' if bold else 'Regular'}",
             ],
             check=True,
@@ -63,14 +65,79 @@ def _font(font_name: str, size: int, bold: bool):
             timeout=5,
         )
         if result.stdout.strip():
-            candidates.append(result.stdout.strip())
+            parts = result.stdout.strip().splitlines()
+            candidates.append((parts[0], int(parts[1]) & 0xFFFF if len(parts) > 1 else 0))
     except (OSError, subprocess.SubprocessError):
         pass
-    candidates.extend(font_candidates(font_name, bold=bold))
-    for candidate in candidates:
+    candidates.extend((path, 0) for path in font_candidates(font_name, bold=bold))
+    for candidate, index in candidates:
         if Path(candidate).is_file():
-            return ImageFont.truetype(candidate, size=size)
+            font = ImageFont.truetype(candidate, size=size, index=index)
+            try:
+                axes = font.get_variation_axes()
+                font.set_variation_by_axes([
+                    min(axis["maximum"], max(axis["minimum"], 700 if bold else 400))
+                    if axis["name"] == b"Weight" else axis["default"]
+                    for axis in axes
+                ])
+            except (OSError, AttributeError):
+                pass  # Static font, already selected by family and weight.
+            return font
     return ImageFont.truetype(font_name, size=size)
+
+
+@dataclass(frozen=True)
+class AssFontGeometry:
+    family: str
+    size_ratio: float
+    ascent: float
+    css_ascent: float
+    css_descent: float
+
+    def top_offset(self, size: float, line_height: float) -> float:
+        # DOM line box baseline minus libass's WinAscent top bearing.
+        return size * ((line_height + self.css_ascent - self.css_descent) / 2 - self.ascent)
+
+
+@lru_cache(maxsize=32)
+def ass_font_geometry(font_name: str, bold: bool = False) -> AssFontGeometry:
+    """Convert CSS em sizing to libass REAL_DIM sizing for the same font face.
+
+    Read only the small SFNT metrics tables; support both TTF/OTF and TTC.
+    libass uses OS/2 WinAscent/WinDescent, falling back to face metrics.
+    """
+    font = _font(font_name, 1000, bold)
+    with open(font.path, "rb") as source:
+        signature = source.read(4)
+        offset = 0
+        if signature == b"ttcf":
+            source.seek(12 + 4 * font.index)
+            offset = struct.unpack(">I", source.read(4))[0]
+        source.seek(offset + 4)
+        count = struct.unpack(">H", source.read(2))[0]
+        source.seek(offset + 12)
+        tables = {}
+        for _ in range(count):
+            tag, _, position, length = struct.unpack(">4sIII", source.read(16))
+            tables[tag] = (position, length)
+
+        def table(tag: bytes) -> bytes:
+            if tag not in tables:
+                return b""
+            position, length = tables[tag]
+            source.seek(position)
+            return source.read(min(length, 128))
+
+        head, hhea, os2 = table(b"head"), table(b"hhea"), table(b"OS/2")
+    em = struct.unpack_from(">H", head, 18)[0]
+    asc, desc = struct.unpack_from(">hh", hhea, 4)
+    win_asc, win_desc = asc, -desc
+    if len(os2) >= 78:
+        win_asc, win_desc = struct.unpack_from(">hh", os2, 74)
+        if win_asc + win_desc <= 0:
+            win_asc, win_desc = asc, -desc
+    return AssFontGeometry(font.getname()[0], (win_asc + win_desc) / em,
+                           win_asc / em, win_asc / em, win_desc / em)
 
 
 def text_measurer(

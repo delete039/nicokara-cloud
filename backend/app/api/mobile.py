@@ -577,10 +577,15 @@ async def queue_audio_job_for_cloud_render(
     video: UploadFile | None = File(default=None),
     timeline_review: str = Form(...),
     upload_ticket_id: str | None = Form(default=None),
+    vocal_mode: str | None = Form(default=None),
 ) -> JobResponse:
     async def close_video():
         if video is not None:
             await video.close()
+
+    if vocal_mode not in {None, "on", "off"}:
+        await close_video()
+        raise HTTPException(422, "请选择 ON VOCAL 或 OFF VOCAL。")
 
     settings, database = services(request)
     job = database.get_job(job_id)
@@ -601,8 +606,7 @@ async def queue_audio_job_for_cloud_render(
         if ticket["status"] != "UPLOADING":
             raise HTTPException(status_code=409, detail="上传会话状态已变化")
     if (
-        job.get("input_mode") != "AUDIO_ONLY"
-        or job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED", "COMPLETED"}
+        job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED", "COMPLETED"}
     ):
         await close_video()
         raise HTTPException(
@@ -705,6 +709,7 @@ async def queue_audio_job_for_cloud_render(
             ass_path=final_ass_path,
             expected_updated_at=job["updated_at"],
             upload_ticket_id=upload_ticket_id,
+            vocal_mode=vocal_mode,
         )
         if not queued:
             raise HTTPException(

@@ -199,6 +199,9 @@ class Database:
                 "timeline_path",
                 "ass_path",
                 "output_path",
+                "on_output_path",
+                "off_output_path",
+                "render_timeline_path",
                 "client_submission_id",
                 "input_mode",
                 "source_upload_size_bytes",
@@ -221,6 +224,13 @@ class Database:
                     connection.execute(
                         f"ALTER TABLE jobs ADD COLUMN {name} {definition}"
                     )
+            for mode in ("on", "off"):
+                connection.execute(
+                    f"UPDATE jobs SET {mode}_output_path = output_path "
+                    f"WHERE {mode}_output_path IS NULL AND output_path IS NOT NULL "
+                    "AND COALESCE(render_vocal_mode, vocal_mode, 'on') = ?",
+                    (mode,),
+                )
             upload_ticket_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -850,6 +860,7 @@ class Database:
         ass_path: Path | None = None,
         output_path: Path | None = None,
         render_vocal_mode: str | None = None,
+        vocal_mode: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
@@ -874,7 +885,8 @@ class Database:
             values.append(stage)
         elif stage == "RENDERING_VIDEO":
             assignments.append(
-                "resume_stage = CASE WHEN input_mode = 'AUDIO_ONLY' "
+                "resume_stage = CASE WHEN resume_stage = 'OFF_VOCAL_QUEUED' "
+                "THEN resume_stage WHEN input_mode = 'AUDIO_ONLY' "
                 "THEN 'CLOUD_RENDER_QUEUED' ELSE 'VIDEO_RENDER_QUEUED' END"
             )
         elif stage == "EXTRACTING_AUDIO":
@@ -883,6 +895,9 @@ class Database:
         if render_vocal_mode is not None:
             assignments.append("render_vocal_mode = ?")
             values.append(render_vocal_mode)
+        if vocal_mode is not None:
+            assignments.append("vocal_mode = ?")
+            values.append(vocal_mode)
         if audio_path is not None:
             assignments.append("audio_path = ?")
             values.append(str(audio_path))
@@ -901,6 +916,13 @@ class Database:
         if output_path is not None:
             assignments.append("output_path = ?")
             values.append(str(output_path))
+            if status == "COMPLETED":
+                for mode in ("on", "off"):
+                    assignments.append(
+                        f"{mode}_output_path = CASE WHEN COALESCE(?, render_vocal_mode, vocal_mode, 'on') = ? "
+                        f"THEN ? ELSE {mode}_output_path END"
+                    )
+                    values.extend([render_vocal_mode, mode, str(output_path)])
         values.append(job_id)
 
         check_interrupted()
@@ -972,6 +994,26 @@ class Database:
                 details={"status": status},
             )
 
+    def queue_off_vocal(self, job_id: str, *, audio_only: bool = False) -> dict | None:
+        """Reserve a new operation on the existing job, retaining all artifacts."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job or job["status"] not in {"COMPLETED", "SUBTITLE_GENERATED", "ALIGNED"} or (not audio_only and job["vocal_mode"] != "on"):
+                return None
+            self._check_job_admission(connection)
+            connection.execute(
+                """UPDATE jobs SET status = 'UPLOADED', stage = ?,
+                   resume_stage = ?, progress = 0,
+                   error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?""",
+                ("INSTRUMENTAL_QUEUED" if audio_only else "OFF_VOCAL_QUEUED",
+                 "INSTRUMENTAL_QUEUED" if audio_only else "OFF_VOCAL_QUEUED", utc_now(), job_id),
+            )
+        self.record_event_log(level="INFO", category="task", event="job.off_vocal_queued",
+                              message="复用原任务生成 OFF VOCAL，保留现有字幕与时间轴。",
+                              reference_type="job", reference_id=job_id)
+        return self.get_job(job_id)
+
     def queue_cloud_render(
         self,
         job_id: str,
@@ -983,6 +1025,7 @@ class Database:
         ass_path: Path,
         expected_updated_at: str,
         upload_ticket_id: str | None = None,
+        vocal_mode: str | None = None,
     ) -> bool:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -999,23 +1042,23 @@ class Database:
                 SET status = 'UPLOADED',
                     stage = 'CLOUD_RENDER_QUEUED',
                     resume_stage = 'CLOUD_RENDER_QUEUED',
-                    render_vocal_mode = vocal_mode,
+                    render_vocal_mode = COALESCE(?, vocal_mode),
                     progress = 10,
                     video_path = ?,
                     video_size_bytes = ?,
                     video_sha256 = ?,
-                    timeline_path = ?,
+                    render_timeline_path = ?,
                     ass_path = ?,
                     output_path = NULL,
                     error_code = NULL,
                     error_message = NULL,
                     updated_at = ?
                 WHERE id = ?
-                  AND input_mode = 'AUDIO_ONLY'
                   AND status IN ('ALIGNED', 'SUBTITLE_GENERATED', 'COMPLETED')
                   AND updated_at = ?
                 """,
                 (
+                    vocal_mode,
                     str(video_path),
                     video_size_bytes,
                     video_sha256,
@@ -1119,6 +1162,10 @@ class Database:
                     timeline_path = NULL,
                     ass_path = NULL,
                     output_path = NULL,
+                    on_output_path = NULL,
+                    off_output_path = NULL,
+                    render_timeline_path = NULL,
+                    render_vocal_mode = NULL,
                     error_code = NULL,
                     error_message = NULL,
                     updated_at = ?

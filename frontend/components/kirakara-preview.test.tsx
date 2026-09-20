@@ -127,7 +127,11 @@ describe("KirakaraPreview", () => {
       <preview.KirakaraPreview jobId="job-export-panel" expectedVideoName="song.mp4" />,
     );
 
-    expect(html).toMatch(/data-kirakara-export-panel="true"[^>]+lg:col-span-2 lg:row-start-3/);
+    // The export section follows the workbench rather than depending on its
+    // two-column grid, so it remains available when no local video is selected.
+    expect(html).toContain('</div></div><section data-kirakara-export-panel="true"');
+    expect(html.indexOf('data-kirakara-export-panel="true"'))
+      .toBeGreaterThan(html.indexOf('data-kirakara-timeline-panel="true"'));
   });
 });
 

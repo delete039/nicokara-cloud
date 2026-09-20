@@ -1022,7 +1022,9 @@ def test_reviewed_ass_export_uses_current_timing_and_style(tmp_path: Path) -> No
     assert response.status_code == 200
     content = response.content.decode("utf-8-sig")
     assert "Dialogue: 3,0:00:02.00" in content
-    assert "Style: KirakaraBase,Noto Sans CJK JP,105" in content
+    from app.subtitle.font_metrics import ass_font_geometry
+    geometry = ass_font_geometry("Noto Sans CJK JP", True)
+    assert f"Style: KirakaraBase,{geometry.family},{round(105 * geometry.size_ratio, 4)}" in content
     assert "&H00332211" in content
     assert "lyrics.reviewed.ass" in response.headers["content-disposition"]
 

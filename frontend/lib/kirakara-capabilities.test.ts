@@ -14,6 +14,7 @@ describe("detectKirakaraCapabilities", () => {
         },
         VideoDecoder: class {},
         VideoFrame: class {},
+        AudioEncoder: { isConfigSupported: vi.fn().mockResolvedValue({ supported: true }) },
       },
       true,
     );
@@ -37,6 +38,18 @@ describe("detectKirakaraCapabilities", () => {
       reason: "WEBCODECS_UNAVAILABLE",
       profile: null,
     });
+  });
+
+  it("does not advertise compatible MP4 export without an AAC encoder", async () => {
+    const capabilities = await detectKirakaraCapabilities({
+      VideoEncoder: { isConfigSupported: vi.fn().mockResolvedValue({ supported: true }) },
+      VideoDecoder: class {},
+      VideoFrame: class {},
+      AudioEncoder: { isConfigSupported: vi.fn().mockResolvedValue({ supported: false }) },
+    });
+    expect(capabilities.export).toBe(false);
+    expect(capabilities.reason).toBe("AAC_UNSUPPORTED");
+    expect(kirakaraSupportMessage(capabilities)).toContain("AAC");
   });
 
   it("explains supported browsers and the cloud fallback when export is unavailable", () => {

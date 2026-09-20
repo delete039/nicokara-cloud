@@ -3,6 +3,7 @@ import {
   BlobSource,
   BufferTarget,
   Conversion,
+  canEncodeAudio,
   Input,
   Mp4OutputFormat,
   Output,
@@ -14,6 +15,7 @@ import {
 
 import type { BrowserFileDestination } from "./browser-file-destination";
 import type { KirakaraExportProfile } from "./kirakara-capabilities";
+import { KIRAKARA_AAC_PROFILE } from "./kirakara-capabilities";
 import {
   drawKirakaraFrame,
   type KirakaraCanvasContext,
@@ -166,10 +168,20 @@ async function primaryVideoDuration(file: File): Promise<number> {
   }
 }
 
+async function audioCodecs(file: File): Promise<Array<string | null>> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  try {
+    return await Promise.all((await input.getAudioTracks()).map((track) => track.getCodec()));
+  } finally {
+    input.dispose();
+  }
+}
+
 export async function validateKirakaraVideoOutput(
   source: File,
   output: File,
   durationProbe: (file: File) => Promise<number> = primaryVideoDuration,
+  audioCodecProbe: (file: File) => Promise<Array<string | null>> = audioCodecs,
 ): Promise<void> {
   await assertStandardMp4(output);
   const [sourceDuration, outputDuration] = await Promise.all([
@@ -190,6 +202,10 @@ export async function validateKirakaraVideoOutput(
       `导出视频时长校验失败：源视频 ${sourceDuration.toFixed(1)} 秒，` +
       `导出结果 ${outputDuration.toFixed(1)} 秒`,
     );
+  }
+  const codecs = await audioCodecProbe(output);
+  if (codecs.length === 0 || codecs.some((codec) => codec !== "aac")) {
+    throw new Error("导出结果缺少兼容的 AAC 音轨，请改用云端导出；不会提供 PCM/ipcm 视频。");
   }
 }
 
@@ -224,6 +240,20 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
     signal,
   }) {
     ensureNotAborted(signal);
+    if (!await canEncodeAudio("aac", {
+      sampleRate: KIRAKARA_AAC_PROFILE.sampleRate,
+      numberOfChannels: KIRAKARA_AAC_PROFILE.numberOfChannels,
+      bitrate: KIRAKARA_AAC_PROFILE.bitrate,
+    })) {
+      throw new Error("当前浏览器无法编码 AAC 音轨，请使用云端导出。");
+    }
+    const audioOptions = {
+      codec: "aac" as const,
+      sampleRate: KIRAKARA_AAC_PROFILE.sampleRate,
+      numberOfChannels: KIRAKARA_AAC_PROFILE.numberOfChannels,
+      quality: new Quality({ bitrate: KIRAKARA_AAC_PROFILE.bitrate }),
+      forceTranscode: true,
+    };
     const canvas = document.createElement("canvas");
     canvas.width = profile.width;
     canvas.height = profile.height;
@@ -259,7 +289,7 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
           return canvas;
         },
       },
-      audio: replacementAudio ? { discard: true } : {},
+      audio: replacementAudio ? { discard: true } : audioOptions,
       showWarnings: false,
     };
     const videoConversion = await Conversion.init(
@@ -280,7 +310,7 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
           output,
           tracks: "primary",
           video: { discard: true },
-          audio: {},
+          audio: audioOptions,
           showWarnings: false,
         }))
       : null;
@@ -299,10 +329,11 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
       );
     }
     if (
-      audioConversion &&
-      !audioConversion.utilizedTracks.some((track) => track.type === "audio")
+      !(audioConversion ?? videoConversion).utilizedTracks.some((track) => track.type === "audio")
     ) {
-      throw new Error("当前浏览器无法编码云端伴奏音轨");
+      throw new Error(replacementAudio
+        ? "当前浏览器无法将伴奏编码为 AAC 音轨，请使用云端导出。"
+        : "当前浏览器无法读取原音轨或将其编码为 AAC，请检查素材或使用云端导出。");
     }
 
     videoConversion.onProgress = (progress) => onProgress(progress);

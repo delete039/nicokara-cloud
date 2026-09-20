@@ -8,7 +8,7 @@ import type { KirakaraExportProfile } from "@/lib/kirakara-capabilities";
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
 import type { KirakaraStyle } from "@/lib/kirakara-style";
 import { exportKirakaraVideo } from "@/lib/kirakara-video-export";
-import { getInstrumentalAudio } from "@/services/api";
+import { getOrPrepareInstrumentalAudio } from "@/services/api";
 
 type ExportState = "idle" | "exporting" | "completed" | "error";
 type ExportPhase = "audio" | "rendering" | "validating";
@@ -19,7 +19,7 @@ export async function resolveExportAudio(
   loader: (
     jobId: string,
     signal?: AbortSignal,
-  ) => Promise<File> = getInstrumentalAudio,
+  ) => Promise<File> = getOrPrepareInstrumentalAudio,
   signal?: AbortSignal,
 ): Promise<File | undefined> {
   return vocalMode === "off" ? loader(jobId, signal) : undefined;
@@ -32,6 +32,7 @@ export function KirakaraExportControls({
   style,
   jobId = "",
   vocalMode = "on",
+  disabled = false,
 }: {
   video: File;
   timeline: KirakaraTimeline;
@@ -39,6 +40,7 @@ export function KirakaraExportControls({
   style?: KirakaraStyle;
   jobId?: string;
   vocalMode?: string;
+  disabled?: boolean;
 }) {
   const abortController = useRef<AbortController | null>(null);
   const [state, setState] = useState<ExportState>("idle");
@@ -56,6 +58,7 @@ export function KirakaraExportControls({
   }, [outputUrl]);
 
   async function startExport() {
+    if (abortController.current || disabled) return;
     const controller = new AbortController();
     abortController.current = controller;
     setState("exporting");
@@ -67,13 +70,13 @@ export function KirakaraExportControls({
       setOutputUrl(null);
     }
 
-    const suggestedName = `${video.name.replace(/\.mp4$/i, "") || "nicokara"}.nicokara.mp4`;
+    const suggestedName = `${video.name.replace(/\.mp4$/i, "") || "nicokara"}.${vocalMode === "off" ? "off-vocal" : "on-vocal"}.nicokara.mp4`;
     try {
       const destination = await createBrowserFileDestination(suggestedName);
       const replacementAudio = await resolveExportAudio(
         jobId,
         vocalMode,
-        getInstrumentalAudio,
+        getOrPrepareInstrumentalAudio,
         controller.signal,
       );
       setPhase("rendering");
@@ -88,7 +91,7 @@ export function KirakaraExportControls({
         onProgress: setProgress,
         onValidationStart: () => setPhase("validating"),
       });
-      setOutputName(result.fileName);
+      setOutputName(suggestedName);
       setStreamed(result.streamed);
       if (result.file) setOutputUrl(URL.createObjectURL(result.file));
       setState("completed");
@@ -112,7 +115,9 @@ export function KirakaraExportControls({
           <button
             type="button"
             onClick={startExport}
-            className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground"
+            disabled={disabled}
+            aria-label={`本地导出 ${vocalMode === "off" ? "OFF VOCAL" : "ON VOCAL"}`}
+            className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
             <Download className="size-4" />
             {state === "error" ? "重新导出" : "导出本地视频"}
@@ -149,7 +154,7 @@ export function KirakaraExportControls({
             <span className="flex items-center gap-2">
               <LoaderCircle className="size-4 animate-spin" />
               {phase === "audio"
-                ? "正在下载云端伴奏"
+                ? "正在准备或下载 OFF VOCAL 伴奏"
                 : phase === "validating"
                   ? "正在校验输出视频"
                   : "正在本地渲染视频"}

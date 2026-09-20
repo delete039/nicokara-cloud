@@ -234,15 +234,21 @@ export function PlaybackRateNotice({ rate }: { rate: number | null }) {
 export function KirakaraPreview({
   jobId,
   expectedVideoName,
-  vocalMode = "on",
   hasCloudResult = false,
+  exportDisabled = false,
+  availableModes = [],
+  resultVersion,
+  job,
   onCloudRenderQueued = () => undefined,
   onVideoElementChange,
 }: {
   jobId: string;
   expectedVideoName: string;
-  vocalMode?: string;
   hasCloudResult?: boolean;
+  exportDisabled?: boolean;
+  availableModes?: Array<"on" | "off">;
+  resultVersion?: string;
+  job?: Job;
   onCloudRenderQueued?: (job: Job) => void;
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
@@ -921,6 +927,7 @@ export function KirakaraPreview({
                 <KirakaraReviewEditor
                   key={jobId}
                   timeline={timeline}
+                  audioSource={video}
                   editingLineIndex={editingLineIndex}
                   previewLeadMs={previewLeadMs}
                   shortcutBindings={shortcutBindings}
@@ -1057,10 +1064,12 @@ export function KirakaraPreview({
             )}
           </div>
 
+        </div>
+      )}
           <section
             data-kirakara-export-panel="true"
             aria-labelledby="kirakara-export-heading"
-            className={`min-w-0 lg:col-span-2 lg:row-start-3 ${
+            className={`mt-4 min-w-0 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -1076,6 +1085,7 @@ export function KirakaraPreview({
                   timeline={timeline}
                   style={style}
                 />
+                  {exportDisabled && <p className="text-sm text-muted-foreground">服务器正在处理当前导出，完成后可继续导出其他版本。当前编辑结果会继续保留。</p>}
                   {capabilities ? (
                     <KirakaraRenderActions
                       capabilities={capabilities}
@@ -1083,7 +1093,10 @@ export function KirakaraPreview({
                       timeline={timeline}
                       style={style}
                       jobId={jobId}
-                      vocalMode={vocalMode}
+                      disabled={exportDisabled}
+                      availableModes={availableModes}
+                      resultVersion={resultVersion}
+                      job={job}
                       rerender={hasCloudResult}
                       onCloudRenderQueued={onCloudRenderQueued}
                     />
@@ -1094,14 +1107,30 @@ export function KirakaraPreview({
               </>
             )}
           </section>
-        </div>
-      )}
 
       {(timelineError || selectionWarning) && (
         <p className="mt-3 text-sm text-destructive" role="alert">
           {timelineError ?? selectionWarning}
         </p>
       )}
+
+      <aside className="mt-6 border-t pt-4 text-sm leading-relaxed text-muted-foreground" aria-labelledby="kirakara-acknowledgements-heading">
+        <h3 id="kirakara-acknowledgements-heading" className="font-semibold text-foreground">特别鸣谢</h3>
+        <ul className="mt-2 list-disc space-y-2 break-words pl-5 [&_a]:font-semibold [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4">
+          <li>
+            <a className="focus-ring rounded-sm" href="https://github.com/FMPeach" target="_blank" rel="noopener noreferrer">FMPeach</a>
+            开发的
+            <a className="focus-ring rounded-sm" href="https://github.com/FMPeach/Kirakara-Player" target="_blank" rel="noopener noreferrer">Kirakara-Player</a>
+            。本项目的字幕预览、样式配置与渲染适配参考了该项目。
+          </li>
+          <li>
+            <a className="focus-ring rounded-sm" href="https://github.com/moriwx" target="_blank" rel="noopener noreferrer">moriwx</a>
+            开发的
+            <a className="focus-ring rounded-sm" href="https://github.com/moriwx/FA-Kara" target="_blank" rel="noopener noreferrer">FA-Kara</a>
+            。本项目的歌词发音标记、非静音处理与 MMS 强制对齐参考并适配了该项目。
+          </li>
+        </ul>
+      </aside>
     </section>
   );
 }

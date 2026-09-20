@@ -7,6 +7,15 @@ from app.alignment.models import (
     LyricTimeline,
 )
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
+from app.subtitle.font_metrics import ass_font_geometry
+
+
+def main_y(top: float) -> str:
+    return f"{top + ass_font_geometry('Noto Sans CJK JP', True).top_offset(96, 1.2):g}"
+
+
+def ruby_y(top: float) -> str:
+    return f"{top - 39 * 1.1 - 6 + ass_font_geometry('Noto Sans CJK JP').top_offset(39, 1.1):g}"
 
 
 def lyric_line(
@@ -80,19 +89,19 @@ def test_kirakara_generator_uses_alternating_upper_left_and_lower_right_slots() 
     ]
     assert any(
         event.startswith("Dialogue: 1,0:00:00.83,0:00:08.00")
-        and r",645)" in event
+        and f",{main_y(645)})" in event
         and event.endswith("今")
         for event in base_events
     )
     assert any(
         event.startswith("Dialogue: 1,0:00:00.83,0:00:12.00")
-        and r",845)" in event
+        and f",{main_y(844.5)})" in event
         and event.endswith("歌")
         for event in base_events
     )
     assert any(
         event.startswith("Dialogue: 1,0:00:08.00,0:00:16.00")
-        and r",645)" in event
+        and f",{main_y(645)})" in event
         and event.endswith("明")
         for event in base_events
     )
@@ -190,7 +199,7 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
     assert config.font_name == "Yu Gothic"
     assert config.base_font_size == 108
     assert config.base_font_bold is False
-    assert config.base_letter_spacing == 5
+    assert config.base_letter_spacing == 4.5
     assert config.ruby_font_size == 45
     assert config.ruby_letter_spacing == 3
     assert config.ruby_offset == 12
@@ -305,7 +314,7 @@ def test_kirakara_generator_clips_sung_fill_and_outline_continuously() -> None:
     assert r"\t(0,1000,\clip(" in progress_event
     assert r"\kf" not in progress_event
     assert "&H00000000" in progress_style
-    assert ",14,0,1,8,0,7," in progress_style
+    assert ",13.5,0,1,8.25,0,7," in progress_style
 
 
 def test_kirakara_generator_isolates_wide_ruby_and_shifts_following_text(
@@ -344,16 +353,15 @@ def test_kirakara_generator_isolates_wide_ruby_and_shifts_following_text(
     ]
 
     # Upstream Kirakara isolates a ruby group to max(base width, ruby width).
-    # 4 * 39 + 3 * 8 = 180, so the 96 px base glyph is centered in that
-    # group and the following glyph starts after 180 + 14 px.
+    # 4 * 39 + 3 * 7.5 = 178.5, with unrounded browser letter spacing.
     assert len(base_events) == 2
-    assert r"\pos(234,645)" in base_events[0]
+    assert rf"\pos(233.25,{main_y(645)})" in base_events[0]
     assert base_events[0].endswith("生")
-    assert r"\pos(386,645)" in base_events[1]
+    assert rf"\pos(384,{main_y(645)})" in base_events[1]
     assert base_events[1].endswith("き")
     assert len(ruby_events) == 4
-    assert r"\pos(192,600)" in ruby_events[0]
-    assert r"\pos(333,600)" in ruby_events[-1]
+    assert rf"\pos(192,{ruby_y(645)})" in ruby_events[0]
+    assert rf"\pos(331.5,{ruby_y(645)})" in ruby_events[-1]
 
 
 def test_kirakara_generator_preserves_mora_timing_when_counts_differ() -> None:
@@ -478,20 +486,20 @@ def test_kirakara_generator_uses_paragraph_relative_slots_and_lifecycle() -> Non
 
     # Upstream: 666 ms fade + 500 ms pause + 3 s indicator, then 2 s exit hold.
     assert by_character["A"].startswith("Dialogue: 1,0:00:05.83,0:00:13.00")
-    assert r",645)" in by_character["A"]
+    assert f",{main_y(645)})" in by_character["A"]
     assert r"\fad(666,0)" in by_character["A"]
     assert by_character["B"].startswith("Dialogue: 1,0:00:05.83,0:00:17.00")
-    assert r",845)" in by_character["B"]
+    assert f",{main_y(844.5)})" in by_character["B"]
     assert r"\fad(666,0)" in by_character["B"]
     assert by_character["C"].startswith("Dialogue: 1,0:00:13.00,0:00:21.00")
     assert r"\fad(0,666)" in by_character["C"]
 
     # A new paragraph resets to the upper slot, independent of global line index.
     assert by_character["D"].startswith("Dialogue: 1,0:00:25.83,0:00:34.00")
-    assert r",645)" in by_character["D"]
+    assert f",{main_y(645)})" in by_character["D"]
     assert r"\fad(666,0)" in by_character["D"]
     assert by_character["E"].startswith("Dialogue: 1,0:00:25.83,0:00:37.00")
-    assert r",845)" in by_character["E"]
+    assert f",{main_y(844.5)})" in by_character["E"]
     assert r"\fad(666,666)" in by_character["E"]
 
 

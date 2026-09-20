@@ -1098,6 +1098,25 @@ export async function getInstrumentalAudio(
   throw connectionError("job");
 }
 
+export async function getOrPrepareInstrumentalAudio(jobId: string, signal?: AbortSignal): Promise<File> {
+  assertUploadActive(signal);
+  const response = await uploadFetch(`${API_BASE}/jobs/${jobId}/off-vocal?audio_only=true`, {
+    method: "POST", cache: "no-store",
+  }, signal);
+  let job = await checkedJson<Job>(response, "job");
+  const deadline = Date.now() + 60 * 60 * 1000;
+  while (!job.instrumental_ready) {
+    if (job.status === "FAILED" || job.status === "CANCELED") {
+      throw new Error(job.error_message || "伴奏准备未完成，请在任务页重试后再次导出。");
+    }
+    if (Date.now() >= deadline) throw new Error("等待伴奏超时。后台任务仍会继续，可稍后回到此页导出。");
+    await wait(1500, signal);
+    const next = await uploadFetch(`${API_BASE}/jobs/${jobId}`, { cache: "no-store" }, signal);
+    job = await checkedJson<Job>(next, "job");
+  }
+  return getInstrumentalAudio(jobId, signal);
+}
+
 export async function submitCloudRender(
   jobId: string,
   video: File,
@@ -1105,13 +1124,15 @@ export async function submitCloudRender(
   onProgress: (progress: number) => void,
   signal?: AbortSignal,
   onQueueUpdate?: (ticket: UploadTicket) => void,
+  vocalMode?: "on" | "off",
 ): Promise<Job> {
   assertUploadActive(signal);
-  const submission = uploadSubmissionId(videoUploadStorageKey({ video, lyricsText: JSON.stringify(review) }, `cloud-${jobId}`));
+  const submission = uploadSubmissionId(videoUploadStorageKey({ video, lyricsText: JSON.stringify(review) }, `cloud-${jobId}-${vocalMode ?? "default"}`));
   const ticket = await uploadVideoParts({ video }, submission, onProgress, onQueueUpdate, signal);
   const data = new FormData();
   data.append("upload_ticket_id", ticket.id);
   data.append("timeline_review", JSON.stringify(review));
+  if (vocalMode) data.append("vocal_mode", vocalMode);
   const deadline = Date.now() + UPLOAD_RECOVERY_TIMEOUT_MS;
   while (true) {
     try {
@@ -1158,9 +1179,17 @@ export async function cancelJob(jobId: string): Promise<Job> {
 }
 
 export async function retryJob(jobId: string): Promise<Job> {
+  return postJobAction(jobId, "retry");
+}
+
+export async function generateOffVocal(jobId: string): Promise<Job> {
+  return postJobAction(jobId, "off-vocal");
+}
+
+async function postJobAction(jobId: string, action: "retry" | "off-vocal"): Promise<Job> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/jobs/${jobId}/retry`, {
+    response = await fetch(`${API_BASE}/jobs/${jobId}/${action}`, {
       method: "POST",
       cache: "no-store",
     });
@@ -1200,10 +1229,12 @@ function versionedResultUrl(path: string, version?: string): string {
   return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 
-export function resultVideoUrl(jobId: string, version?: string): string {
-  return versionedResultUrl(`${API_BASE}/jobs/${jobId}/result`, version);
+export function resultVideoUrl(jobId: string, version?: string, vocalMode?: "on" | "off"): string {
+  const url = versionedResultUrl(`${API_BASE}/jobs/${jobId}/result`, version);
+  return vocalMode ? `${url}${version ? "&" : "?"}vocal_mode=${vocalMode}` : url;
 }
 
-export function downloadVideoUrl(jobId: string, version?: string): string {
-  return versionedResultUrl(`${API_BASE}/jobs/${jobId}/download`, version);
+export function downloadVideoUrl(jobId: string, version?: string, vocalMode?: "on" | "off"): string {
+  const url = versionedResultUrl(`${API_BASE}/jobs/${jobId}/download`, version);
+  return vocalMode ? `${url}${version ? "&" : "?"}vocal_mode=${vocalMode}` : url;
 }

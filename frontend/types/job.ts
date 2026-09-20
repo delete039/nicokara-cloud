@@ -14,6 +14,12 @@ export type Job = {
     | "reviewed_subtitle"
     | null;
   vocal_mode?: "on" | "off";
+  off_vocal_conversion?: boolean;
+  instrumental_ready?: boolean;
+  has_timeline?: boolean;
+  render_pending?: boolean;
+  available_vocal_modes?: Array<"on" | "off">;
+  render_vocal_mode?: "on" | "off" | null;
   client_submission_id?: string | null;
   input_mode?: "VIDEO" | "AUDIO_ONLY";
   source_upload_size_bytes?: number | null;

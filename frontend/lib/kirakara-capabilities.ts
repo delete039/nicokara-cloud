@@ -9,7 +9,7 @@ export type KirakaraExportProfile = {
 export type KirakaraCapabilities = {
   preview: true;
   export: boolean;
-  reason?: "WEBCODECS_UNAVAILABLE" | "H264_UNSUPPORTED";
+  reason?: "WEBCODECS_UNAVAILABLE" | "H264_UNSUPPORTED" | "AAC_UNSUPPORTED";
   profile: KirakaraExportProfile | null;
 };
 
@@ -21,7 +21,14 @@ type WebCodecsScope = {
   };
   VideoDecoder?: unknown;
   VideoFrame?: unknown;
+  AudioEncoder?: {
+    isConfigSupported?: (config: typeof KIRAKARA_AAC_PROFILE) => Promise<{ supported?: boolean }>;
+  };
 };
+
+export const KIRAKARA_AAC_PROFILE = Object.freeze({
+  codec: "mp4a.40.2", sampleRate: 48_000, numberOfChannels: 2, bitrate: 192_000,
+});
 
 export async function detectKirakaraCapabilities(
   scope: WebCodecsScope = globalThis as WebCodecsScope,
@@ -57,6 +64,13 @@ export async function detectKirakaraCapabilities(
         bitrate: 8_000_000,
       };
   const result = await encoder.isConfigSupported(profile);
+  if (result.supported) {
+    const audio = await scope.AudioEncoder?.isConfigSupported?.(KIRAKARA_AAC_PROFILE)
+      .catch(() => ({ supported: false }));
+    if (!audio?.supported) {
+      return { preview: true, export: false, reason: "AAC_UNSUPPORTED", profile: null };
+    }
+  }
   return result.supported
     ? { preview: true, export: true, profile }
     : {
@@ -73,7 +87,9 @@ export function kirakaraSupportMessage(
   if (capabilities.export) {
     return "本地导出能力检测通过；推荐使用最新版桌面 Chrome 或 Edge。";
   }
-  const reason = capabilities.reason === "H264_UNSUPPORTED"
+  const reason = capabilities.reason === "AAC_UNSUPPORTED"
+    ? "当前浏览器无法编码兼容播放器的 AAC 音轨。"
+    : capabilities.reason === "H264_UNSUPPORTED"
     ? "当前设备无法使用所需的 H.264 编码配置。"
     : "当前浏览器未开放完整的 WebCodecs 视频编解码能力。";
   return `${reason} 推荐最新版桌面 Chrome 或 Edge、Android Chrome；Safari 和 iOS 的实际能力取决于系统版本。你仍可点击云端渲染，由服务器完成视频嵌字。`;

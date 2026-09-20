@@ -4,8 +4,6 @@ import {
   CheckCircle2,
   FileText,
   Film,
-  Mic,
-  MicOff,
   Sparkles,
   Upload,
   Pause,
@@ -80,7 +78,6 @@ export function UploadForm() {
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
   const [reviewedArtifacts, setReviewedArtifacts] =
     useState<ReviewedArtifactInspection | null>(null);
-  const [vocalMode, setVocalMode] = useState("on");
   const [uploading, setUploading] = useState(false);
   const [uploadPaused, setUploadPaused] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
@@ -253,7 +250,7 @@ export function UploadForm() {
         lyricsText,
         lyricsFile: lyricsFile ?? undefined,
         projectFiles: reviewedArtifacts?.files,
-        vocalMode,
+        vocalMode: "on",
       };
       const job = useAudioOnly
         ? await submitMobileJob(
@@ -546,42 +543,9 @@ export function UploadForm() {
         </div>
       </section>
 
-      <section aria-labelledby="vocal-heading">
-        <h2 id="vocal-heading" className="mb-3 text-lg font-semibold">
-          {UPLOAD_COPY.vocalSectionTitle}
-        </h2>
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={() => setVocalMode("on")}
-            className={`focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium transition ${
-              vocalMode === "on"
-                ? "border-primary bg-primary/10 text-primary"
-                : "border bg-card text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            <Mic className="size-4" />
-            {UPLOAD_COPY.vocalOnLabel}
-          </button>
-          <button
-            type="button"
-            onClick={() => setVocalMode("off")}
-            className={`focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium transition ${
-              vocalMode === "off"
-                ? "border-primary bg-primary/10 text-primary"
-                : "border bg-card text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            <MicOff className="size-4" />
-            {UPLOAD_COPY.vocalOffLabel}
-          </button>
-        </div>
-        {vocalMode === "off" && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {UPLOAD_COPY.offVocalHint}
-          </p>
-        )}
-      </section>
+      <p className="text-sm text-muted-foreground">
+        生成后可分别导出 ON VOCAL 和 OFF VOCAL，两种版本共用注音、时间轴与字幕样式，并支持本地或云端导出。
+      </p>
 
       {error && (
         <ErrorFeedbackPanel

@@ -8,6 +8,11 @@ vi.mock("next/navigation", () => ({
 import { UploadForm } from "./upload-form";
 
 describe("UploadForm", () => {
+  it("uses one submission entry instead of choosing the vocal mode at upload", () => {
+    const html = renderToStaticMarkup(<UploadForm />);
+    expect(html).not.toContain('id="vocal-heading"');
+    expect(html).toContain("生成后可分别导出 ON VOCAL 和 OFF VOCAL");
+  });
   it("shows that MP4 videos can be dragged onto the upload area", () => {
     const html = renderToStaticMarkup(<UploadForm />);
 

@@ -88,6 +88,30 @@ class TranscriptionPipeline:
             or StructuredEventLogger(database=database)
         )
 
+    def _ensure_instrumental(self, job_id: str, run_id: str, source: Path) -> Path:
+        job_dir = source.parent
+        target = job_dir / "audio_instrumental.wav"
+        with self.event_logger.stage(job_id=job_id, run_id=run_id, stage="REMOVING_VOCALS",
+                                     component="uvr", message="准备 OFF VOCAL 伴奏") as trace:
+            cached = target.is_file() and target.stat().st_size > 0
+            if not cached:
+                if self.vocal_remover is None:
+                    raise RuntimeError("Vocal separation is unavailable")
+                stereo = job_dir / "off_vocal_stereo.wav"
+                temporary = job_dir / "off_vocal_instrumental.wav"
+                try:
+                    self.extractor.extract_stereo(source, stereo)
+                    self.vocal_remover.remove_vocals(stereo, temporary)
+                    check_interrupted()
+                    if not temporary.is_file() or temporary.stat().st_size == 0:
+                        raise RuntimeError("Vocal separation produced no instrumental audio")
+                    temporary.replace(target)
+                finally:
+                    stereo.unlink(missing_ok=True)
+                    temporary.unlink(missing_ok=True)
+            trace.result(reused_instrumental=cached, output_size_bytes=self._file_size(target))
+        return target
+
     def process(self, job_id: str) -> None:
         check_interrupted()
         job = self.database.get_job(job_id)
@@ -130,7 +154,8 @@ class TranscriptionPipeline:
         lyrics_processed_path = job_dir / "lyrics_processed.json"
         timeline_path = job_dir / "timeline.json"
         if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
-            timeline_path = Path(job["timeline_path"]) if job.get("timeline_path") else timeline_path
+            render_timeline = job.get("render_timeline_path") or job.get("timeline_path")
+            timeline_path = Path(render_timeline) if render_timeline else timeline_path
         imported_lyrics_path = job_dir / "imported_lyrics_processed.json"
         imported_timeline_path = job_dir / "imported_timeline.json"
         imported_ass_path = job_dir / "imported_subtitle.ass"
@@ -140,10 +165,37 @@ class TranscriptionPipeline:
             else job_dir / "lyrics.ass"
         )
         output_path = job_dir / "final_karaoke.mp4"
+        if job.get("on_output_path") or job.get("off_output_path"):
+            output_path = job_dir / f"final_karaoke-{uuid4().hex}.mp4"
 
         stage = "EXTRACTING_AUDIO"
         resumed_stage: list[str] | None = None
         try:
+            if job.get("stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"}:
+                stage = "REMOVING_VOCALS"
+                self.database.update_job_state(job_id, status="PROCESSING", stage=stage, progress=20)
+                self._ensure_instrumental(job_id, run_id, video_path)
+                if job.get("stage") == "INSTRUMENTAL_QUEUED":
+                    self.database.update_job_state(
+                        job_id, status="COMPLETED" if job.get("output_path") else "SUBTITLE_GENERATED",
+                        stage="INSTRUMENTAL_COMPLETE", progress=100,
+                    )
+                    return
+                off_output = None
+                if job.get("output_path"):
+                    stage = "RENDERING_VIDEO"
+                    self.database.update_job_state(job_id, status="PROCESSING", stage=stage, progress=80)
+                    off_output = job_dir / f"final_karaoke_off-{uuid4().hex}.mp4"
+                    with self.event_logger.stage(job_id=job_id, run_id=run_id, stage=stage, component="ffmpeg",
+                                                 message="替换伴奏音轨，保留原视频画面与字幕"):
+                        self.video_renderer.replace_audio(Path(job["output_path"]), instrumental_path, off_output)
+                    output_path = off_output
+                self.database.update_job_state(
+                    job_id, status="COMPLETED" if off_output else "SUBTITLE_GENERATED",
+                    stage="OFF_VOCAL_COMPLETE", progress=100,
+                    output_path=off_output, vocal_mode="off", render_vocal_mode="off",
+                )
+                return
             if job.get("stage") == "ALIGNMENT_QUEUED":
                 resumed_stage = ["ALIGNING"]
                 self._resume_reviewed_alignment(
@@ -162,8 +214,13 @@ class TranscriptionPipeline:
                 )
                 return
             if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
-                stage = "RENDERING_VIDEO"
                 vocal_mode = job.get("render_vocal_mode") or job.get("vocal_mode", "on")
+                if vocal_mode == "off":
+                    stage = "REMOVING_VOCALS"
+                    self.database.update_job_state(job_id, status="PROCESSING", stage=stage, progress=20)
+                    self._ensure_instrumental(job_id, run_id, video_path)
+                stage = "RENDERING_VIDEO"
+                output_path = job_dir / f"final_karaoke_{vocal_mode}-{uuid4().hex}.mp4"
                 if self.video_renderer is None or not ass_path.is_file():
                     raise RuntimeError("Kirakara cloud renderer is unavailable")
                 self.database.update_job_state(
@@ -172,7 +229,6 @@ class TranscriptionPipeline:
                     stage=stage,
                     progress=50,
                     render_vocal_mode=vocal_mode,
-                    timeline_path=timeline_path if timeline_path.exists() else None,
                     ass_path=ass_path,
                 )
                 with self.event_logger.stage(
@@ -213,7 +269,6 @@ class TranscriptionPipeline:
                     status="COMPLETED",
                     stage="VIDEO_RENDERING_COMPLETE",
                     progress=100,
-                    timeline_path=timeline_path if timeline_path.exists() else None,
                     ass_path=ass_path,
                     output_path=output_path,
                 )
@@ -914,7 +969,10 @@ class TranscriptionPipeline:
                     else None
                 ),
                 timeline_path=(
-                    timeline_path if timeline_path.exists() else None
+                    timeline_path
+                    if timeline_path.exists()
+                    and job.get("stage") not in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+                    else None
                 ),
                 ass_path=ass_path if ass_path.exists() else None,
                 output_path=(

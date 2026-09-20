@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  AlignHorizontalSpaceAround,
+  AudioWaveform as AudioWaveformIcon,
   ChevronDown,
   CircleAlert,
   GripVertical,
@@ -21,6 +23,7 @@ import {
   applyLineEdgeOffset,
   applyLineOffset,
   applyTimelineOffset,
+  distributeMoraRange,
   timelineDragOffsetMs,
   updateLineRange,
   updateMoraBoundary,
@@ -41,6 +44,11 @@ import {
   type PlaybackRange,
   type PlaybackShortcutBindings,
 } from "@/lib/timeline-editing";
+import {
+  decodeAudioWaveform,
+  sliceAudioWaveform,
+  type AudioWaveform,
+} from "@/lib/audio-waveform";
 
 type TimingDragTarget =
   | { kind: "line-edge"; edge: "start" | "end" }
@@ -87,9 +95,9 @@ const MOUSE_BOUNDARY_GAP_PX = 20;
 const TOUCH_BOUNDARY_GAP_PX = 32;
 const MOUSE_BOUNDARY_HIT_WIDTH_PX = 12;
 const TOUCH_BOUNDARY_HIT_WIDTH_PX = 24;
-const MORA_SEGMENT_TOP_PX = 18;
+const MORA_SEGMENT_TOP_PX = 30;
 const MORA_SEGMENT_HEIGHT_PX = 48;
-const MORA_TRACK_HEIGHT_PX = 74;
+const MORA_TRACK_HEIGHT_PX = 86;
 const TIMELINE_HELP_DELAY_MS = 500;
 
 function TimelineHelp() {
@@ -257,6 +265,48 @@ function moraBoundaryMarkers(
     }));
 }
 
+function AudioWaveformStrip({
+  waveform,
+  lineStartMs,
+  lineEndMs,
+  status,
+}: {
+  waveform: AudioWaveform | null;
+  lineStartMs: number;
+  lineEndMs: number;
+  status: "idle" | "loading" | "ready" | "unavailable";
+}) {
+  const bars = useMemo(
+    () => waveform ? sliceAudioWaveform(waveform, lineStartMs, lineEndMs, 120) : [],
+    [lineEndMs, lineStartMs, waveform],
+  );
+
+  return (
+    <div
+      data-audio-waveform="true"
+      data-waveform-status={status}
+      aria-label={status === "unavailable" ? "音频波形不可用" : "当前歌词行音频波形"}
+      className="pointer-events-none absolute inset-x-2 top-1 flex h-6 items-center gap-px overflow-hidden opacity-70"
+    >
+      {bars.length > 0 ? bars.map((amplitude, index) => (
+        <span
+          key={index}
+          className="min-w-px flex-1 rounded-sm bg-primary/50"
+          style={{ height: `${Math.max(10, Math.round(amplitude * 100))}%` }}
+        />
+      )) : status === "loading" ? (
+        Array.from({ length: 48 }, (_, index) => (
+          <span key={index} className="min-w-px flex-1 animate-pulse rounded-sm bg-muted-foreground/30" style={{ height: `${20 + (index % 5) * 12}%` }} />
+        ))
+      ) : status === "unavailable" ? (
+        <span className="px-1 text-[10px] font-medium text-muted-foreground">音频波形不可用，仍可用时间轴校准</span>
+      ) : (
+        <span className="px-1 text-[10px] font-medium text-muted-foreground">正在读取音频波形</span>
+      )}
+    </div>
+  );
+}
+
 export function directlyDraggableBoundaryIndexes(
   boundaryPositionsPx: number[],
   minimumGapPx: number,
@@ -300,6 +350,7 @@ function applyTimingDragTarget(
 
 export function KirakaraReviewEditor({
   timeline,
+  audioSource = null,
   editingLineIndex,
   previewLeadMs,
   shortcutBindings = DEFAULT_PLAYBACK_SHORTCUT_BINDINGS,
@@ -309,6 +360,7 @@ export function KirakaraReviewEditor({
   canUndo = false, canRedo = false, onUndo, onRedo, looping = false, onLoopChange, onLoop,
 }: {
   timeline: KirakaraTimeline;
+  audioSource?: Blob | null;
   editingLineIndex: number | null;
   previewLeadMs: number;
   shortcutBindings?: PlaybackShortcutBindings;
@@ -335,6 +387,9 @@ export function KirakaraReviewEditor({
     lineIndex: number;
     moraIndex: number;
   } | null>(null);
+  const [selectedMoraIndexes, setSelectedMoraIndexes] = useState<number[]>([]);
+  const [waveform, setWaveform] = useState<AudioWaveform | null>(null);
+  const [waveformStatus, setWaveformStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [trackWidthPx, setTrackWidthPx] = useState(0);
   const [minimumBoundaryGapPx] = useState(() =>
     typeof window !== "undefined"
@@ -360,6 +415,47 @@ export function KirakaraReviewEditor({
   const line = timeline.lines[currentLineIndex];
   const lineStartMs = line?.startMs;
   const lineEndMs = line?.endMs;
+
+  useEffect(() => {
+    let active = true;
+    if (!audioSource) {
+      queueMicrotask(() => {
+        if (!active) return;
+        setWaveform(null);
+        setWaveformStatus("idle");
+      });
+      return () => {
+        active = false;
+      };
+    }
+    queueMicrotask(() => {
+      if (!active) return;
+      setWaveform(null);
+      setWaveformStatus("loading");
+    });
+    decodeAudioWaveform(audioSource).then((decoded) => {
+      if (!active) return;
+      setWaveform(decoded);
+      setWaveformStatus("ready");
+    }).catch(() => {
+      if (active) setWaveformStatus("unavailable");
+    });
+    return () => {
+      active = false;
+    };
+  }, [audioSource]);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setSelectedMoraIndexes([]);
+      setSelectedMora(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentLineIndex]);
 
   useEffect(() => {
     onLoop?.(looping && lineStartMs !== undefined && lineEndMs !== undefined ? { startMs: lineStartMs, endMs: lineEndMs } : null);
@@ -654,6 +750,61 @@ export function KirakaraReviewEditor({
     onSeek(timingDragSeekMs(updated, currentLineIndex, target, previewLeadMs));
   }
 
+  function selectMora(index: number, extend: boolean) {
+    setSelectedMora({ lineIndex: currentLineIndex, moraIndex: index });
+    setSelectedMoraIndexes((current) => {
+      if (!extend || current.length === 0) return [index];
+      const anchor = current[0];
+      const start = Math.min(anchor, index);
+      const end = Math.max(anchor, index);
+      return Array.from({ length: end - start + 1 }, (_, offset) => start + offset);
+    });
+  }
+
+  function distributeCurrentLine() {
+    try {
+      onChange(distributeMoraRange(timeline, currentLineIndex));
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法平分当前歌词行");
+    }
+  }
+
+  function distributeSelectedRange() {
+    const indexes = selectedMoraIndexes.length > 0
+      ? selectedMoraIndexes
+      : selectedMora ? [selectedMora.moraIndex] : [];
+    try {
+      onChange(distributeMoraRange(timeline, currentLineIndex, indexes));
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法平分选中的字");
+    }
+  }
+
+  function nudgeOuterMora(edge: "start" | "end", direction: -1 | 1) {
+    const segment = edge === "start" ? moraSegments[0] : moraSegments.at(-1);
+    if (!segment) return;
+    const currentTimeMs = edge === "start" ? segment.startMs : segment.endMs;
+    try {
+      const updated = updateOuterMoraEdge(
+        timeline,
+        currentLineIndex,
+        edge,
+        currentTimeMs + direction * stepMs,
+      );
+      onChange(updated);
+      onSeek(previewSeekMs(
+        edge === "start" ? updated.lines[currentLineIndex].startMs : updated.lines[currentLineIndex].endMs,
+        previewLeadMs,
+        timeline.durationMs,
+      ));
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法调整首尾字");
+    }
+  }
+
   function selectTimingBoundary(target: TimingBoundaryTarget) {
     setSelectedBoundary({ lineIndex: currentLineIndex, target });
   }
@@ -730,6 +881,12 @@ export function KirakaraReviewEditor({
               style={{ height: `${MORA_TRACK_HEIGHT_PX}px` }}
               aria-label={`当前歌词行时间轴：${line.text}`}
             >
+              <AudioWaveformStrip
+                waveform={waveform}
+                lineStartMs={line.startMs}
+                lineEndMs={line.endMs}
+                status={waveformStatus}
+              />
               <button
                 type="button"
                 draggable={false}
@@ -796,6 +953,8 @@ export function KirakaraReviewEditor({
                 const selected = segment.moraIndex !== null
                   && selectedMora?.lineIndex === currentLineIndex
                   && selectedMora.moraIndex === segment.moraIndex;
+                const rangeSelected = segment.moraIndex !== null
+                  && selectedMoraIndexes.includes(segment.moraIndex);
                 const affected = segment.moraIndex !== null && (
                   activeDrag?.kind === "mora-boundary"
                     ? segment.moraIndex === activeDrag.boundaryIndex || segment.moraIndex === activeDrag.boundaryIndex + 1
@@ -821,7 +980,7 @@ export function KirakaraReviewEditor({
                     className={`focus-ring absolute flex min-w-px items-center overflow-hidden border text-xs font-semibold ${
                       segment.kind === "unit"
                         ? "border-border bg-background text-muted-foreground"
-                        : selected || affected
+                        : selected || rangeSelected || affected
                           ? "z-10 border-primary bg-primary/25 text-primary"
                           : index % 2 === 0
                             ? "border-primary/45 bg-primary/20 text-foreground hover:bg-primary/25"
@@ -836,14 +995,14 @@ export function KirakaraReviewEditor({
                     title={segment.kind === "mora"
                       ? `选择 Mora：${segment.label}（${seconds(start)} - ${seconds(end)}）`
                       : `${segment.label} ${seconds(start)} - ${seconds(end)}`}
-                    onClick={() => {
+                    onClick={(event) => {
                       if (segment.moraIndex !== null) {
-                        setSelectedMora({ lineIndex: currentLineIndex, moraIndex: segment.moraIndex });
+                        selectMora(segment.moraIndex, event.shiftKey);
                       }
                     }}
                     onFocus={() => {
                       if (segment.moraIndex !== null) {
-                        setSelectedMora({ lineIndex: currentLineIndex, moraIndex: segment.moraIndex });
+                        selectMora(segment.moraIndex, false);
                       }
                     }}
                     onKeyDown={(event) => {
@@ -1018,6 +1177,57 @@ export function KirakaraReviewEditor({
               <RotateCcw className="size-4" />
               定位预览
             </button>
+          </div>
+
+          <div data-bulk-timing-controls="true" className="mt-3 border-y py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold text-foreground">快捷校准</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">平分时长会保留所选范围的首尾位置；按住 Shift 选择连续字</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  title="整句字数平分"
+                  aria-label="整句字数平分"
+                  className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold hover:bg-muted"
+                  onClick={distributeCurrentLine}
+                >
+                  <AlignHorizontalSpaceAround className="size-4" />
+                  整句平分
+                </button>
+                <button
+                  type="button"
+                  title="选中字数平分"
+                  aria-label="选中字数平分"
+                  disabled={selectedMoraIndexes.length === 0 && !selectedMora}
+                  className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold hover:bg-muted disabled:opacity-40"
+                  onClick={distributeSelectedRange}
+                >
+                  <AudioWaveformIcon className="size-4" />
+                  选中平分{selectedMoraIndexes.length > 1 ? `（${selectedMoraIndexes.length}字）` : ""}
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">首尾字独立调整</span>
+              <span>中间字保持不动</span>
+              <div className="ml-auto flex items-center gap-1">
+                <button type="button" title="句首字提前" aria-label="句首字提前" className="focus-ring inline-flex size-8 items-center justify-center rounded-sm border hover:bg-muted" onClick={() => nudgeOuterMora("start", -1)}>
+                  <Minus className="size-3.5" />
+                </button>
+                <button type="button" title="句首字延后" aria-label="句首字延后" className="focus-ring inline-flex size-8 items-center justify-center rounded-sm border hover:bg-muted" onClick={() => nudgeOuterMora("start", 1)}>
+                  <Plus className="size-3.5" />
+                </button>
+                <span className="mx-1 h-4 border-l" aria-hidden="true" />
+                <button type="button" title="句尾字提前" aria-label="句尾字提前" className="focus-ring inline-flex size-8 items-center justify-center rounded-sm border hover:bg-muted" onClick={() => nudgeOuterMora("end", -1)}>
+                  <Minus className="size-3.5" />
+                </button>
+                <button type="button" title="句尾字延后" aria-label="句尾字延后" className="focus-ring inline-flex size-8 items-center justify-center rounded-sm border hover:bg-muted" onClick={() => nudgeOuterMora("end", 1)}>
+                  <Plus className="size-3.5" />
+                </button>
+              </div>
+            </div>
           </div>
 
           {selectedMoraSegment && (
