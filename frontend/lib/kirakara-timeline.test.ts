@@ -421,6 +421,55 @@ describe("activeKirakaraFrame", () => {
     ]);
   });
 
+  it("keeps a line visible until its last token has finished", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("甲", "か", 1000, 1600, [
+          {
+            surface: "甲",
+            reading: "か",
+            start_ms: 1000,
+            end_ms: 1800,
+            confidence: 1,
+            moras: [
+              { reading: "か", start_ms: 1000, end_ms: 1800, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+        line("乙", "お", 1200, 1400, [
+          {
+            surface: "乙",
+            reading: "お",
+            start_ms: 1200,
+            end_ms: 1400,
+            confidence: 1,
+            moras: [],
+          },
+        ]),
+        line("丙", "へい", 1700, 2200, [
+          {
+            surface: "丙",
+            reading: "へい",
+            start_ms: 1700,
+            end_ms: 2200,
+            confidence: 1,
+            moras: [],
+          },
+        ]),
+      ],
+    };
+
+    const frame = activeKirakaraFrame(toKirakaraTimeline(source), 1700);
+    expect(frame?.lines).toEqual([
+      expect.objectContaining({ slot: "upper", text: "甲" }),
+      expect.objectContaining({ slot: "lower", text: "乙" }),
+    ]);
+    expect(frame?.lines.find(({ slot }) => slot === "upper")?.units[0].progress)
+      .toBeCloseTo(0.875);
+  });
+
   it("uses mora timing for progress inside a kanji token", () => {
     const frame = activeKirakaraFrame(toKirakaraTimeline(cloudTimeline), 1250);
     const upper = frame?.lines.find((candidate) => candidate.slot === "upper");

@@ -395,12 +395,20 @@ export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline
     } else {
       units = repairCollapsedVoicedUnits(units);
     }
+    const contentEndMs = units.reduce(
+      (latest, unit) => Math.max(
+        latest,
+        unit.endMs,
+        ...unit.moras.map((mora) => mora.endMs),
+      ),
+      endMs,
+    );
     const normalized = closeLineMoraGaps({
       confidence: line.confidence,
       text: line.surface,
       reading: line.reading,
       startMs,
-      endMs,
+      endMs: contentEndMs,
       units,
     });
     previousEndMs = normalized.endMs;
