@@ -461,6 +461,107 @@ describe("activeKirakaraFrame", () => {
     ]);
   });
 
+  it("attaches surrounding punctuation to the neighboring sung character", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [
+        line("「東京」", "とうきょう", 1000, 1400, [
+          {
+            surface: "「東京」",
+            reading: "とうきょう",
+            start_ms: 1000,
+            end_ms: 1400,
+            confidence: 1,
+            moras: [
+              { reading: "とう", start_ms: 1000, end_ms: 1200, matched: true, confidence: 1 },
+              { reading: "きょう", start_ms: 1200, end_ms: 1400, matched: true, confidence: 1 },
+            ],
+          },
+        ]),
+      ],
+    };
+
+    const frame = activeKirakaraFrame(toKirakaraTimeline(source), 1250);
+    expect(frame?.lines[0].units[0].characters).toEqual([
+      { text: "「", progress: 1 },
+      { text: "東", progress: 1 },
+      { text: "京", progress: 0.25 },
+      { text: "」", progress: 0.25 },
+    ]);
+  });
+
+  it("animates a punctuation-only unit across its allocated neighboring time", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [line("、歌", "、うた", 1000, 2000, [
+        {
+          surface: "、",
+          reading: "、",
+          start_ms: 1000,
+          end_ms: 1000,
+          confidence: 1,
+          moras: [],
+        },
+        {
+          surface: "歌",
+          reading: "うた",
+          start_ms: 1000,
+          end_ms: 2000,
+          confidence: 1,
+          moras: [],
+        },
+      ])],
+    };
+
+    const timeline = toKirakaraTimeline(source);
+    const punctuation = activeKirakaraFrame(timeline, 1100)?.lines[0].units[0];
+    expect(timeline.lines[0].units[0].endMs).toBeGreaterThan(
+      timeline.lines[0].units[0].startMs,
+    );
+    expect(punctuation?.progress).toBeGreaterThan(0);
+    expect(punctuation?.progress).toBeLessThan(1);
+    expect(punctuation?.characters?.[0]?.progress).toBe(punctuation?.progress);
+  });
+
+  it("rolls consecutive punctuation characters one at a time", () => {
+    const source: CloudLyricTimeline = {
+      confidence: 1,
+      warnings: [],
+      lines: [line("...歌", "...うた", 1000, 2000, [
+        {
+          surface: "...",
+          reading: "...",
+          start_ms: 1000,
+          end_ms: 1000,
+          confidence: 1,
+          moras: [],
+        },
+        {
+          surface: "歌",
+          reading: "うた",
+          start_ms: 1000,
+          end_ms: 2000,
+          confidence: 1,
+          moras: [],
+        },
+      ])],
+    };
+
+    const punctuation = activeKirakaraFrame(toKirakaraTimeline(source), 1100)
+      ?.lines[0].units[0];
+    expect(punctuation?.characters).toEqual([
+      { text: ".", progress: expect.any(Number) },
+      { text: ".", progress: expect.any(Number) },
+      { text: ".", progress: expect.any(Number) },
+    ]);
+    const progresses = punctuation?.characters?.map(({ progress }) => progress) ?? [];
+    expect(progresses[0]).toBeGreaterThan(0);
+    expect(progresses[1]).toBe(0);
+    expect(progresses[2]).toBe(0);
+  });
+
   it("keeps progress moving through a gap until the next mora starts", () => {
     const source: CloudLyricTimeline = {
       confidence: 1,

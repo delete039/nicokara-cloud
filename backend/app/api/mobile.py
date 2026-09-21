@@ -25,6 +25,7 @@ from app.api.jobs import (
     request_event_logger,
     safe_display_name,
     services,
+    validate_alignment_mode,
 )
 from app.core.active_jobs import ActiveJobLimitError
 from app.core.event_logging import exception_details
@@ -246,7 +247,9 @@ async def complete_audio_upload(
     lyrics_file: UploadFile | None = File(default=None),
     project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
+    alignment_mode: str = Form(default="auto"),
 ) -> JobResponse:
+    alignment_mode = validate_alignment_mode(alignment_mode)
     try:
         normalized_client_submission_id(ticket_id)
     except HTTPException:
@@ -364,6 +367,7 @@ async def complete_audio_upload(
             lyrics_source=lyrics_source,
             lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
+            alignment_mode=alignment_mode,
             client_submission_id=ticket_id,
             input_mode="AUDIO_ONLY",
             source_upload_size_bytes=saved.size_bytes,
@@ -442,8 +446,10 @@ async def create_audio_only_job(
     lyrics_file: UploadFile | None = File(default=None),
     project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
+    alignment_mode: str = Form(default="auto"),
     client_submission_id: str | None = Form(default=None),
 ) -> JobResponse:
+    alignment_mode = validate_alignment_mode(alignment_mode)
     settings, database = services(request)
     normalized_submission_id = normalized_client_submission_id(
         client_submission_id
@@ -545,6 +551,7 @@ async def create_audio_only_job(
             lyrics_source=lyrics_source,
             lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
+            alignment_mode=alignment_mode,
             client_submission_id=normalized_submission_id,
             input_mode="AUDIO_ONLY",
             source_upload_size_bytes=saved.size_bytes,

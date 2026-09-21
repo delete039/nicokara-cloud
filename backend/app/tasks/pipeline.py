@@ -437,7 +437,7 @@ class TranscriptionPipeline:
                     stage="REMOVING_VOCALS",
                     component="uvr",
                     details={
-                        "reason": "on_vocal_without_direct_mms_requirement"
+                        "reason": "preferred_alignment_uses_original_mix"
                     },
                 )
             if imported_timeline_path.is_file() or imported_ass_path.is_file():
@@ -676,15 +676,18 @@ class TranscriptionPipeline:
                         },
                     ) as alignment_trace:
                         if direct_alignment_job:
-                            timeline = self.aligner.align(
+                            timeline = self._align_timeline(
                                 processed_lyrics,
                                 None,
                                 audio_path=analysis_audio_path,
                                 transcript_factory=load_transcript,
+                                alignment_mode=job.get("alignment_mode", "auto"),
                             )
                         else:
-                            timeline = self.aligner.align(
-                                processed_lyrics, transcript
+                            timeline = self._align_timeline(
+                                processed_lyrics,
+                                transcript,
+                                alignment_mode=job.get("alignment_mode", "auto"),
                             )
                         if alignment_fallback_warning is not None:
                             timeline = replace(
@@ -1376,8 +1379,25 @@ class TranscriptionPipeline:
             self.aligner
         ).__name__
 
+    def _align_timeline(
+        self,
+        lyrics: LyricDocument,
+        transcript,
+        *,
+        alignment_mode: str = "auto",
+        **kwargs,
+    ):
+        if (
+            alignment_mode != "standard"
+            and getattr(self.aligner, "supports_alignment_modes", False)
+        ):
+            kwargs["alignment_mode"] = alignment_mode
+        return self.aligner.align(lyrics, transcript, **kwargs)
+
     def _alignment_details(self) -> dict[str, Any]:
         primary = getattr(self.aligner, "primary", None)
+        multivoice = getattr(self.aligner, "multivoice_primary", None)
+        robust = getattr(self.aligner, "robust_primary", None)
         fallback = getattr(self.aligner, "fallback", None)
         runtime = getattr(primary, "runtime", None)
         return {
@@ -1388,9 +1408,18 @@ class TranscriptionPipeline:
             "fallback_aligner": type(fallback).__name__
             if fallback is not None
             else None,
-            "model": "torchaudio.pipelines.MMS_FA"
+            "model": getattr(primary, "alignment_model", None)
+            or ("torchaudio.pipelines.MMS_FA"
             if primary is not None
+            else None),
+            "multivoice_aligner": type(multivoice).__name__
+            if multivoice is not None
             else None,
+            "multivoice_model": getattr(multivoice, "alignment_model", None),
+            "robust_dual_aligner": type(robust).__name__
+            if robust is not None
+            else None,
+            "robust_dual_model": getattr(robust, "alignment_model", None),
             "device": getattr(runtime, "device", None),
             "timeout_seconds": getattr(primary, "timeout_seconds", None),
             "minimum_confidence": getattr(
@@ -1515,16 +1544,18 @@ class TranscriptionPipeline:
             },
         ) as alignment_trace:
             if direct_alignment_job:
-                timeline = self.aligner.align(
+                timeline = self._align_timeline(
                     processed_lyrics,
                     None,
                     audio_path=analysis_audio_path,
                     transcript_factory=load_transcript,
+                    alignment_mode=job.get("alignment_mode", "auto"),
                 )
             else:
-                timeline = self.aligner.align(
+                timeline = self._align_timeline(
                     processed_lyrics,
                     load_transcript(),
+                    alignment_mode=job.get("alignment_mode", "auto"),
                 )
             if alignment_fallback_warning is not None:
                 timeline = replace(

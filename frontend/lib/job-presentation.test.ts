@@ -229,17 +229,28 @@ describe("jobPresentation", () => {
     const presentation = jobPresentation("PROCESSING", "REMOVING_VOCALS");
 
     expect(presentation.description).toContain("OFF VOCAL");
-    expect(presentation.description).toContain("UVR");
+    expect(presentation.description).toContain("原始音频");
+    expect(presentation.description).not.toContain("人声音轨用于提高歌词对齐精度");
   });
 
-  it("presents FA-Kara as the alignment engine", async () => {
+  it("presents the current high-accuracy alignment flow", async () => {
     const { jobPresentation } = await import("./job-presentation");
 
     const presentation = jobPresentation("PROCESSING", "ALIGNING");
 
-    expect(presentation.description).toContain("FA-Kara");
-    expect(presentation.description).toContain("MMS");
+    expect(presentation.description).toContain("高精度时间轴引擎");
     expect(presentation.description).toContain("备用");
     expect(presentation.description).not.toContain("Whisper");
+  });
+
+  it("describes reading confirmation without naming an outdated primary engine", async () => {
+    const { jobPresentation } = await import("./job-presentation");
+
+    expect(
+      jobPresentation("LYRICS_PROCESSED", "READING_REVIEW_REQUIRED").description,
+    ).toContain("高精度时间轴引擎");
+    expect(
+      jobPresentation("LYRICS_PROCESSED", "READING_REVIEW_SAVING").description,
+    ).toContain("高精度 Mora 时间轴");
   });
 });

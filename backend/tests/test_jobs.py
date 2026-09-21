@@ -10,6 +10,18 @@ from app.core.config import Settings
 from app.main import create_app
 
 
+def test_validate_alignment_mode_accepts_robust_dual() -> None:
+    from app.api.jobs import validate_alignment_mode
+
+    assert validate_alignment_mode("robust") == "robust"
+
+
+def test_validate_alignment_mode_accepts_auto_preferred_alignment() -> None:
+    from app.api.jobs import validate_alignment_mode
+
+    assert validate_alignment_mode("auto") == "auto"
+
+
 def fake_mp4(payload: bytes = b"video-data") -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom" + payload
 

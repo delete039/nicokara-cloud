@@ -3,6 +3,18 @@ export type AudioWaveform = {
   durationMs: number;
 };
 
+export function waveformSeekMs(
+  clientX: number,
+  trackLeft: number,
+  trackWidth: number,
+  startMs: number,
+  endMs: number,
+): number {
+  if (!Number.isFinite(clientX) || !Number.isFinite(trackLeft) || trackWidth <= 0) return Math.round(startMs);
+  const progress = Math.min(1, Math.max(0, (clientX - trackLeft) / trackWidth));
+  return Math.round(startMs + (endMs - startMs) * progress);
+}
+
 export function sliceAudioWaveform(
   waveform: AudioWaveform,
   startMs: number,

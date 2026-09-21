@@ -22,7 +22,9 @@ from app.ai.deepseek import DeepSeekClient
 from app.ai.whisper import FasterWhisperTranscriber
 from app.alignment.aligner import LyricTimelineAligner
 from app.alignment.engine import ResilientAlignmentEngine
+from app.alignment.dual import RobustDualAlignment
 from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
+from app.alignment.yohane import YohaneForcedAligner, SubprocessYohaneRuntime
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
@@ -60,6 +62,18 @@ def build_vocal_remover(settings: Settings):
     )
 
 
+def yohane_assets_available(source_dir, model_dir) -> bool:
+    required_paths = (
+        source_dir / "align_yohane.py",
+        model_dir / "config.json",
+        model_dir / "model.safetensors",
+        model_dir / "processor_config.json",
+        model_dir / "tokenizer_config.json",
+        model_dir / "vocab.json",
+    )
+    return all(path.is_file() for path in required_paths)
+
+
 def build_alignment_engine(
     settings: Settings,
     *,
@@ -69,27 +83,49 @@ def build_alignment_engine(
     fallback = LyricTimelineAligner()
     if not settings.fa_kara_enabled:
         return fallback
-    return ResilientAlignmentEngine(
-        primary=MMSForcedAligner(
-            runtime=SubprocessMMSRuntime(
+    primary = MMSForcedAligner(
+        runtime=SubprocessMMSRuntime(
+            device=settings.fa_kara_device,
+            audio_speed=settings.fa_kara_audio_speed,
+            silence_window_seconds=settings.fa_kara_silence_window_seconds,
+            silence_top_percent=settings.fa_kara_silence_top_percent,
+            silence_threshold_ratio=settings.fa_kara_silence_threshold_ratio,
+            tail_window_seconds=settings.fa_kara_tail_window_seconds,
+            limiter=fa_kara_limiter,
+        ),
+        timeout_seconds=settings.fa_kara_timeout_seconds,
+        min_confidence=settings.fa_kara_min_confidence,
+    )
+    multivoice_primary = None
+    if (
+        settings.yohane_enabled
+        and yohane_assets_available(
+            settings.yohane_source_dir,
+            settings.yohane_model_dir,
+        )
+    ):
+        multivoice_primary = YohaneForcedAligner(
+            runtime=SubprocessYohaneRuntime(
+                source_dir=settings.yohane_source_dir,
+                model_dir=settings.yohane_model_dir,
                 device=settings.fa_kara_device,
+                python_command=settings.yohane_python_command,
                 audio_speed=settings.fa_kara_audio_speed,
-                silence_window_seconds=(
-                    settings.fa_kara_silence_window_seconds
-                ),
-                silence_top_percent=(
-                    settings.fa_kara_silence_top_percent
-                ),
-                silence_threshold_ratio=(
-                    settings.fa_kara_silence_threshold_ratio
-                ),
-                tail_window_seconds=settings.fa_kara_tail_window_seconds,
                 limiter=fa_kara_limiter,
             ),
-            timeout_seconds=settings.fa_kara_timeout_seconds,
-            min_confidence=settings.fa_kara_min_confidence,
-        ),
+            timeout_seconds=settings.yohane_timeout_seconds,
+            min_confidence=settings.yohane_min_confidence,
+        )
+    robust_primary = (
+        RobustDualAlignment(primary=primary, secondary=multivoice_primary)
+        if multivoice_primary is not None
+        else None
+    )
+    return ResilientAlignmentEngine(
+        primary=primary,
         fallback=fallback,
+        multivoice_primary=multivoice_primary,
+        robust_primary=robust_primary,
         event_logger=event_logger,
     )
 

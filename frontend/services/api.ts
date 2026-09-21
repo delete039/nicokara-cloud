@@ -28,6 +28,7 @@ export type CreateJobInput = {
   lyricsFile?: File;
   projectFiles?: File[];
   vocalMode?: string;
+  alignmentMode?: "auto" | "standard" | "multivoice" | "robust";
 };
 
 export type CreateAudioOnlyJobInput = {
@@ -38,6 +39,7 @@ export type CreateAudioOnlyJobInput = {
   lyricsFile?: File;
   projectFiles?: File[];
   vocalMode?: string;
+  alignmentMode?: "auto" | "standard" | "multivoice" | "robust";
 };
 
 function appendProjectFiles(form: FormData, files?: File[]): void {
@@ -535,6 +537,9 @@ export async function createJob(
     if (input.vocalMode) {
       data.append("vocal_mode", input.vocalMode);
     }
+    if (input.alignmentMode) {
+      data.append("alignment_mode", input.alignmentMode);
+    }
 
     let response: Response;
     try {
@@ -598,6 +603,9 @@ export function createJobDirect(
     appendProjectFiles(data, input.projectFiles);
     if (input.vocalMode) {
       data.append("vocal_mode", input.vocalMode);
+    }
+    if (input.alignmentMode) {
+      data.append("alignment_mode", input.alignmentMode);
     }
 
     const xhr = new XMLHttpRequest();
@@ -743,6 +751,7 @@ export async function createAudioOnlyJob(
   if (input.lyricsFile) form.append("lyrics_file", input.lyricsFile);
   appendProjectFiles(form, input.projectFiles);
   if (input.vocalMode) form.append("vocal_mode", input.vocalMode);
+  if (input.alignmentMode) form.append("alignment_mode", input.alignmentMode);
   try {
     response = await uploadFetch(
       `${API_BASE}/browser/audio-uploads/${session.ticket_id}/complete`,

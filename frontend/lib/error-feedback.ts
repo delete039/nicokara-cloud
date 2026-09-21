@@ -572,13 +572,13 @@ const JOB_FAILURES: Record<string, JobFailureDefinition> = {
   ALIGNMENT_FAILED: {
     title: "歌词时间轴对齐失败",
     description:
-      "FA-Kara / MMS 强制对齐和备用时间轴都未能生成完整、可靠的歌词时间轴。",
+      "高精度时间轴对齐引擎（Yohane / MMS）和备用时间轴都未能生成完整、可靠的歌词时间轴。",
     solutions: [
       "确保歌词与视频中的实际演唱内容一致，不要混入翻译、时间标签或说明文字。",
       "每句歌词单独一行，并保持与演唱顺序一致。",
       "训读、古语或特殊唱法可写成 {漢字|かな}；英文等特殊发音可使用 [表记|romaji]。",
       "删去视频中未演唱的歌词，或补齐明显缺失的歌词后重试。",
-      "若同一素材反复失败，请将任务 ID 提供给管理员检查 UVR 人声、MMS 模型缓存和内存。",
+      "若同一素材反复失败，请将任务 ID 提供给管理员检查高精度模型、音频处理和可用内存。",
     ],
   },
   SUBTITLE_GENERATION_FAILED: {

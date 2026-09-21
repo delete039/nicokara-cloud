@@ -47,6 +47,7 @@ import {
 import {
   decodeAudioWaveform,
   sliceAudioWaveform,
+  waveformSeekMs,
   type AudioWaveform,
 } from "@/lib/audio-waveform";
 
@@ -270,29 +271,69 @@ function AudioWaveformStrip({
   lineStartMs,
   lineEndMs,
   status,
+  onSeek,
 }: {
   waveform: AudioWaveform | null;
   lineStartMs: number;
   lineEndMs: number;
   status: "idle" | "loading" | "ready" | "unavailable";
+  onSeek: (milliseconds: number) => void;
 }) {
+  const waveformRef = useRef<HTMLDivElement | null>(null);
   const bars = useMemo(
-    () => waveform ? sliceAudioWaveform(waveform, lineStartMs, lineEndMs, 120) : [],
+    () => waveform ? sliceAudioWaveform(waveform, lineStartMs, lineEndMs, 240) : [],
     [lineEndMs, lineStartMs, waveform],
   );
 
+  function seekFromPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    const track = waveformRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    onSeek(waveformSeekMs(event.clientX, rect.left, rect.width, lineStartMs, lineEndMs));
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekFromPointer(event);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    event.preventDefault();
+    seekFromPointer(event);
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      seekFromPointer(event);
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   return (
     <div
+      ref={waveformRef}
       data-audio-waveform="true"
       data-waveform-status={status}
+      data-waveform-bars={bars.length}
+      data-waveform-start-ms={lineStartMs}
+      data-waveform-end-ms={lineEndMs}
       aria-label={status === "unavailable" ? "音频波形不可用" : "当前歌词行音频波形"}
-      className="pointer-events-none absolute inset-x-2 top-1 flex h-6 items-center gap-px overflow-hidden opacity-70"
+      title="点击或拖动波形定位播放时间"
+      className="absolute inset-x-2 top-1 z-10 flex h-6 touch-none cursor-crosshair items-center gap-px overflow-hidden opacity-85"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
     >
+      <span className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-primary/25" />
       {bars.length > 0 ? bars.map((amplitude, index) => (
         <span
           key={index}
-          className="min-w-px flex-1 rounded-sm bg-primary/50"
-          style={{ height: `${Math.max(10, Math.round(amplitude * 100))}%` }}
+          className={`pointer-events-none min-w-px flex-1 rounded-sm ${index % 4 === 0 ? "bg-primary/80" : "bg-primary/50"}`}
+          style={{ height: `${Math.max(12, Math.round(amplitude * 100))}%` }}
         />
       )) : status === "loading" ? (
         Array.from({ length: 48 }, (_, index) => (
@@ -433,7 +474,7 @@ export function KirakaraReviewEditor({
       setWaveform(null);
       setWaveformStatus("loading");
     });
-    decodeAudioWaveform(audioSource).then((decoded) => {
+    decodeAudioWaveform(audioSource, 6000).then((decoded) => {
       if (!active) return;
       setWaveform(decoded);
       setWaveformStatus("ready");
@@ -886,6 +927,7 @@ export function KirakaraReviewEditor({
                 lineStartMs={line.startMs}
                 lineEndMs={line.endMs}
                 status={waveformStatus}
+                onSeek={onSeek}
               />
               <button
                 type="button"

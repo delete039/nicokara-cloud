@@ -90,6 +90,7 @@ export function UploadForm() {
     useState<MobileSubmissionState | null>(null);
   const [lyricsWarning, setLyricsWarning] =
     useState<PendingLyricsWarning | null>(null);
+  const alignmentMode = "auto" as const;
 
   useEffect(() => () => mobileAbortController.current?.abort(), []);
 
@@ -251,6 +252,7 @@ export function UploadForm() {
         lyricsFile: lyricsFile ?? undefined,
         projectFiles: reviewedArtifacts?.files,
         vocalMode: "on",
+        alignmentMode,
       };
       const job = useAudioOnly
         ? await submitMobileJob(

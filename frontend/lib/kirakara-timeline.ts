@@ -327,10 +327,7 @@ function repairCollapsedVoicedUnits(
 
   for (let index = 0; index < repaired.length; index += 1) {
     const unit = repaired[index];
-    if (
-      unit.endMs > unit.startMs ||
-      splitReadingMoras(unit.reading).length === 0
-    ) continue;
+    if (unit.endMs > unit.startMs || unit.text.trim().length === 0) continue;
 
     let rangeStart = index;
     let rangeEnd = repaired.findIndex(
@@ -483,6 +480,53 @@ function clampProgress(progress: number): number {
   return Math.min(1, Math.max(0, progress));
 }
 
+function isTimingNeutralCharacter(character: string): boolean {
+  return /^[\p{P}\p{S}\s]$/u.test(character);
+}
+
+function characterProgresses(
+  characters: string[],
+  progress: number,
+): number[] {
+  const contentIndexes = characters
+    .map((character, index) => ({ character, index }))
+    .filter(({ character }) => !isTimingNeutralCharacter(character))
+    .map(({ index }) => index);
+
+  // Kirakara gives visible punctuation its own character interval. It does
+  // not create a phonetic mora, but it still needs to follow its visual time.
+  if (contentIndexes.length === 0) {
+    const characterPosition = clampProgress(progress) * characters.length;
+    return characters.map((_, index) =>
+      clampProgress(characterPosition - index),
+    );
+  }
+
+  const contentPosition = clampProgress(progress) * contentIndexes.length;
+  const contentProgress = new Map(
+    contentIndexes.map((characterIndex, contentIndex) => [
+      characterIndex,
+      clampProgress(contentPosition - contentIndex),
+    ]),
+  );
+
+  return characters.map((character, index) => {
+    const directProgress = contentProgress.get(index);
+    if (directProgress !== undefined) return directProgress;
+
+    // Kirakara renders punctuation as part of the neighboring character's
+    // time slice, so opening punctuation does not become a standalone beat.
+    const nextContent = contentIndexes.find((candidate) => candidate > index);
+    if (nextContent !== undefined) return contentProgress.get(nextContent) ?? 0;
+    const previousContent = [...contentIndexes]
+      .reverse()
+      .find((candidate) => candidate < index);
+    return previousContent === undefined
+      ? 0
+      : contentProgress.get(previousContent) ?? 0;
+  });
+}
+
 function unitSequencePosition(unit: KirakaraRenderUnit, playbackMs: number): {
   position: number;
   segmentCount: number;
@@ -616,7 +660,7 @@ function unitFrame(unit: KirakaraRenderUnit, playbackMs: number): KirakaraFrameU
   const characters = [...unit.text];
   const { position, segmentCount } = unitSequencePosition(unit, playbackMs);
   const progress = clampProgress(position / segmentCount);
-  const characterPosition = progress * characters.length;
+  const characterProgress = characterProgresses(characters, progress);
 
   return {
     text: unit.text,
@@ -626,7 +670,7 @@ function unitFrame(unit: KirakaraRenderUnit, playbackMs: number): KirakaraFrameU
     progress,
     characters: characters.map((text, index) => ({
       text,
-      progress: clampProgress(characterPosition - index),
+      progress: characterProgress[index] ?? 0,
     })),
   };
 }

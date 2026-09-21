@@ -12,6 +12,10 @@ import {
 } from "@/lib/announcement";
 import type { Announcement } from "@/types/announcement";
 
+export function isAnnouncementHeadline(paragraph: string): boolean {
+  return paragraph.trim() === "！！！！！重大更新！！！！！";
+}
+
 export function AnnouncementDialog() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
@@ -127,7 +131,14 @@ export function AnnouncementDialog() {
         className="max-h-[min(55dvh,28rem)] space-y-4 overflow-y-auto px-5 py-5 text-sm leading-7 sm:px-6"
       >
         {announcement.content.map((paragraph, index) => (
-          <p key={`${announcement.id}-${index}`}>{paragraph}</p>
+          <p
+            key={`${announcement.id}-${index}`}
+            className={isAnnouncementHeadline(paragraph)
+              ? "break-words text-2xl font-black leading-tight tracking-wide text-primary sm:text-3xl"
+              : undefined}
+          >
+            {paragraph}
+          </p>
         ))}
       </div>
 

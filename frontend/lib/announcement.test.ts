@@ -30,19 +30,17 @@ describe("announcement configuration", () => {
 
     expect(announcement).not.toBeNull();
     expect(announcement).toMatchObject({
-      id: "2026-09-04-update-v1",
-      title: "2026-09-04 更新日志",
-      publishedAt: "2026-09-04",
+      id: "2026-09-21-update-v1",
+      title: "2026-09-21 更新日志",
+      publishedAt: "2026-09-21",
       buttonLabel: "わかった",
     });
     expect(announcement?.content).toEqual([
-      "新增功能",
-      "1. 时间轴检查页面支持直接编辑主歌词与读音。",
-      "性能优化",
-      "1. 优化日语自动注音流程，提高词典读音、数字读音和复杂歌词的处理准确度。",
-      "2. 优化时间轴编辑与本地预览联动。",
-      "问题修复",
-      "1. 修复了一些已知的问题。",
+      "！！！！！重大更新！！！！！",
+      "更新内容：",
+      "1. 重做了工作台。",
+      "2. 完成了时间轴生成引擎升级，极大提升了ai时间轴准确度。",
+      "3. 修复了一些已知的问题。",
       "QQ 交流群",
       "欢迎加入ニコカラ自动生成器 QQ 交流群：1101583605。",
       "群内可交流使用问题、反馈建议和获取项目更新。",

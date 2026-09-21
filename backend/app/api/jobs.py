@@ -128,6 +128,15 @@ def job_response(database: Database, job: dict) -> JobResponse:
     )
 
 
+def validate_alignment_mode(value: str) -> str:
+    if value not in {"auto", "standard", "multivoice", "robust"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="alignment_mode must be auto, standard, multivoice, or robust",
+        )
+    return value
+
+
 def refresh_upload_queue(settings: Settings, database: Database) -> None:
     now = datetime.now(UTC)
     expired_ticket_ids = database.expire_stale_upload_tickets(
@@ -535,7 +544,9 @@ async def complete_upload_chunks(
     lyrics_file: UploadFile | None = File(default=None),
     project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
+    alignment_mode: str = Form(default="auto"),
 ) -> JobResponse:
+    alignment_mode = validate_alignment_mode(alignment_mode)
     try:
         UUID(ticket_id)
     except ValueError as exc:
@@ -667,6 +678,7 @@ async def complete_upload_chunks(
             lyrics_source=lyrics_source,
             lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
+            alignment_mode=alignment_mode,
             client_submission_id=ticket.get("client_submission_id"),
         )
         created = True
@@ -738,7 +750,9 @@ async def create_job_from_upload_ticket(
     lyrics_file: UploadFile | None = File(default=None),
     project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
+    alignment_mode: str = Form(default="auto"),
 ) -> JobResponse:
+    alignment_mode = validate_alignment_mode(alignment_mode)
     try:
         UUID(ticket_id)
     except ValueError as exc:
@@ -828,6 +842,7 @@ async def create_job_from_upload_ticket(
             lyrics_source=lyrics_source,
             lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
+            alignment_mode=alignment_mode,
             client_submission_id=ticket.get("client_submission_id"),
         )
         created = True
@@ -857,7 +872,9 @@ async def create_job(
     lyrics_file: UploadFile | None = File(default=None),
     project_files: list[UploadFile] = File(default=[]),
     vocal_mode: str = Form(default="on"),
+    alignment_mode: str = Form(default="auto"),
 ) -> JobResponse:
+    alignment_mode = validate_alignment_mode(alignment_mode)
     settings, database = services(request)
     client_key = client_key_from_request(request, settings)
     job_id = str(uuid4())
@@ -927,6 +944,7 @@ async def create_job(
             lyrics_source=lyrics_source,
             lyrics_path=effective_lyrics_path,
             vocal_mode=vocal_mode,
+            alignment_mode=alignment_mode,
         )
         created = True
         active_job_reservation.commit()

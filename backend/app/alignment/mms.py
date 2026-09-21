@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -187,6 +187,7 @@ class MMSForcedAligner:
     """Map FA-Kara-style MMS forced-alignment spans to Nicokara moras."""
 
     requires_vocals = True
+    alignment_model = MMS_MODEL_NAME
 
     def __init__(
         self,
@@ -228,13 +229,12 @@ class MMSForcedAligner:
                 "MMS_FA span count does not match the lyric mora count"
             )
         self._validate_spans(spans, line_token_counts)
-        confidence = sum(span.score for span in spans) / len(spans)
-        if confidence < self.min_confidence:
-            raise ForcedAlignmentError(
-                "MMS_FA confidence is below the usable threshold "
-                f"({confidence:.3f} < {self.min_confidence:.3f})"
-            )
-        return close_mora_gaps(self._timeline(lyrics, targets, spans))
+        timeline = close_mora_gaps(self._timeline(lyrics, targets, spans))
+        warnings = list(timeline.warnings)
+        for line_index, line in enumerate(timeline.lines, start=1):
+            if line.confidence < self.min_confidence:
+                warnings.append(f"mms_low_confidence_line:{line_index}")
+        return replace(timeline, warnings=warnings)
 
     @staticmethod
     def _targets(lyrics: LyricDocument) -> list[_MoraTarget]:
@@ -331,20 +331,6 @@ class MMSForcedAligner:
                     "MMS_FA mora duration exceeds the usable limit"
                 )
             previous_end = span.end_ms
-
-        offset = 0
-        for line_index, count in enumerate(line_token_counts, start=1):
-            if count <= 0:
-                continue
-            line_spans = spans[offset : offset + count]
-            offset += count
-            confidence = sum(span.score for span in line_spans) / count
-            if confidence < self.min_confidence:
-                raise ForcedAlignmentError(
-                    f"MMS_FA line {line_index} confidence is below the "
-                    f"usable threshold ({confidence:.3f} < "
-                    f"{self.min_confidence:.3f})"
-                )
 
     @staticmethod
     def _timeline(

@@ -225,11 +225,10 @@ def test_mms_aligner_rejects_incomplete_span_output(tmp_path: Path) -> None:
         )
 
 
-def test_mms_aligner_rejects_low_confidence_span_output(
+def test_mms_aligner_preserves_low_confidence_span_output(
     tmp_path: Path,
 ) -> None:
     from app.alignment.mms import (
-        ForcedAlignmentError,
         MMSForcedAligner,
         MMSMoraSpan,
     )
@@ -252,12 +251,16 @@ def test_mms_aligner_rejects_low_confidence_span_output(
                 for index in range(len(tokens))
             ]
 
-    with pytest.raises(ForcedAlignmentError, match="confidence"):
-        MMSForcedAligner(runtime=LowConfidenceRuntime()).align(
-            sample_lyrics(),
-            empty_transcript(),
-            audio_path=tmp_path / "vocals.wav",
-        )
+    timeline = MMSForcedAligner(runtime=LowConfidenceRuntime()).align(
+        sample_lyrics(),
+        empty_transcript(),
+        audio_path=tmp_path / "vocals.wav",
+    )
+
+    assert timeline.alignment_engine == "fa_kara_mms"
+    assert timeline.confidence == pytest.approx(0.1)
+    assert "mms_low_confidence" in timeline.warnings
+    assert "mms_low_confidence_line:1" in timeline.warnings
 
 
 def test_mms_aligner_uses_fa_kara_explicit_pronunciation(tmp_path: Path) -> None:
@@ -637,10 +640,10 @@ def test_mms_aligner_rejects_abnormally_long_mora_spans(
         )
 
 
-def test_mms_aligner_rejects_a_low_confidence_line_hidden_by_global_average(
+def test_mms_aligner_marks_a_low_confidence_line_hidden_by_global_average(
     tmp_path: Path,
 ) -> None:
-    from app.alignment.mms import ForcedAlignmentError, MMSForcedAligner, MMSMoraSpan
+    from app.alignment.mms import MMSForcedAligner, MMSMoraSpan
 
     lyrics = sample_lyrics()
     lyrics.lines.append(sample_lyrics().lines[0])
@@ -657,12 +660,15 @@ def test_mms_aligner_rejects_a_low_confidence_line_hidden_by_global_average(
                 for index, _ in enumerate(tokens)
             ]
 
-    with pytest.raises(ForcedAlignmentError, match="line 1 confidence"):
-        MMSForcedAligner(runtime=MixedConfidenceRuntime()).align(
-            lyrics,
-            empty_transcript(),
-            audio_path=tmp_path / "vocals.wav",
-        )
+    timeline = MMSForcedAligner(runtime=MixedConfidenceRuntime()).align(
+        lyrics,
+        empty_transcript(),
+        audio_path=tmp_path / "vocals.wav",
+    )
+
+    assert timeline.alignment_engine == "fa_kara_mms"
+    assert "mms_low_confidence_line:1" in timeline.warnings
+    assert "mms_low_confidence_line:2" not in timeline.warnings
 
 
 def test_subprocess_runtime_uses_the_shared_alignment_limiter(

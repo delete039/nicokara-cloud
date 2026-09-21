@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     lyrics_source TEXT,
     lyrics_path TEXT,
     vocal_mode TEXT NOT NULL DEFAULT 'on',
+    alignment_mode TEXT NOT NULL DEFAULT 'auto',
     audio_path TEXT,
     transcript_path TEXT,
     lyrics_processed_path TEXT,
@@ -192,6 +193,7 @@ class Database:
             }
             for name in (
                 "vocal_mode",
+                "alignment_mode",
                 "client_key",
                 "audio_path",
                 "transcript_path",
@@ -214,6 +216,8 @@ class Database:
                     definition = (
                         "INTEGER NOT NULL DEFAULT 0"
                         if name == "review_generation"
+                        else "TEXT NOT NULL DEFAULT 'auto'"
+                        if name == "alignment_mode"
                         else
                         "TEXT NOT NULL DEFAULT 'VIDEO'"
                         if name == "input_mode"
@@ -399,6 +403,7 @@ class Database:
         lyrics_source: str | None,
         lyrics_path: Path | None,
         vocal_mode: str = "on",
+        alignment_mode: str = "auto",
         client_submission_id: str | None = None,
         input_mode: str = "VIDEO",
         source_upload_size_bytes: int | None = None,
@@ -414,12 +419,13 @@ class Database:
                     id, status, stage, progress, original_video_name,
                     video_size_bytes, video_sha256, video_path,
                     client_key, lyrics_source, lyrics_path, vocal_mode,
+                    alignment_mode,
                     client_submission_id, input_mode,
                     source_upload_size_bytes, source_upload_sha256,
                     created_at, updated_at
                 )
                 VALUES (?, 'UPLOADED', 'UPLOAD_COMPLETE', 100,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -431,6 +437,7 @@ class Database:
                     lyrics_source,
                     str(lyrics_path) if lyrics_path else None,
                     vocal_mode,
+                    alignment_mode,
                     client_submission_id,
                     input_mode,
                     source_upload_size_bytes or video_size_bytes,
@@ -455,6 +462,7 @@ class Database:
                 "lyrics_source": lyrics_source,
                 "lyrics_provided": lyrics_path is not None,
                 "vocal_mode": vocal_mode,
+                "alignment_mode": alignment_mode,
                 "status": "UPLOADED",
                 "stage": "UPLOAD_COMPLETE",
             },

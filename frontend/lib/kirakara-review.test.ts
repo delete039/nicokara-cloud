@@ -200,7 +200,7 @@ describe("Kirakara timeline review", () => {
     expect(() => distributeMoraRange(source, 0, [0, 2])).toThrow("连续的字");
   });
 
-  it("keeps a dragged line between its neighboring lines", () => {
+  it("ripples neighboring lines instead of clamping a dragged line", () => {
     const withNeighbors: KirakaraTimeline = {
       ...timeline,
       durationMs: 4500,
@@ -228,11 +228,16 @@ describe("Kirakara timeline review", () => {
     };
 
     const movedRight = applyLineOffset(withNeighbors, 1, 1000);
-    expect(movedRight.lines[1]).toMatchObject({ startMs: 1500, endMs: 3500 });
+    expect(movedRight.lines[1]).toMatchObject({ startMs: 2000, endMs: 4000 });
     expect(movedRight.lines[1].units[0].moras[0]).toMatchObject({
-      startMs: 1500,
-      endMs: 2000,
+      startMs: 2000,
+      endMs: 2500,
     });
+    expect(movedRight.lines[2]).toMatchObject({ startMs: 4000, endMs: 4500 });
+
+    const movedIntoPreviousGap = applyLineOffset(withNeighbors, 1, -400);
+    expect(movedIntoPreviousGap.lines[0]).toMatchObject({ startMs: 0, endMs: 600 });
+    expect(movedIntoPreviousGap.lines[1]).toMatchObject({ startMs: 600, endMs: 2600 });
 
     const movedLeft = applyLineOffset(withNeighbors, 1, -1000);
     expect(movedLeft.lines[1]).toMatchObject({ startMs: 800, endMs: 2800 });

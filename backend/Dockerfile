@@ -21,12 +21,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app/backend
 COPY pyproject.toml ./
-RUN mkdir -p app \
-    && touch app/__init__.py \
-    && pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --retries 10 --timeout 60 \
         torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
-        --index-url $PYTORCH_INDEX_URL \
-    && pip install --no-cache-dir ".[ai]"
+        --index-url $PYTORCH_INDEX_URL
+RUN mkdir -p app && touch app/__init__.py
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --retries 10 --timeout 60 ".[ai]"
 COPY config ./config
 COPY app ./app
 

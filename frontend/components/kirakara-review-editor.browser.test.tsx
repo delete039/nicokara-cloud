@@ -360,6 +360,29 @@ describe("KirakaraReviewEditor browser behavior", () => {
     }));
   });
 
+  it("REQ-WAVEFORM-01 seeks from a click on the sentence waveform", () => {
+    const onSeek = vi.fn();
+    const { container } = renderEditor({ onSeek });
+    const waveform = container.querySelector<HTMLElement>('[data-audio-waveform="true"]');
+    expect(waveform).toBeTruthy();
+    Object.defineProperty(waveform, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 100, width: 400 }),
+    });
+    waveform!.setPointerCapture = vi.fn();
+    waveform!.hasPointerCapture = vi.fn(() => true);
+    waveform!.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(waveform!, {
+      pointerId: 1,
+      pointerType: "mouse",
+      button: 0,
+      clientX: 300,
+    });
+
+    expect(onSeek).toHaveBeenCalledWith(1500);
+  });
+
   it("REQ-STYLE-LAYOUT-02 lets the timeline fill the timing card content width", () => {
     const { container } = renderEditor();
     const wrapper = container.querySelector('[data-timeline-track-wrapper="true"]');

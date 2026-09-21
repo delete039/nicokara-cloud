@@ -219,7 +219,8 @@ describe("jobFailureFeedback", () => {
     expect(feedback.title).toBe("歌词时间轴对齐失败");
     expect(feedback.solutions.join(" ")).toContain("每句歌词单独一行");
     expect(feedback.solutions.join(" ")).toContain("演唱内容一致");
-    expect(feedback.description).toContain("FA-Kara / MMS");
+    expect(feedback.description).toContain("高精度时间轴对齐引擎");
+    expect(feedback.solutions.join(" ")).toContain("高精度模型");
     expect(feedback.solutions.join(" ")).toContain("{漢字|かな}");
   });
 

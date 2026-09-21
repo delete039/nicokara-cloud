@@ -14,6 +14,7 @@ export type Job = {
     | "reviewed_subtitle"
     | null;
   vocal_mode?: "on" | "off";
+  alignment_mode?: "auto" | "standard" | "multivoice" | "robust";
   off_vocal_conversion?: boolean;
   instrumental_ready?: boolean;
   has_timeline?: boolean;

@@ -75,7 +75,7 @@ export function jobPresentation(
       return {
         eyebrow: "正在保存注音",
         title: "正在保存假名注音",
-        description: "保存完成后将自动开始生成 FA-Kara Mora 时间轴。",
+        description: "保存完成后将自动开始生成高精度 Mora 时间轴。",
         progressLabel: "保存注音",
         terminal: false,
         tone: "active",
@@ -85,7 +85,7 @@ export function jobPresentation(
       return {
         eyebrow: "注音待确认",
         title: "请先确认假名注音",
-        description: "确认后将使用当前读音生成 FA-Kara Mora 时间轴。",
+        description: "确认后将使用当前读音交给高精度时间轴引擎处理。",
         progressLabel: "等待注音确认",
         terminal: true,
         tone: "pending",
@@ -159,7 +159,7 @@ export function jobPresentation(
     return {
       eyebrow: "人声处理",
       title: "正在分离人声与伴奏",
-      description: "服务器正在使用 UVR 分离人声与伴奏：人声音轨用于提高歌词对齐精度，选择 OFF VOCAL 时还会用于最终导出。",
+      description: "服务器正在生成伴奏音轨；时间轴对齐使用原始音频，选择 OFF VOCAL 时还会使用伴奏音轨进行最终导出。",
       progressLabel: "分离人声",
       terminal: false,
       tone: "active",
@@ -199,7 +199,7 @@ export function jobPresentation(
     return {
       eyebrow: "时间轴同步",
       title: "正在匹配歌词时间",
-      description: "服务器正在使用 FA-Kara / MMS 匹配人声与歌词；主对齐无法完成时才会尝试备用时间轴。",
+      description: "服务器正在使用高精度时间轴引擎匹配人声与歌词；主模型无法完成时才会自动切换备用方案。",
       progressLabel: "对齐时间",
       terminal: false,
       tone: "active",

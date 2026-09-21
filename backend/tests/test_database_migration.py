@@ -36,15 +36,18 @@ def test_initialize_adds_phase3_columns_to_phase2_database(tmp_path: Path) -> No
     database.initialize()
 
     with sqlite3.connect(database_path) as connection:
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
-        }
+        schema_rows = connection.execute("PRAGMA table_info(jobs)").fetchall()
+        columns = {row[1] for row in schema_rows}
+        alignment_mode_schema = next(
+            row for row in schema_rows if row[1] == "alignment_mode"
+        )
     assert "audio_path" in columns
     assert "transcript_path" in columns
     assert "lyrics_processed_path" in columns
     assert "timeline_path" in columns
     assert "ass_path" in columns
     assert "output_path" in columns
+    assert alignment_mode_schema[4] == "'auto'"
 
 
 def test_job_state_changes_emit_structured_log_events(

@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     fa_kara_silence_top_percent: float = 10.0
     fa_kara_silence_threshold_ratio: float = 0.1
     fa_kara_tail_window_seconds: float = 0.02
+    # Prefer Yohane when its staged model and FA-Kara source are available;
+    # the alignment engine still falls back to MMS and Whisper on failure.
+    yohane_enabled: bool = True
+    yohane_source_dir: Path = Field(default=Path("data/yohane/FA-Kara"))
+    yohane_model_dir: Path = Field(default=Path("data/yohane/model"))
+    yohane_python_command: str = "python"
+    yohane_timeout_seconds: int = 900
+    yohane_min_confidence: float = 0.10
     vocal_removal_backend: str = "mdx"
     vocal_removal_model: str = "UVR_MDXNET_KARA_2.onnx"
     vocal_removal_model_dir: Path = Field(
@@ -114,6 +122,7 @@ class Settings(BaseSettings):
         "video_render_timeout_seconds",
         "fa_kara_timeout_seconds",
         "fa_kara_max_concurrent_alignments",
+        "yohane_timeout_seconds",
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:
@@ -143,7 +152,7 @@ class Settings(BaseSettings):
             raise ValueError("must be greater than zero and at most 100")
         return value
 
-    @field_validator("fa_kara_min_confidence")
+    @field_validator("fa_kara_min_confidence", "yohane_min_confidence")
     @classmethod
     def valid_fa_kara_confidence(cls, value: float) -> float:
         if not 0 <= value <= 1:

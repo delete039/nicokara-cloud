@@ -17,6 +17,7 @@ class JobResponse(BaseModel):
     video_sha256: str
     lyrics_source: str | None = None
     vocal_mode: str = "on"
+    alignment_mode: str = "auto"
     off_vocal_conversion: bool = False
     instrumental_ready: bool = False
     has_timeline: bool = False

@@ -70,9 +70,21 @@ def test_backend_dependency_layer_is_reused_for_app_only_changes() -> None:
         Path(__file__).parents[1] / "Dockerfile"
     ).read_text(encoding="utf-8")
 
-    assert dockerfile.index('pip install --no-cache-dir ".[ai]"') < (
+    assert dockerfile.index('pip install --retries 10 --timeout 60 ".[ai]"') < (
         dockerfile.index("COPY app ./app")
     )
+
+
+def test_backend_dependency_downloads_use_a_retryable_build_cache() -> None:
+    dockerfile = (
+        Path(__file__).parents[1] / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert dockerfile.count(
+        "--mount=type=cache,target=/root/.cache/pip,sharing=locked"
+    ) == 2
+    assert "pip install --retries 10 --timeout 60" in dockerfile
+    assert "--no-cache-dir" not in dockerfile
 
 
 def test_backend_installs_mms_fa_and_persists_its_model_cache() -> None:
@@ -92,6 +104,23 @@ def test_backend_installs_mms_fa_and_persists_its_model_cache() -> None:
     assert 'NICOKARA_FA_KARA_ENABLED: ${NICOKARA_FA_KARA_ENABLED:-true}' in compose
     assert 'mms-model-cache:/root/.cache/torch' in compose
     assert 'mms-model-cache:' in compose
+
+
+def test_compose_stages_yohane_as_the_preferred_alignment_model() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    pyproject = (project_root / "backend" / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    compose = (project_root / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"transformers>=4.45,<5"' in pyproject
+    assert 'NICOKARA_YOHANE_ENABLED: ${NICOKARA_YOHANE_ENABLED:-true}' in compose
+    assert 'NICOKARA_YOHANE_SOURCE_DIR: /app/models/yohane/FA-Kara' in compose
+    assert 'NICOKARA_YOHANE_MODEL_DIR: /app/models/yohane/model' in compose
+    assert '/app/models/yohane/FA-Kara:ro' in compose
+    assert '/app/models/yohane/model:ro' in compose
 
 
 def test_cpu_compose_and_dockerfile_use_an_explicit_matching_torch_device() -> None:

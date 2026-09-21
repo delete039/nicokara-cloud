@@ -21,6 +21,16 @@
 
 ## 更新日志
 
+### 当前开发版 - 2026-09-21
+
+- 首页统一使用最高置信度的 `auto` 时间轴流程，不开放多模型选择；系统优先尝试 Yohane，生成异常或质量检查不通过时自动降级到 MMS_FA，再降级到 Whisper 备用对齐器。
+- 新增 `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn` Yohane 对齐适配：通过可终止的独立进程运行，支持 CPU/CUDA、超时、并发限制和本地模型缓存，避免单个任务卡住整个 worker。
+- Yohane 优先使用原始混音进行时间轴分析，减少人声分离造成的音色和时间损失；MMS_FA 保留为稳定的高精度备用路径。
+- 增加可选的双模型稳健模式：以 MMS 为时间锚点，只接受置信度更高、偏移受限且 Mora 时长合理的 Yohane 局部修正；检测到整首歌系统性偏移时拒绝候选结果，避免出现整段歌词错位。
+- 时间轴产物记录实际 `alignment_engine`、`alignment_model` 和降级原因，便于管理员日志追踪与问题复现。
+- Kirakara 字幕逐字符进度修正：连续标点（例如 `...`）现在按字符依次滚动，不再三个标点同时变色；标点单元的整体起止时间保持不变。
+- 更新首页处理提示、失败反馈、移动端提交链路和首次访问公告，使界面说明与当前高精度对齐流程一致。
+
 ### v0.3.0-alpha.3 - 2026-08-06
 
 - 浏览器音频改为 8 MiB 分片上传，单片失败最多重试 3 次；刷新或重新选择同一素材时只补传缺失分片。
@@ -84,8 +94,8 @@
                               v
                  FastAPI 后端任务队列
                               |
-          UVR 人声分离 / 歌声识别 / 歌词处理
-                 / 时间轴对齐 / Ruby 注音
+       歌声识别 / 歌词处理 / Yohane 优先对齐
+          MMS_FA 备用对齐 / Ruby 注音
                               |
                               v
                   Kirakara 字幕时间轴
@@ -284,7 +294,7 @@ docker compose up --build
 4. 提交后观察上传及处理进度。
 5. 任务完成后检查注音、时间轴和字幕预览，再尝试导出。
 
-首次执行高精度对齐会下载约 1.18 GiB 的 TorchAudio MMS_FA 模型；首次执行歌声识别或人声分离还可能下载 Whisper、UVR 模型，因此第一次任务会明显较慢。模型会保存在 Docker 数据卷中供后续任务复用。
+首次执行高精度对齐会准备 Yohane、TorchAudio MMS_FA 等模型；首次执行歌声识别或人声分离还可能下载 Whisper、UVR 模型，因此第一次任务会明显较慢。Yohane 的 FA-Kara 源码和模型目录默认从宿主机 `models/yohane/FA-Kara`、`models/yohane/model` 挂载，模型文件不会提交到 GitHub。若 Yohane 文件尚未上传，系统会自动使用 MMS_FA 或 Whisper 备用流程；也可以将 `NICOKARA_YOHANE_ENABLED=false` 写入 `.env` 暂时关闭 Yohane。
 
 ### 第 7 步：停止和再次启动
 

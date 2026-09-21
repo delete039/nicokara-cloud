@@ -57,6 +57,7 @@ function videoInput(input: MobileSubmissionInput): CreateJobInput {
     lyricsFile: input.lyricsFile,
     projectFiles: input.projectFiles,
     vocalMode: input.vocalMode,
+    alignmentMode: input.alignmentMode,
   };
 }
 
@@ -106,6 +107,7 @@ export async function submitMobileJob(
       lyricsFile: input.lyricsFile,
       projectFiles: input.projectFiles,
       vocalMode: input.vocalMode,
+      alignmentMode: input.alignmentMode,
     },
     (progress) => emit("UPLOADING_AUDIO", progress),
     options.signal,

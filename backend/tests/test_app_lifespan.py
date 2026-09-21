@@ -9,6 +9,7 @@ import pytest
 from app.core.config import Settings
 from app.alignment.aligner import LyricTimelineAligner
 from app.alignment.engine import ResilientAlignmentEngine
+from app.alignment.dual import RobustDualAlignment
 from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.main import create_app
 from app.lyrics.processor import (
@@ -272,6 +273,62 @@ def test_app_enables_fa_kara_mms_for_audio_only_jobs(tmp_path: Path) -> None:
             second_pipeline.aligner.primary.runtime.limiter
             is aligner.primary.runtime.limiter
         )
+
+
+def test_app_builds_robust_dual_aligner_when_yohane_is_available(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "FA-Kara"
+    model_dir = tmp_path / "yohane-model"
+    source_dir.mkdir()
+    model_dir.mkdir()
+    (source_dir / "align_yohane.py").write_text("", encoding="utf-8")
+    for filename in (
+        "config.json",
+        "model.safetensors",
+        "processor_config.json",
+        "tokenizer_config.json",
+        "vocab.json",
+    ):
+        (model_dir / filename).write_text("", encoding="utf-8")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        fa_kara_enabled=True,
+        yohane_enabled=True,
+        yohane_source_dir=source_dir,
+        yohane_model_dir=model_dir,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        aligner = client.app.state.runner.pipeline.aligner
+        assert isinstance(aligner.robust_primary, RobustDualAlignment)
+        assert aligner.robust_primary.primary is aligner.primary
+        assert aligner.robust_primary.secondary is aligner.multivoice_primary
+
+
+def test_app_does_not_enable_yohane_for_empty_model_directories(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "FA-Kara"
+    model_dir = tmp_path / "yohane-model"
+    source_dir.mkdir()
+    model_dir.mkdir()
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=True,
+        fa_kara_enabled=True,
+        yohane_enabled=True,
+        yohane_source_dir=source_dir,
+        yohane_model_dir=model_dir,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        aligner = client.app.state.runner.pipeline.aligner
+        assert aligner.multivoice_primary is None
+        assert aligner.robust_primary is None
 
 
 def test_app_can_disable_fa_kara_without_disabling_processing(

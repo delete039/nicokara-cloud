@@ -317,38 +317,106 @@ export function applyLineOffset(
   const current = timeline.lines[lineIndex];
   if (!current) throw new RangeError("歌词行不存在");
 
-  const previous = timeline.lines[lineIndex - 1];
-  const next = timeline.lines[lineIndex + 1];
-  const duration = current.endMs - current.startMs;
-  const minimumStart = Math.max(0, previous?.endMs ?? 0);
-  const maximumStart = next
-    ? Math.max(minimumStart, next.startMs - duration)
-    : Number.POSITIVE_INFINITY;
-  const nextStart = Math.min(
-    maximumStart,
-    Math.max(minimumStart, Math.round(current.startMs + offsetMs)),
+  const requestedShift = Number.isFinite(offsetMs) ? Math.round(offsetMs) : 0;
+  const nextStart = Math.max(0, current.startMs + requestedShift);
+  const appliedShift = nextStart - current.startMs;
+  const lines = timeline.lines.map((line, index) =>
+    index === lineIndex ? shiftLine(line, appliedShift) : { ...line },
   );
-  const shift = nextStart - current.startMs;
-  const shiftTime = (value: number) => value + shift;
-  const lines = timeline.lines.map((line, index): KirakaraLine => {
-    if (index !== lineIndex) return line;
+
+  // Moving a line uses ripple behavior: overlapping neighbors follow the edit
+  // by adapting their touching boundary first, preserving the other edge.
+  // If a neighbor would collapse, fall back to shifting that neighbor and
+  // the lines behind it while preserving their duration.
+  if (appliedShift < 0) {
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      const nextLine = lines[index + 1];
+      const previousLine = lines[index];
+      if (previousLine.endMs <= nextLine.startMs) continue;
+      const requestedNeighborShift = nextLine.startMs - previousLine.endMs;
+      if (nextLine.startMs > previousLine.startMs + 1) {
+        lines[index] = resizeLineBoundary(previousLine, "end", nextLine.startMs);
+      } else {
+        const neighborShift = Math.max(requestedNeighborShift, -previousLine.startMs);
+        lines[index] = shiftLine(previousLine, neighborShift);
+      }
+    }
+  }
+
+  // If there is no remaining room before the first line, keep the timeline
+  // valid by placing the edited line immediately after its predecessor.
+  const previous = lines[lineIndex - 1];
+  if (previous && lines[lineIndex].startMs < previous.endMs) {
+    lines[lineIndex] = shiftLine(
+      lines[lineIndex],
+      previous.endMs - lines[lineIndex].startMs,
+    );
+  }
+
+  for (let index = lineIndex + 1; index < lines.length; index += 1) {
+    const previousLine = lines[index - 1];
+    const nextLine = lines[index];
+    if (nextLine.startMs < previousLine.endMs) {
+      if (previousLine.endMs < nextLine.endMs - 1) {
+        lines[index] = resizeLineBoundary(nextLine, "start", previousLine.endMs);
+      } else {
+        lines[index] = shiftLine(nextLine, previousLine.endMs - nextLine.startMs);
+      }
+    }
+  }
+  return { ...timeline, lines, durationMs: durationMs({ ...timeline, lines }) };
+}
+
+function shiftLine(line: KirakaraLine, shiftMs: number): KirakaraLine {
+  const shiftTime = (value: number) => value + shiftMs;
+  return {
+    ...line,
+    startMs: shiftTime(line.startMs),
+    endMs: shiftTime(line.endMs),
+    units: line.units.map((unit) => ({
+      ...unit,
+      startMs: shiftTime(unit.startMs),
+      endMs: shiftTime(unit.endMs),
+      moras: unit.moras.map((mora) => ({
+        ...mora,
+        startMs: shiftTime(mora.startMs),
+        endMs: shiftTime(mora.endMs),
+      })),
+    })),
+  };
+}
+
+function resizeLineBoundary(
+  line: KirakaraLine,
+  edge: LineEdge,
+  boundaryMs: number,
+): KirakaraLine {
+  if (edge === "start") {
+    const nextStart = Math.min(line.endMs - 1, Math.max(0, Math.round(boundaryMs)));
     return {
       ...line,
-      startMs: shiftTime(line.startMs),
-      endMs: shiftTime(line.endMs),
-      units: line.units.map((unit) => ({
-        ...unit,
-        startMs: shiftTime(unit.startMs),
-        endMs: shiftTime(unit.endMs),
-        moras: unit.moras.map((mora) => ({
-          ...mora,
-          startMs: shiftTime(mora.startMs),
-          endMs: shiftTime(mora.endMs),
-        })),
-      })),
+      startMs: nextStart,
+      units: line.units.map((unit) => scaleUnit(
+        unit,
+        line.startMs,
+        line.endMs,
+        nextStart,
+        line.endMs,
+      )),
     };
-  });
-  return { ...timeline, lines, durationMs: durationMs({ ...timeline, lines }) };
+  }
+  const nextEnd = Math.max(line.startMs + 1, Math.round(boundaryMs));
+  return {
+    ...line,
+    endMs: nextEnd,
+    units: line.units.map((unit) => scaleUnit(
+      unit,
+      line.startMs,
+      line.endMs,
+      line.startMs,
+      nextEnd,
+    )),
+  };
 }
 
 export type LineEdge = "start" | "end";
