@@ -27,7 +27,31 @@ node -e 'const [a,b]=process.versions.node.split(".").map(Number);if(a<22||(a===
 PREVIOUS_RELEASE="$(readlink -f "$APP_ROOT/current")"
 OLD_PYTHON="$PREVIOUS_RELEASE/backend/.venv/bin/python"
 [[ -x "$OLD_PYTHON" ]] || fail "旧版本 Python 环境不存在。"
-[[ ! -e "$RELEASE_DIR" && ! -e "$BACKUP_DIR" ]] || fail "发布或备份目录已存在，拒绝覆盖。"
+if [[ "$PREVIOUS_RELEASE" == "$RELEASE_DIR" ]]; then
+  fail "发布目录就是当前运行版本，不能原地覆盖；请重新生成部署包。"
+fi
+archive_existing_directory() {
+  local path="$1"
+  local parent="$2"
+  local archived
+  local suffix
+  [[ "$path" != "$parent" && "$path" == "$parent/"* ]] || fail "拒绝操作目录：$path"
+  [[ ! -L "$path" ]] || fail "发布目录不能是符号链接：$path"
+  if [[ -e "$path" ]]; then
+    [[ -d "$path" ]] || fail "发布目录不是目录：$path"
+    suffix="$(date +%Y%m%d-%H%M%S)-$$"
+    archived="$path.previous-$suffix"
+    while [[ -e "$archived" ]]; do
+      suffix="$(date +%Y%m%d-%H%M%S)-$RANDOM"
+      archived="$path.previous-$suffix"
+    done
+    mv -- "$path" "$archived"
+    echo "已有目录已保留为：$archived"
+  fi
+  mkdir -p "$path"
+}
+archive_existing_directory "$RELEASE_DIR" "$APP_ROOT/releases"
+archive_existing_directory "$BACKUP_DIR" "$APP_ROOT/backups"
 for unit in nicokara-backend nicokara-frontend; do
   [[ "$(systemctl show -p LoadState --value "$unit")" == "loaded" ]] || fail "服务不存在：$unit"
 done

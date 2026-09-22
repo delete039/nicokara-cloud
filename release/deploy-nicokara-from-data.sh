@@ -24,7 +24,7 @@ APP_ROOT="/data/nicokara"
 RELEASE_DIR="$APP_ROOT/releases/$RELEASE_ID"
 SHARED_DIR="$APP_ROOT/shared"
 
-for command_name in sha256sum tar python3 node ffmpeg nginx curl systemctl; do
+for command_name in sha256sum tar python3 node ffmpeg nginx curl systemctl readlink; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "缺少运行环境命令: $command_name，请先完成部署步骤 2。" >&2
     exit 1
@@ -58,17 +58,29 @@ echo "校验部署包..."
     sha256sum -c -
 )
 
+CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)"
+if [[ -e "$RELEASE_DIR" ]]; then
+  if [[ "$CURRENT_RELEASE" == "$RELEASE_DIR" ]]; then
+    echo "当前服务正在使用目标发布目录，先停止服务后再覆盖。" >&2
+    systemctl stop nicokara-frontend nicokara-backend 2>/dev/null || true
+    if systemctl is-active --quiet nicokara-backend || systemctl is-active --quiet nicokara-frontend; then
+      echo "无法停止当前服务，拒绝覆盖: $RELEASE_DIR" >&2
+      exit 1
+    fi
+  fi
+  [[ -d "$RELEASE_DIR" && ! -L "$RELEASE_DIR" ]] || {
+    echo "发布目录不是普通目录，拒绝覆盖: $RELEASE_DIR" >&2
+    exit 1
+  }
+  EXISTING_RELEASE_BACKUP="$RELEASE_DIR.previous-$(date +%Y%m%d-%H%M%S)-$$"
+  mv -- "$RELEASE_DIR" "$EXISTING_RELEASE_BACKUP"
+  echo "已有发布目录已保留为: $EXISTING_RELEASE_BACKUP"
+fi
 mkdir -p \
   "$RELEASE_DIR" \
   "$SHARED_DIR/data" \
   "$SHARED_DIR/storage/jobs" \
   "$SHARED_DIR/models"
-
-if find "$RELEASE_DIR" -mindepth 1 -print -quit | grep -q .; then
-  echo "发布目录非空，拒绝覆盖: $RELEASE_DIR" >&2
-  echo "请指定新的发布编号，例如: $0 $PUBLIC_ORIGIN 20260731-02" >&2
-  exit 1
-fi
 
 echo "解压应用..."
 tar -xzf "$APP_ARCHIVE" -C "$RELEASE_DIR" --strip-components=1

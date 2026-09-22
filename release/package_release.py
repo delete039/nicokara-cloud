@@ -101,7 +101,8 @@ curl -fsS http://127.0.0.1:8000/health
 脚本创建新版本环境，先安装依赖，再停止服务、备份 SQLite 与配置、切换版本并检查健康状态。
 健康检查失败会尝试恢复旧版本及配置。数据库不会自动倒退，备份在
 `/data/nicokara/backups/{release_id}/`，任务文件和模型不删除。
-失败的发布目录会保留用于排查；修复原因后需更换发布 ID 或重新生成升级包。
+已有同名发布目录或备份目录会自动改名为带 `.previous-` 后缀的保留目录，
+然后创建干净目录继续部署；失败的发布目录也会保留用于排查。
 首次部署请按项目中的 `DEPLOYMENT_LOCAL_BUILD.md` 准备基础环境。
 """, encoding="utf-8", newline="\n")
     print(json.dumps({"archive": str(archive_path), "script": str(script), "checksum": str(checksum),
