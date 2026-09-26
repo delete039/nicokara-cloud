@@ -32,3 +32,15 @@ def test_normalize_reading_converts_kanji_katakana_and_punctuation() -> None:
     assert japanese_module.normalize_reading("物語、ストーリー！") == (
         "ものがたりすとーりー"
     )
+    assert japanese_module.normalize_reading("♪物語★") == "ものがたり"
+
+
+def test_split_moras_ignores_unicode_symbols_and_brackets() -> None:
+    japanese_module = importlib.import_module("app.alignment.japanese")
+
+    assert japanese_module.split_moras(
+        "\u266a\u300cかな\u300d\u2605\uff08\uff09()[]{}…！？、。—+-*/=_#%&@\U0001f642"
+    ) == [
+        "か",
+        "な",
+    ]

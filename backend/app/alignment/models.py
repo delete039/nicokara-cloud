@@ -45,6 +45,47 @@ class LyricTimeline:
         return asdict(self)
 
 
+def finalize_aligned_tokens(
+    tokens: list[AlignedToken],
+    *,
+    fallback_ms: int = 0,
+) -> tuple[list[AlignedToken], int, int]:
+    """Place punctuation-only tokens on the nearest spoken-content boundary."""
+    if not tokens:
+        return [], fallback_ms, fallback_ms
+
+    timed_indexes = [
+        index for index, token in enumerate(tokens) if token.moras
+    ]
+    if not timed_indexes:
+        finalized = [
+            replace(token, start_ms=fallback_ms, end_ms=fallback_ms)
+            for token in tokens
+        ]
+        return finalized, fallback_ms, fallback_ms
+
+    first_timed = timed_indexes[0]
+    last_timed = timed_indexes[-1]
+    line_start = tokens[first_timed].start_ms
+    line_end = tokens[last_timed].end_ms
+    finalized: list[AlignedToken] = []
+    previous_timed_end = line_start
+    for index, token in enumerate(tokens):
+        if token.moras:
+            finalized.append(token)
+            previous_timed_end = token.end_ms
+            continue
+        anchor = (
+            line_start
+            if index < first_timed
+            else line_end
+            if index > last_timed
+            else previous_timed_end
+        )
+        finalized.append(replace(token, start_ms=anchor, end_ms=anchor))
+    return finalized, line_start, line_end
+
+
 def shift_timeline(timeline: LyricTimeline, offset_ms: int) -> LyricTimeline:
     """Shift every timeline boundary while keeping all segments valid."""
     if offset_ms == 0 or not timeline.lines:

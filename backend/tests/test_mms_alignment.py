@@ -90,6 +90,61 @@ def test_mms_aligner_maps_romanized_spans_to_existing_mora_timeline(
     assert timeline.confidence == pytest.approx((0.91 + 0.88 + 0.95) / 3)
 
 
+def test_mms_aligner_keeps_leading_and_trailing_symbols_on_content_boundaries(
+    tmp_path: Path,
+) -> None:
+    from app.alignment.mms import MMSForcedAligner, MMSMoraSpan
+
+    lyrics = LyricDocument(
+        provider="local",
+        source_text="\u300c\u305d\u3093\u306a\u300d\u3068",
+        lines=[
+            LyricLine(
+                source="\u300c\u305d\u3093\u306a\u300d\u3068",
+                surface="\u300c\u305d\u3093\u306a\u300d\u3068",
+                reading="\u300c\u305d\u3093\u306a\u300d\u3068",
+                tokens=[
+                    LyricToken(surface="\u300c", reading="\u300c"),
+                    LyricToken(surface="\u305d\u3093\u306a", reading="\u305d\u3093\u306a"),
+                    LyricToken(surface="\u300d", reading="\u300d"),
+                    LyricToken(surface="\u3068", reading="\u3068"),
+                ],
+            )
+        ],
+    )
+
+    class Runtime:
+        def align(
+            self,
+            audio_path,
+            tokens,
+            timeout_seconds,
+            *,
+            line_token_counts,
+        ):
+            assert tokens == ["so", "n", "na", "to"]
+            assert line_token_counts == [4]
+            return [
+                MMSMoraSpan(
+                    start_ms=10_000 + index * 100,
+                    end_ms=10_100 + index * 100,
+                    score=0.9,
+                )
+                for index in range(4)
+            ]
+
+    timeline = MMSForcedAligner(runtime=Runtime()).align(
+        lyrics,
+        empty_transcript(),
+        audio_path=tmp_path / "vocals.wav",
+    )
+
+    line = timeline.lines[0]
+    assert (line.start_ms, line.end_ms) == (10_000, 10_400)
+    assert (line.tokens[0].start_ms, line.tokens[0].end_ms) == (10_000, 10_000)
+    assert (line.tokens[2].start_ms, line.tokens[2].end_ms) == (10_300, 10_300)
+
+
 def test_resilient_aligner_falls_back_and_records_actual_engine(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

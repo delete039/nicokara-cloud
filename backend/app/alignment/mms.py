@@ -21,6 +21,7 @@ from app.alignment.models import (
     AlignedToken,
     LyricTimeline,
     close_mora_gaps,
+    finalize_aligned_tokens,
 )
 from app.lyrics.models import LyricDocument
 
@@ -340,6 +341,7 @@ class MMSForcedAligner:
     ) -> LyricTimeline:
         lines: list[AlignedLine] = []
         span_offset = 0
+        previous_line_end = 0
         for line_index, line in enumerate(lyrics.lines):
             aligned_tokens: list[AlignedToken] = []
             for token_index, token in enumerate(line.tokens):
@@ -385,12 +387,16 @@ class MMSForcedAligner:
                 )
             if not aligned_tokens:
                 continue
+            aligned_tokens, line_start, line_end = finalize_aligned_tokens(
+                aligned_tokens,
+                fallback_ms=previous_line_end,
+            )
             lines.append(
                 AlignedLine(
                     surface=line.surface,
                     reading=line.reading,
-                    start_ms=aligned_tokens[0].start_ms,
-                    end_ms=aligned_tokens[-1].end_ms,
+                    start_ms=line_start,
+                    end_ms=line_end,
                     confidence=(
                         sum(token.confidence for token in aligned_tokens)
                         / len(aligned_tokens)
@@ -398,6 +404,7 @@ class MMSForcedAligner:
                     tokens=aligned_tokens,
                 )
             )
+            previous_line_end = line_end
 
         confidence = sum(span.score for span in spans) / len(spans)
         warnings = ["mms_low_confidence"] if confidence < 0.5 else []

@@ -30,7 +30,7 @@ def split_moras(reading: str) -> list[str]:
     moras: list[str] = []
     for character in reading:
         category = unicodedata.category(character)
-        if character.isspace() or category.startswith("P"):
+        if character.isspace() or category.startswith(("P", "S")):
             continue
         if character in COMBINING_KANA and moras:
             moras[-1] += character

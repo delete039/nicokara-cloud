@@ -11,6 +11,7 @@ from app.alignment.models import (
     AlignedToken,
     LyricTimeline,
     close_mora_gaps,
+    finalize_aligned_tokens,
 )
 from app.lyrics.models import LyricDocument
 
@@ -66,6 +67,7 @@ class LyricTimelineAligner:
 
         lines: list[AlignedLine] = []
         mora_offset = 0
+        previous_line_end = 0
         for line_index, lyric_line in enumerate(lyrics.lines):
             tokens: list[AlignedToken] = []
             for token_index, lyric_token in enumerate(lyric_line.tokens):
@@ -103,16 +105,21 @@ class LyricTimelineAligner:
                         moras=token_moras,
                     )
                 )
+            tokens, line_start, line_end = finalize_aligned_tokens(
+                tokens,
+                fallback_ms=previous_line_end,
+            )
             lines.append(
                 AlignedLine(
                     surface=lyric_line.surface,
                     reading=lyric_line.reading,
-                    start_ms=tokens[0].start_ms,
-                    end_ms=tokens[-1].end_ms,
+                    start_ms=line_start,
+                    end_ms=line_end,
                     confidence=sum(token.confidence for token in tokens) / len(tokens),
                     tokens=tokens,
                 )
             )
+            previous_line_end = line_end
 
         warnings = [] if confidence == 1.0 else ["partial_alignment"]
         return close_mora_gaps(
