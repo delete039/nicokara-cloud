@@ -62,6 +62,8 @@ export type KirakaraVideoOutputValidator = (
 ) => Promise<void>;
 
 type DrawableVideoSample = Pick<VideoSample, "timestamp" | "drawWithFit">;
+type KirakaraVideoCanvasContext = KirakaraCanvasContext &
+  Pick<CanvasRenderingContext2D, "fillRect">;
 type ConversionInitOptions = Parameters<typeof Conversion.init>[0];
 type ConversionOptionsWithoutOwnership = Omit<
   ConversionInitOptions,
@@ -211,12 +213,14 @@ export async function validateKirakaraVideoOutput(
 
 export function paintKirakaraVideoFrame(
   sample: DrawableVideoSample,
-  context: KirakaraCanvasContext,
+  context: KirakaraVideoCanvasContext,
   timeline: KirakaraTimeline,
   style?: KirakaraStyle,
 ): void {
   const { width, height } = context.canvas;
   context.clearRect(0, 0, width, height);
+  context.fillStyle = "#000000";
+  context.fillRect(0, 0, width, height);
   sample.drawWithFit(
     context as CanvasRenderingContext2D,
     { fit: "contain" },

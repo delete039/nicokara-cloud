@@ -12,6 +12,8 @@ function context(
     lineJoin: CanvasLineJoin;
     miterLimit: number;
     lineWidth: number;
+    strokeStyle: string | CanvasGradient | CanvasPattern;
+    shadowColor?: string;
   }> = [];
   const canvasContext = {
     canvas: { width: 1280, height: 720 },
@@ -23,6 +25,8 @@ function context(
         lineJoin: canvasContext.lineJoin,
         miterLimit: canvasContext.miterLimit,
         lineWidth: canvasContext.lineWidth,
+        strokeStyle: canvasContext.strokeStyle,
+        shadowColor: canvasContext.shadowColor,
       });
     }),
     measureText: vi.fn((text: string) => ({
@@ -275,8 +279,40 @@ describe("drawKirakaraFrame", () => {
 
     expect(canvas.fillText).toHaveBeenCalledWith("歌", 80, expect.any(Number));
     expect(canvas.font).toContain("normal 64px");
-    expect(canvas.shadowColor).toBe("#654321");
-    expect(canvas.shadowOffsetX).toBe(4);
+    expect(canvas.strokeStates.some(({ strokeStyle }) => strokeStyle === "#654321")).toBe(true);
+    expect(canvas.shadowColor).toBe("transparent");
+    expect(canvas.shadowOffsetX).toBe(0);
     expect(canvas.strokeStyle).toBe("#abcdef");
+  });
+
+  it("draws the sung shadow behind the sung outline", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "歌",
+        units: [{
+          text: "歌",
+          progress: 0.5,
+          characters: [{ text: "歌", progress: 0.5 }],
+          ruby: [],
+        }],
+      }],
+    }, {
+      style: {
+        ...DEFAULT_KIRAKARA_STYLE,
+        strokeColorBefore: "#111111",
+        strokeColorAfter: "#222222",
+        shadowColor: "#333333",
+        shadowDepth: 4,
+      },
+    });
+
+    expect(canvas.strokeStates.slice(0, 2).map(({ strokeStyle }) => strokeStyle))
+      .toEqual(["#333333", "#333333"]);
+    expect(canvas.strokeStates.slice(2).map(({ strokeStyle }) => strokeStyle))
+      .toContain("#222222");
+    expect(canvas.fillText.mock.calls[0]).toEqual(["歌", 132, expect.any(Number)]);
   });
 });

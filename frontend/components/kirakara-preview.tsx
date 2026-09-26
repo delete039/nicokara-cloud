@@ -3,7 +3,7 @@
 import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
+import { KirakaraCanvasFrame } from "@/components/kirakara-canvas-frame";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
@@ -820,7 +820,7 @@ export function KirakaraPreview({
                   }}
                 />
               )}
-              <KirakaraDomFrame frame={frame} style={style} />
+              <KirakaraCanvasFrame frame={frame} style={style} />
               <PlaybackRateNotice rate={rateNotice} />
               {!timeline && !timelineError && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">

@@ -152,16 +152,40 @@ export function distributeMoraRange(
     mora.endMs = startMs + Math.floor(duration * (index + 1) / indexes.length);
   });
 
-  // Keep token ranges valid when a selected range begins or ends on a token edge.
-  const firstUnit = units[first.unitIndex];
-  const lastUnit = units[last.unitIndex];
-  if (first.moraIndex === 0) firstUnit.startMs = firstUnit.moras[0]?.startMs ?? firstUnit.startMs;
-  if (last.moraIndex === lastUnit.moras.length - 1) lastUnit.endMs = lastUnit.moras.at(-1)?.endMs ?? lastUnit.endMs;
-  for (let unitIndex = first.unitIndex + 1; unitIndex < last.unitIndex; unitIndex += 1) {
+  // The renderer uses a token's outer edges for its first and last Mora.
+  // Keep those edges in sync for every token touched by the selection; when a
+  // range crosses token boundaries, leaving either edge stale makes adjacent
+  // characters share one rendered time slice.
+  const firstSelectedMoraByUnit = new Map<number, number>();
+  const lastSelectedMoraByUnit = new Map<number, number>();
+  indexes.forEach((moraIndex) => {
+    const reference = references[moraIndex];
+    firstSelectedMoraByUnit.set(
+      reference.unitIndex,
+      Math.min(
+        reference.moraIndex,
+        firstSelectedMoraByUnit.get(reference.unitIndex) ?? reference.moraIndex,
+      ),
+    );
+    lastSelectedMoraByUnit.set(
+      reference.unitIndex,
+      Math.max(
+        reference.moraIndex,
+        lastSelectedMoraByUnit.get(reference.unitIndex) ?? reference.moraIndex,
+      ),
+    );
+  });
+
+  firstSelectedMoraByUnit.forEach((firstMoraIndex, unitIndex) => {
     const unit = units[unitIndex];
-    unit.startMs = unit.moras[0]?.startMs ?? unit.startMs;
-    unit.endMs = unit.moras.at(-1)?.endMs ?? unit.endMs;
-  }
+    const lastMoraIndex = lastSelectedMoraByUnit.get(unitIndex) as number;
+    if (firstMoraIndex === 0) {
+      unit.startMs = unit.moras[0]?.startMs ?? unit.startMs;
+    }
+    if (lastMoraIndex === unit.moras.length - 1) {
+      unit.endMs = unit.moras.at(-1)?.endMs ?? unit.endMs;
+    }
+  });
 
   const lines = timeline.lines.map((candidate, candidateIndex) =>
     candidateIndex === lineIndex ? { ...candidate, units } : candidate,

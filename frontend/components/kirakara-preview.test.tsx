@@ -73,7 +73,7 @@ describe("KirakaraPreview", () => {
     expect(html.match(/Kirakara 引擎/g)).toHaveLength(1);
   });
 
-  it("uses a DOM lyric overlay for realtime preview instead of canvas", async () => {
+  it("uses the shared Canvas lyric overlay for realtime preview", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
@@ -86,8 +86,8 @@ describe("KirakaraPreview", () => {
       />,
     );
 
-    expect(html).toContain('data-kirakara-dom-preview="true"');
-    expect(html).not.toContain("<canvas");
+    expect(html).toContain('data-kirakara-canvas-preview="true"');
+    expect(html).not.toContain('data-kirakara-dom-preview="true"');
   });
 
   it("REQ-PLACEMENT-07 gives the video the full workbench width", async () => {

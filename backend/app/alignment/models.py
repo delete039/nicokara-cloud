@@ -45,6 +45,65 @@ class LyricTimeline:
         return asdict(self)
 
 
+def shift_timeline(timeline: LyricTimeline, offset_ms: int) -> LyricTimeline:
+    """Shift every timeline boundary while keeping all segments valid."""
+    if offset_ms == 0 or not timeline.lines:
+        return timeline
+
+    def shifted(value: int) -> int:
+        return max(0, value + offset_ms)
+
+    def shifted_range(start_ms: int, end_ms: int) -> tuple[int, int]:
+        start = shifted(start_ms)
+        end = max(start, shifted(end_ms))
+        return start, end
+
+    lines: list[AlignedLine] = []
+    for line in timeline.lines:
+        line_start, line_end = shifted_range(line.start_ms, line.end_ms)
+        tokens: list[AlignedToken] = []
+        for token in line.tokens:
+            token_start, token_end = shifted_range(token.start_ms, token.end_ms)
+            moras: list[AlignedMora] = []
+            for mora in token.moras:
+                mora_start, mora_end = shifted_range(
+                    mora.start_ms,
+                    mora.end_ms,
+                )
+                moras.append(
+                    replace(
+                        mora,
+                        start_ms=mora_start,
+                        end_ms=mora_end,
+                    )
+                )
+            tokens.append(
+                replace(
+                    token,
+                    start_ms=token_start,
+                    end_ms=token_end,
+                    moras=moras,
+                )
+            )
+        lines.append(
+            replace(
+                line,
+                start_ms=line_start,
+                end_ms=line_end,
+                tokens=tokens,
+            )
+        )
+
+    return replace(
+        timeline,
+        lines=lines,
+        warnings=[
+            *timeline.warnings,
+            f"timeline_offset_applied:{offset_ms}ms",
+        ],
+    )
+
+
 def close_mora_gaps(timeline: LyricTimeline) -> LyricTimeline:
     """Extend each mora through positive gaps inside its own lyric line."""
     lines: list[AlignedLine] = []

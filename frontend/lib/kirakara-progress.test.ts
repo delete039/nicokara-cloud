@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { inkAwareProgress } from "./kirakara-progress";
+import { clampRightClipPercentage, inkAwareProgress } from "./kirakara-progress";
 
 describe("inkAwareProgress", () => {
+  it("clamps the DOM right inset after ink compensation exceeds the glyph box", () => {
+    expect(clampRightClipPercentage(-12)).toBe(100);
+    expect(clampRightClipPercentage(75)).toBe(25);
+    expect(clampRightClipPercentage(112)).toBe(0);
+  });
+
   it("extends the mask from the left ink edge through the right stroke", () => {
     const result = inkAwareProgress({
       rawProgress: 0.25,

@@ -6,7 +6,10 @@ import {
   normalizeKirakaraStyle,
   type KirakaraStyle,
 } from "@/lib/kirakara-style";
-import { inkAwareProgress } from "@/lib/kirakara-progress";
+import {
+  clampRightClipPercentage,
+  inkAwareProgress,
+} from "@/lib/kirakara-progress";
 import type {
   KirakaraFrame,
   KirakaraFrameCharacter,
@@ -212,7 +215,7 @@ function TextMask({
     safePad,
   );
   const leftClip = percentage <= 0 ? "100%" : `-${safePad}px`;
-  const rightClip = 100 - percentage;
+  const rightClip = clampRightClipPercentage(percentage);
   const baseStyle: CSSProperties = {
     display: "inline-block",
     padding: `${safePad}px`,

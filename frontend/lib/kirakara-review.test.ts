@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { KirakaraTimeline } from "./kirakara-timeline";
+import {
+  activeKirakaraFrame,
+  type KirakaraTimeline,
+} from "./kirakara-timeline";
 import {
   applyLineEdgeOffset,
   applyLineOffset,
@@ -198,6 +201,55 @@ describe("Kirakara timeline review", () => {
       { reading: "み", startMs: 1250, endMs: 1500, matched: true },
     ]);
     expect(() => distributeMoraRange(source, 0, [0, 2])).toThrow("连续的字");
+  });
+
+  it("keeps every token boundary synchronized after distributing a whole line", () => {
+    const source: KirakaraTimeline = {
+      ...timeline,
+      durationMs: 2000,
+      lines: [{
+        ...timeline.lines[0],
+        text: "甲乙",
+        reading: "かきくけ",
+        endMs: 2000,
+        units: [
+          {
+            text: "甲",
+            reading: "かき",
+            startMs: 1000,
+            endMs: 1300,
+            moras: [
+              { reading: "か", startMs: 1000, endMs: 1100, matched: true },
+              { reading: "き", startMs: 1100, endMs: 1300, matched: true },
+            ],
+          },
+          {
+            text: "乙",
+            reading: "くけ",
+            startMs: 1700,
+            endMs: 2000,
+            moras: [
+              { reading: "く", startMs: 1700, endMs: 1800, matched: true },
+              { reading: "け", startMs: 1800, endMs: 2000, matched: true },
+            ],
+          },
+        ],
+      }],
+    };
+
+    const updated = distributeMoraRange(source, 0);
+    expect(updated.lines[0].units.map(({ startMs, endMs }) => [startMs, endMs]))
+      .toEqual([[1000, 1500], [1500, 2000]]);
+
+    const frame = activeKirakaraFrame(updated, 1600);
+    expect(frame?.lines[0].units.map((unit) => unit.characters)).toEqual([
+      [
+        { text: "甲", progress: 1 },
+      ],
+      [
+        { text: "乙", progress: expect.closeTo(0.2, 5) },
+      ],
+    ]);
   });
 
   it("ripples neighboring lines instead of clamping a dragged line", () => {

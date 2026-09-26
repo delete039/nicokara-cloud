@@ -164,6 +164,7 @@ describe("paintKirakaraVideoFrame", () => {
 
     paintKirakaraVideoFrame(sample, context, timeline);
 
+    expect(context.fillRect).toHaveBeenCalledWith(0, 0, 1280, 720);
     expect(sample.drawWithFit).toHaveBeenCalledWith(context, { fit: "contain" });
     expect(calls.slice(0, 2)).toEqual(["video", "overlay"]);
   });

@@ -8,6 +8,14 @@ export type InkAwareProgressInput = {
   layoutWidth: number;
 };
 
+/** Return the CSS right inset for an ink-aware wipe, bounded to a valid inset. */
+export function clampRightClipPercentage(percentage: number): number {
+  const rightClip = 100 - percentage;
+  return Number.isFinite(rightClip)
+    ? Math.min(100, Math.max(0, rightClip))
+    : 100;
+}
+
 export function inkAwareProgress({
   rawProgress,
   fontSize,

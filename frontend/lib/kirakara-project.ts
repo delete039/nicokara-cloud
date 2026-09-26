@@ -30,6 +30,7 @@ function rubyReading(unit: KirakaraRenderUnit): string {
 }
 
 function rubyDirectives(timeline: KirakaraTimeline): string[] {
+  let number = 0;
   return timeline.lines.flatMap((line) =>
     line.units
       .filter(
@@ -39,8 +40,10 @@ function rubyDirectives(timeline: KirakaraTimeline): string[] {
           !/[\r\n,]/u.test(unit.text),
       )
       .map(
-        (unit) =>
-          `@Ruby=${unit.text},${rubyReading(unit)},${formatKirakaraTime(unit.startMs)},${formatKirakaraTime(unit.endMs)}`,
+        (unit) => {
+          number += 1;
+          return `@Ruby${number}=${unit.text},${rubyReading(unit)},${formatKirakaraTime(unit.startMs)},${formatKirakaraTime(unit.endMs)}`;
+        },
       ),
   );
 }
@@ -57,7 +60,7 @@ export function serializeKirakaraLrc(timeline: KirakaraTimeline): string {
       : "";
     return `${paragraphBreak}${body}${formatKirakaraTime(line.endMs)}`;
   });
-  return [...directives, ...lyricLines].join("\n");
+  return [...lyricLines, ...directives].join("\n");
 }
 
 export function kirakaraProjectConfig(style: KirakaraStyle) {

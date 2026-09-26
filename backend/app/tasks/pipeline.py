@@ -18,6 +18,7 @@ from app.core.event_logging import (
     exception_details,
 )
 from app.ai.whisper import transcript_document_from_dict
+from app.alignment.models import shift_timeline
 from app.alignment.review import lyric_timeline_from_dict
 from app.lyrics.lrc import parse_lrc, retime_timeline_from_lrc
 from app.lyrics.models import (
@@ -58,6 +59,8 @@ PUBLIC_ERROR_MESSAGES = {
 FFMPEG_UNAVAILABLE_MESSAGE = (
     "服务器音视频处理工具不可用，请管理员检查 FFmpeg 安装和配置。"
 )
+
+POST_ALIGNMENT_OFFSET_MS = -300
 
 
 class TranscriptionPipeline:
@@ -702,6 +705,10 @@ class TranscriptionPipeline:
                                 timeline,
                                 parsed_lrc.line_starts_ms,
                             )
+                        timeline = shift_timeline(
+                            timeline,
+                            POST_ALIGNMENT_OFFSET_MS,
+                        )
                         fallback_warnings = [
                             warning
                             for warning in timeline.warnings
@@ -1574,6 +1581,10 @@ class TranscriptionPipeline:
                     timeline,
                     parsed_lrc.line_starts_ms,
                 )
+            timeline = shift_timeline(
+                timeline,
+                POST_ALIGNMENT_OFFSET_MS,
+            )
             timeline_path.write_text(
                 json.dumps(
                     timeline.to_dict(),

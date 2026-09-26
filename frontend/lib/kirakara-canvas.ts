@@ -54,6 +54,8 @@ type LayoutGroup = {
   x: number;
 };
 
+type TextPass = "main" | "shadow";
+
 const INDICATOR_SIZE = 34;
 const INDICATOR_SPACING = 12;
 const INDICATOR_STROKE_WIDTH = 3;
@@ -71,18 +73,20 @@ function drawText(
   stroke: string,
   shadowColor: string,
   shadowDepth: number,
+  pass: TextPass = "main",
 ): void {
   context.save();
   context.lineJoin = "round";
   context.miterLimit = 2;
-  context.shadowColor = shadowDepth > 0 ? shadowColor : "transparent";
-  context.shadowBlur = Math.ceil(shadowDepth / 2);
-  context.shadowOffsetX = shadowDepth;
-  context.shadowOffsetY = shadowDepth;
-  context.strokeStyle = stroke;
-  if (context.lineWidth > 0) context.strokeText(text, x, y);
-  context.fillStyle = fill;
-  context.fillText(text, x, y);
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetX = 0;
+  context.shadowOffsetY = 0;
+  const offset = pass === "shadow" ? shadowDepth : 0;
+  context.strokeStyle = pass === "shadow" ? shadowColor : stroke;
+  if (context.lineWidth > 0) context.strokeText(text, x + offset, y + offset);
+  context.fillStyle = pass === "shadow" ? shadowColor : fill;
+  context.fillText(text, x + offset, y + offset);
   context.restore();
 }
 
@@ -260,6 +264,7 @@ function drawLine(
   style: KirakaraStyle,
   scaleX: number,
   scaleY: number,
+  pass: TextPass = "main",
 ): void {
   const fontSize = style.fontSize * scaleY;
   const rubyFontSize = style.rubySize * scaleY;
@@ -286,7 +291,7 @@ function drawLine(
   const previousAlpha = context.globalAlpha ?? 1;
   context.globalAlpha = previousAlpha * (line.opacity ?? 1);
 
-  if (line.indicatorOpacities && context.arc && context.fill && context.stroke) {
+  if (pass === "main" && line.indicatorOpacities && context.arc && context.fill && context.stroke) {
     const radius = INDICATOR_SIZE * scaleY / 2;
     const dotSize = INDICATOR_SIZE * scaleY;
     const spacing = INDICATOR_SPACING * scaleX;
@@ -319,7 +324,17 @@ function drawLine(
     const mainStrokeWidth = style.strokeWidth * scaleY;
     context.lineWidth = mainStrokeWidth * 2.2;
     for (const character of group.characters) {
-      drawText(context, character.text, character.x, baseline, style.colorBefore, style.strokeColorBefore, style.shadowColor, style.shadowDepth * scaleY);
+      drawText(
+        context,
+        character.text,
+        character.x,
+        baseline,
+        pass === "shadow" ? style.shadowColor : style.colorBefore,
+        pass === "shadow" ? style.shadowColor : style.strokeColorBefore,
+        style.shadowColor,
+        style.shadowDepth * scaleY,
+        pass,
+      );
       context.save();
       context.beginPath();
       clipCharacter(
@@ -332,7 +347,17 @@ function drawLine(
         mainStrokeWidth,
       );
       context.clip();
-      drawText(context, character.text, character.x, baseline, style.colorAfter, style.strokeColorAfter, style.shadowColor, style.shadowDepth * scaleY);
+      drawText(
+        context,
+        character.text,
+        character.x,
+        baseline,
+        pass === "shadow" ? style.shadowColor : style.colorAfter,
+        pass === "shadow" ? style.shadowColor : style.strokeColorAfter,
+        style.shadowColor,
+        style.shadowDepth * scaleY,
+        pass,
+      );
       context.restore();
     }
 
@@ -357,7 +382,17 @@ function drawLine(
     for (let index = 0; index < rubyCharacters.length; index += 1) {
       const { text, progress } = rubyCharacters[index];
       const width = context.measureText(text).width;
-      drawText(context, text, characterX, rubyBaseline, style.colorBefore, style.strokeColorBefore, style.shadowColor, style.shadowDepth * scaleY);
+      drawText(
+        context,
+        text,
+        characterX,
+        rubyBaseline,
+        pass === "shadow" ? style.shadowColor : style.colorBefore,
+        pass === "shadow" ? style.shadowColor : style.strokeColorBefore,
+        style.shadowColor,
+        style.shadowDepth * scaleY,
+        pass,
+      );
       context.save();
       context.beginPath();
       clipCharacter(
@@ -370,7 +405,17 @@ function drawLine(
         rubyStrokeWidth,
       );
       context.clip();
-      drawText(context, text, characterX, rubyBaseline, style.colorAfter, style.strokeColorAfter, style.shadowColor, style.shadowDepth * scaleY);
+      drawText(
+        context,
+        text,
+        characterX,
+        rubyBaseline,
+        pass === "shadow" ? style.shadowColor : style.colorAfter,
+        pass === "shadow" ? style.shadowColor : style.strokeColorAfter,
+        style.shadowColor,
+        style.shadowDepth * scaleY,
+        pass,
+      );
       context.restore();
       characterX += width + style.rubyLetterSpacing * scaleX;
     }
@@ -390,5 +435,8 @@ export function drawKirakaraFrame(
   const style = normalizeKirakaraStyle(options.style ?? DEFAULT_KIRAKARA_STYLE);
   const scaleX = width / 1280;
   const scaleY = height / 720;
+  if (style.shadowDepth > 0) {
+    for (const line of frame.lines) drawLine(context, line, style, scaleX, scaleY, "shadow");
+  }
   for (const line of frame.lines) drawLine(context, line, style, scaleX, scaleY);
 }

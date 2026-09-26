@@ -359,7 +359,28 @@ def test_pipeline_aligns_processed_lyrics_and_persists_timeline(
             transcript: TranscriptDocument,
         ) -> LyricTimeline:
             self.calls.append((lyrics, transcript))
-            return LyricTimeline(confidence=0.9, warnings=["partial_alignment"])
+            return LyricTimeline(
+                confidence=0.9,
+                warnings=["partial_alignment"],
+                lines=[
+                    AlignedLine(
+                        surface="物語",
+                        reading="ものがたり",
+                        start_ms=1000,
+                        end_ms=2500,
+                        confidence=0.9,
+                        tokens=[
+                            AlignedToken(
+                                surface="物語",
+                                reading="ものがたり",
+                                start_ms=1000,
+                                end_ms=2500,
+                                confidence=0.9,
+                            )
+                        ],
+                    )
+                ],
+            )
 
     aligner = FakeAligner()
     pipeline = pipeline_module.TranscriptionPipeline(
@@ -376,6 +397,11 @@ def test_pipeline_aligns_processed_lyrics_and_persists_timeline(
     timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
     assert aligner.calls[0][0] is processed
     assert timeline["confidence"] == 0.9
+    assert (timeline["lines"][0]["start_ms"], timeline["lines"][0]["end_ms"]) == (
+        700,
+        2200,
+    )
+    assert "timeline_offset_applied:-300ms" in timeline["warnings"]
     job = database.get_job(job_id)
     assert job is not None
     assert job["status"] == "ALIGNED"
@@ -490,7 +516,18 @@ def test_pipeline_resumes_with_reviewed_readings_without_repeating_audio_work(
             transcript: TranscriptDocument,
         ) -> LyricTimeline:
             self.readings.append(lyrics.lines[0].tokens[0].reading)
-            return LyricTimeline(confidence=1.0)
+            return LyricTimeline(
+                confidence=1.0,
+                lines=[
+                    AlignedLine(
+                        surface="君",
+                        reading="きみ",
+                        start_ms=1000,
+                        end_ms=1500,
+                        confidence=1.0,
+                    )
+                ],
+            )
 
     extractor = FakeExtractor()
     transcriber = FakeTranscriber()
@@ -526,6 +563,12 @@ def test_pipeline_resumes_with_reviewed_readings_without_repeating_audio_work(
     assert job is not None
     assert job["status"] == "ALIGNED"
     assert job["stage"] == "ALIGNMENT_COMPLETE"
+    timeline = json.loads((job_dir / "timeline.json").read_text(encoding="utf-8"))
+    assert (
+        timeline["lines"][0]["start_ms"],
+        timeline["lines"][0]["end_ms"],
+    ) == (700, 1200)
+    assert "timeline_offset_applied:-300ms" in timeline["warnings"]
 
 
 def test_pipeline_uses_existing_lrc_text_and_line_timing(tmp_path: Path) -> None:
@@ -618,8 +661,9 @@ def test_pipeline_uses_existing_lrc_text_and_line_timing(tmp_path: Path) -> None
     )
     assert [
         (line["start_ms"], line["end_ms"]) for line in timeline["lines"]
-    ] == [(1000, 2000), (3500, 4500)]
+    ] == [(700, 1700), (3200, 4200)]
     assert "lrc_timing_applied" in timeline["warnings"]
+    assert "timeline_offset_applied:-300ms" in timeline["warnings"]
 
 
 def test_pipeline_records_alignment_failure(tmp_path: Path) -> None:
