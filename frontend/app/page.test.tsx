@@ -24,7 +24,8 @@ describe("Cloud home page", () => {
     expect(html).toContain('id="upload-form"');
     expect(html).toContain("lg:min-h-[calc(100dvh-5rem)]");
     expect(html).toContain("视频素材");
-    expect(html).toContain("切换为深色主题");
+    expect(html).toContain('aria-label="主题模式"');
+    expect(html).toContain("跟随系统");
     expect(html).not.toContain("LOCAL");
   });
 

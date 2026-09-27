@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 
 import { AnnouncementDialog } from "@/components/announcement-dialog";
 import { PageviewTracker } from "@/components/pageview-tracker";
+import { ThemeSync } from "@/components/theme-sync";
 import { HOME_COPY } from "@/lib/ui-copy";
 import { THEME_INITIALIZATION_SCRIPT } from "@/lib/theme";
 
@@ -44,6 +45,7 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="min-h-screen">
         <script dangerouslySetInnerHTML={{ __html: THEME_INITIALIZATION_SCRIPT }} />
+        <ThemeSync />
         <PageviewTracker />
         {children}
         <AnnouncementDialog />
