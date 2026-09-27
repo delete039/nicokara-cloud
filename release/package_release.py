@@ -103,7 +103,7 @@ curl -fsS http://127.0.0.1:8000/health
 `/data/nicokara/backups/{release_id}/`，任务文件和模型不删除。
 已有同名发布目录或备份目录会自动改名为带 `.previous-` 后缀的保留目录，
 然后创建干净目录继续部署；失败的发布目录也会保留用于排查。
-首次部署请按项目中的 `DEPLOYMENT_LOCAL_BUILD.md` 准备基础环境。
+首次部署请按项目中的 `docs/deployment/DEPLOYMENT_LOCAL_BUILD.md` 准备基础环境。
 """, encoding="utf-8", newline="\n")
     print(json.dumps({"archive": str(archive_path), "script": str(script), "checksum": str(checksum),
                       "instructions": str(instructions), "sha256": digest, "commit": source,

@@ -18,7 +18,7 @@
 
 ```bash
 python -m app.alignment.benchmark_cli \
-  ../ALIGNMENT_BENCHMARK.json \
+  ../docs/quality/ALIGNMENT_BENCHMARK.json \
   --output ../alignment-benchmark-report.json
 ```
 
@@ -48,7 +48,7 @@ python -m app.alignment.benchmark_cli \
 
 ```bash
 python -m app.alignment.benchmark_cli \
-  ../ALIGNMENT_BENCHMARK.json \
+  ../docs/quality/ALIGNMENT_BENCHMARK.json \
   --output ../alignment-benchmark-report.json --strict
 ```
 

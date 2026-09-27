@@ -1,349 +1,308 @@
 # ニコカラ自动生成器 Cloud
 
-## 项目简介
+在浏览器中上传 MV 和日语歌词，自动完成歌声识别、假名注音、Mora 时间轴、Kirakara 逐字字幕以及 ON VOCAL / OFF VOCAL 视频导出。
 
-ニコカラ自动生成器 Cloud 面向没有字幕制作和视频剪辑经验的用户。用户只需提供原始 MV 和逐行歌词，系统即可完成音频处理、日语歌声识别、歌词时间轴对齐、汉字假名注音、Karaoke 逐字变色字幕以及视频导出。
+> 当前版本：`v0.3.0-alpha.3`。项目仍处于 Alpha 阶段，建议先用短视频验证浏览器兼容性、注音和时间轴效果。
 
-### 项目定位
+## 项目能做什么
 
-本项目以“浏览器完成、尽量少上传、无需学习专业软件”为目标：
+- 选择标准 `.mp4` 视频，粘贴歌词或上传 UTF-8 `TXT` / `LRC` 文件。
+- 服务器先整理歌词读音，在 `READING_REVIEW_REQUIRED` 阶段等待用户确认或修正假名。
+- 自动生成 Mora 级时间轴、Ruby 假名和 Kirakara 双行逐字高亮字幕。
+- 浏览器支持时优先提取音频，只上传音频和歌词；不支持时改用可恢复的完整视频分片上传。
+- 在结果页预览视频，编辑行、词和 Mora 时间，调整字幕样式，并自动保存草稿。
+- 每个任务分别提供 `ON VOCAL` 和 `OFF VOCAL` 的本地导出与云端导出。
+- 支持失败重试、排队取消、断点续传、提交幂等恢复和管理员队列监控。
 
-- 无需掌握字幕打轴、ASS 特效或视频剪辑。
-- 支持 `ON VOCAL` 原人声和 `OFF VOCAL` 伴奏两种输出。
-- 首页统一提交一次任务，预览页分别提供 `ON VOCAL` 原人声与 `OFF VOCAL` 伴奏的本地、云端导出入口。两种版本共用当前注音、时间轴与字幕样式；OFF VOCAL 按需准备伴奏，不会重复识别对齐。云端两种成片分别保存、下载，本地文件名也会区分版本。
-- 对符合条件的素材，优先在浏览器提取音频，只将音频和歌词发送到后端。
-- 使用 Kirakara 逻辑预览、检查注音、调整时间轴和渲染双行ニコカラ字幕。
-- 可重新导入本站导出的调整后注音、mora 时间轴和 ASS 字幕，继续对齐、编辑或渲染。
-- 浏览器具备本地导出能力时直接在本机生成视频；能力不足时自动改用云端渲染。
-- 提供上传排队、处理排队、任务取消、异常恢复和管理员监控，适合多人访问。
+## 先了解这些边界
 
-当前版本仍处于 Alpha 阶段。建议先使用短视频验证浏览器兼容性和生成效果，再处理正式素材。
+- 视频入口只接受可以正常播放并包含音轨的 `.mp4`，默认上限为 `1 GiB`；歌词上限为 `1 MiB`。
+- 浏览器音频优先路径的本地媒体阈值约为 `300 MiB`。超过该阈值仍可提交，但会上传完整视频。
+- 服务端音频入口默认上限为 `256 MiB`；浏览器提取的音频使用 8 MiB 分片上传。
+- 浏览器的 `LOCAL` 完整本地推理接口尚未完成真实 UVR/CTC 模型适配，当前不要把它当作可用的离线推理方案。
+- `AUDIO_ONLY` 只是不上传原视频，识别、注音和对齐仍由服务器完成；服务器生成字幕产物后停止，不会自动合成视频。
+- 本地视频导出依赖 WebCodecs、H.264 和 AAC。最新版桌面 Chrome 或 Edge 最稳定；Safari/iOS 能力不足时请使用云端渲染。
+- 第一次任务可能下载 Whisper、UVR、MMS_FA 等模型，CPU 环境会明显较慢。Yohane 源码和模型不随仓库提供，缺少时会自动降级。
 
-## 更新日志
+## 快速开始
 
-### 当前开发版 - 2026-09-21
+### Docker Compose
 
-- 首页统一使用最高置信度的 `auto` 时间轴流程，不开放多模型选择；系统优先尝试 Yohane，生成异常或质量检查不通过时自动降级到 MMS_FA，再降级到 Whisper 备用对齐器。
-- 新增 `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn` Yohane 对齐适配：通过可终止的独立进程运行，支持 CPU/CUDA、超时、并发限制和本地模型缓存，避免单个任务卡住整个 worker。
-- Yohane 优先使用原始混音进行时间轴分析，减少人声分离造成的音色和时间损失；MMS_FA 保留为稳定的高精度备用路径。
-- 增加可选的双模型稳健模式：以 MMS 为时间锚点，只接受置信度更高、偏移受限且 Mora 时长合理的 Yohane 局部修正；检测到整首歌系统性偏移时拒绝候选结果，避免出现整段歌词错位。
-- 时间轴产物记录实际 `alignment_engine`、`alignment_model` 和降级原因，便于管理员日志追踪与问题复现。
-- Kirakara 字幕逐字符进度修正：连续标点（例如 `...`）现在按字符依次滚动，不再三个标点同时变色；标点单元的整体起止时间保持不变。
-- 更新首页处理提示、失败反馈、移动端提交链路和首次访问公告，使界面说明与当前高精度对齐流程一致。
+准备 Docker Desktop 和 Compose 后，在项目根目录执行：
 
-### v0.3.0-alpha.3 - 2026-08-06
-
-- 浏览器音频改为 8 MiB 分片上传，单片失败最多重试 3 次；刷新或重新选择同一素材时只补传缺失分片。
-- 音频上传会话和任务创建共用幂等提交 ID，完成请求超时后可恢复任务，未完成会话会按配置自动清理。
-- 音频优先任务完整接入云端 UVR + FA-Kara/MMS_FA Mora 级高精度对齐，包括非静音压缩、原时间回映射和句首/尾音修正。
-- 支持 FA-Kara `{漢字|かな}` 与 `[表记|romaji]` 标注；自动注音会为英文和数字生成可编辑的平假名默认读音，并在确认页醒目标记，用户确认实际唱法后再参与 MMS 对齐。
-- UVR 单次生成供识别使用的人声和供 `OFF VOCAL` 使用的伴奏，避免同一任务重复推理。
-- UVR 或 MMS_FA 超时、失败或不可用时自动回退原 Whisper 对齐器，并在时间轴中记录实际引擎和回退原因。
-- UVR 模型缓存下载不完整时自动清理并重试；低置信度 MMS 结果不会再作为成功时间轴进入预览。
-- 增加独立开关、超时、CPU/CUDA 配置、模型缓存和固定数据集基准工具。
-
-### v0.3.0-alpha.2 - 2026-08-06
-
-- 增加可配置的首次访问公告，公告 JSON 可在部署后直接更新或关闭。
-- 后台任务默认使用 3 个 worker，并支持通过 TOML 配置热调整 worker 数量。
-- 浏览器预览、本地导出和云端渲染统一采用 Kirakara 双行交替字幕逻辑。云端按字体实际度量换算 ASS 字号、基线与间距；要复现自定义字体，浏览器与服务器需安装相同字体（建议 Noto Sans JP / Noto Sans CJK JP）。
-- 增加可视化时间轴调整、整体偏移、逐汉字注音检查和字幕样式设置。
-- WebCodecs 本地 MP4 导出使用 H.264 视频和 AAC 音频（48 kHz、双声道、192 kbps），原声与伴奏均进行音频转码和结果校验；不支持 AAC 编码的浏览器使用云端导出。本地导出可用时也可选择云端导出。
-- `OFF VOCAL` 支持下载云端 UVR 生成的伴奏，并在浏览器导出时替换原音轨。
-
-### v0.3.0-alpha.1 - 2026-08-06
-
-- 增加电脑和手机浏览器能力检测，以及 `LOCAL`、`AUDIO_ONLY`、`REMOTE_VIDEO` 自动选路。
-- 对 300 MB 以内素材优先在浏览器提取音频，避免上传完整视频。
-- 增加浏览器音频任务接口、模型清单与缓存接口、完全本地任务状态机。
-- 增加 Kirakara DOM 实时预览和本地媒体会话恢复能力。
-
-### v0.2.0 - 2026-08-05
-
-- 增加受管理员令牌保护的 `/admin` 监控页面。
-- 展示上传队列、处理队列、worker 心跳、系统资源和失败任务。
-- 支持管理员取消任务、重新入队和操作审计。
-
-### v0.1.1 - 2026-08-04
-
-- 增加大文件上传排队、排队位置和退出排队。
-- 视频改为 8 MiB 分片上传，单片失败最多重试 3 次。
-- 增加任务幂等查询，减少 Cloudflare 524 或网络中断造成的重复提交。
-
-### v0.1.0
-
-- 完成视频与歌词上传、歌声识别、歌词处理、时间轴对齐、ASS 字幕和视频渲染的基础闭环。
-- 支持 `ON VOCAL`、`OFF VOCAL`、任务状态查询和结果下载。
-
-完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
-
-## 项目基本架构
-
-### 处理流程
-
-```text
-用户选择 MP4 和逐行歌词
-        |
-        v
-浏览器检测设备、素材和编码能力
-        |
-        +-- 浏览器优先路径：本地提取音频 -> 上传音频和歌词
-        |
-        `-- 兼容回退路径：分片上传完整视频和歌词
-                              |
-                              v
-                 FastAPI 后端任务队列
-                              |
-       歌声识别 / 歌词处理 / Yohane 优先对齐
-          MMS_FA 备用对齐 / Ruby 注音
-                              |
-                              v
-                  Kirakara 字幕时间轴
-                              |
-          +-------------------+-------------------+
-          |                                       |
-          v                                       v
-浏览器预览与本地导出                    云端 FFmpeg 渲染后下载
-```
-
-### 技术组成
-
-| 模块 | 技术与职责 |
-|---|---|
-| 前端 | React、TypeScript、vinext、Tailwind CSS；负责上传、排队、进度、预览和本地导出 |
-| 浏览器媒体 | Mediabunny、DOM、Canvas、WebCodecs；负责本地音频提取、Kirakara DOM 预览和 Canvas MP4 导出 |
-| 后端 | FastAPI、SQLite；负责任务、队列、上传票据、管理监控和产物接口 |
-| 音频与识别 | FFmpeg、audio-separator/UVR、FA-Kara 适配层、TorchAudio MMS_FA、faster-whisper、Janome、pykakasi |
-| 字幕与视频 | Mora 时间轴、Ruby 注音、Kirakara 双行布局、FFmpeg/libass |
-| 数据 | `storage/jobs/{job_id}` 保存每个任务的输入、时间轴、字幕和结果 |
-
-### 目录结构
-
-```text
-nicokara-cloud/
-|-- frontend/                 前端页面、浏览器媒体处理和测试
-|-- backend/                  FastAPI、任务流程、字幕处理和测试
-|-- storage/jobs/             本地任务文件，不提交到 Git
-|-- release/                  服务器部署与恢复脚本
-|-- docker-compose.yml        本地完整运行配置
-|-- docker-compose.dev.yml    修改代码时使用的开发配置
-|-- .env.example              可选环境变量示例
-`-- CHANGELOG.md              完整更新日志
-```
-
-Kirakara 与 FA-Kara 适配逻辑的来源和许可信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
-
-### 管理员处理日志
-
-后端会把上传、排队、worker 分配、流水线阶段、降级、失败、完成、服务恢复和定期清理记录为结构化事件。管理页面位于 `/admin/logs`，需要先配置 `NICOKARA_ADMIN_TOKEN`。普通用户看到的错误信息仍然只包含安全的处理建议；异常类型、脱敏后的 traceback 和外部程序诊断只在管理员日志中显示。
-
-每条事件使用稳定的英文事件名，主要规范如下：
-
-| 事件 | 含义 |
-|---|---|
-| `request.started` / `request.completed` / `request.failed` | HTTP 请求开始、结束或异常 |
-| `upload.*` | 上传票据、排队、分片、合并、校验和任务创建 |
-| `job.queued` / `worker.assigned` / `worker.released` | 处理排队、worker 领取与释放 |
-| `pipeline.started` / `pipeline.completed` | 一次任务运行开始或完成 |
-| `stage.started` / `stage.progress` / `stage.completed` | 处理阶段开始、节流后的进度和完成 |
-| `stage.skipped` / `stage.fallback` / `stage.failed` | 跳过、降级或阶段失败 |
-| `pipeline.paused` / `pipeline.canceled` / `pipeline.failed` | 等待注音确认、取消或最终失败 |
-| `cleanup.*` / `job.interrupted` | 文件和日志清理、服务重启恢复 |
-
-常用字段包括 `event`、`level`、`category`、`job_id/reference_id`、`run_id`、`request_id`、`stage`、`component`、`duration_ms`、`details`、`created_at` 和 `schema_version`。同一任务每次重新入队都会获得新的 `run_id`，可避免把多次尝试混在一起。响应头 `X-Request-ID` 可用于关联浏览器报错与后端请求。
-
-日志不会保存完整歌词、完整转录文本、上传内容、API Key、管理员 Token、Cookie、Authorization、签名 URL 或完整本地路径。子进程输出只在失败时保存脱敏后的尾部摘要，并有长度上限。
-
-日志环境变量：
-
-| 变量 | 默认值 | 说明 |
-|---|---:|---|
-| `NICOKARA_LOG_LEVEL` | `INFO` | 控制台结构化事件最低级别 |
-| `NICOKARA_EVENT_LOG_LEVEL` | `INFO` | SQLite 管理日志最低级别 |
-| `NICOKARA_JSON_CONSOLE_LOGS` | `false` | 是否以单行 JSON 输出结构化控制台事件 |
-| `NICOKARA_EVENT_LOG_DEBUG` | `false` | 是否允许记录 DEBUG 处理细节 |
-| `NICOKARA_EVENT_LOG_RETENTION_DAYS` | `30` | 管理日志保留天数 |
-| `NICOKARA_EVENT_LOG_MAX_ROWS` | `100000` | SQLite 最多保留的事件数 |
-| `NICOKARA_EVENT_LOG_PROGRESS_THROTTLE_SECONDS` | `5` | 同一任务同一阶段进度事件最短间隔 |
-
-生产环境建议保持 INFO。临时排障可同时设置 `NICOKARA_EVENT_LOG_LEVEL=DEBUG` 和 `NICOKARA_EVENT_LOG_DEBUG=true`，问题结束后恢复默认值并重启后端。DEBUG 也不会逐音频帧、逐字或逐 Whisper token 写入 SQLite。
-
-按任务 ID 查看完整时间线：
-
-```bash
-curl -H "Authorization: Bearer $NICOKARA_ADMIN_TOKEN" \
-  "http://127.0.0.1:8000/api/v1/admin/jobs/JOB_ID/timeline?order=asc"
-```
-
-在管理页面输入任务 ID 后点击“任务时间线”，可继续按 `run_id` 查看某次重试。日志列表还支持级别、分类、事件、阶段、组件、任务/票据 ID、run ID、request ID、时间范围、关键词和正倒序筛选。
-
-本地默认访问关系：
-
-```text
-浏览器 -> http://localhost:3000 -> 前端
-浏览器 -> http://localhost:8000 -> FastAPI
-前端 /api 请求 -> FastAPI -> SQLite + storage/jobs + 本地模型缓存
-```
-
-## 鸣谢
-
-- [@FMPeach](https://github.com/FMPeach) - [Kirakara-Player](https://github.com/FMPeach/Kirakara-Player)
-
-  本项目的ニコカラ字幕预览、样式配置及浏览器渲染适配参考了 Kirakara-Player 的设计与实现。感谢原作者公开项目并提供相关技术支持。
-
-本项目对相关功能进行了适配与整合。Kirakara-Player 的版权及许可证仍归原项目作者所有，完整许可内容见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
-
-- [@moriwx](https://github.com/moriwx) - [FA-Kara](https://github.com/moriwx/FA-Kara)
-
-  本项目的歌词发音标记、非静音处理、MMS 强制对齐和时间回映射参考并适配了 FA-Kara。感谢原作者公开完整实现。
-
-本项目没有直接运行 FA-Kara 的命令行入口，而是将其对齐核心适配到现有 UVR、任务队列和 Mora 时间轴契约。FA-Kara 的版权及许可证仍归原项目作者所有，完整许可内容见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，对照范围与差异见 [FA_KARA_INTEGRATION_AUDIT.md](./FA_KARA_INTEGRATION_AUDIT.md)。
-
-## 本地部署 0 基础教程
-
-以下步骤以 Windows 10/11 为例。推荐使用 Docker Desktop，不需要单独安装 Python、Node.js 或 FFmpeg。
-
-### 第 1 步：确认电脑条件
-
-- 64 位 Windows 10/11。
-- 至少 8 GB 内存，推荐 16 GB。
-- 至少预留 20 GB 磁盘空间，用于 Docker 镜像、Python 依赖和模型缓存。
-- 在 BIOS/UEFI 中启用 CPU 虚拟化。任务管理器的“性能 -> CPU”页面应显示“虚拟化：已启用”。
-
-### 第 2 步：安装 Git
-
-1. 打开 [Git for Windows 官方下载页](https://git-scm.com/install/windows)。
-2. 下载并安装，安装过程保持默认选项即可。
-3. 安装完成后重新打开 PowerShell，执行：
-
-```powershell
-git --version
-```
-
-能看到版本号说明安装成功。
-
-### 第 3 步：安装 Docker Desktop
-
-1. 打开 [Docker Desktop Windows 安装说明](https://docs.docker.com/desktop/setup/install/windows-install/)。
-2. 下载并安装 Docker Desktop，安装时使用 WSL 2 后端。
-3. 如果安装程序提示缺少 WSL，以管理员身份打开 PowerShell并执行：
-
-```powershell
-wsl --install
-wsl --update
-```
-
-4. 按提示重启电脑，然后启动 Docker Desktop。
-5. 等待 Docker Desktop 显示 Engine running，再执行：
-
-```powershell
-docker --version
-docker compose version
-```
-
-两条命令都能显示版本号，说明 Docker 已经可用。
-
-### 第 4 步：下载项目
-
-在希望保存项目的位置打开 PowerShell。例如保存到 `D:\study`：
-
-```powershell
-cd D:\study
+~~~bash
 git clone https://github.com/delete039/nicokara-cloud.git
 cd nicokara-cloud
-```
-
-如果已经下载过项目，进入项目目录后更新即可：
-
-```powershell
-cd D:\study\nicokara-cloud
-git pull
-```
-
-### 第 5 步：启动项目
-
-确认 Docker Desktop 正在运行，然后在项目根目录执行：
-
-```powershell
 docker compose up --build
-```
+~~~
 
-首次启动需要下载基础镜像、Python 依赖和前端依赖，通常会明显慢于后续启动。只要终端仍在持续输出下载或构建信息，就不要关闭窗口。
+启动完成后访问：
 
-看到前后端均已启动后，打开浏览器访问：
+| 服务 | 地址 |
+| --- | --- |
+| 前端 | <http://localhost:3000> |
+| FastAPI OpenAPI | <http://localhost:8000/docs> |
+| ReDoc | <http://localhost:8000/redoc> |
+| 健康检查 | <http://localhost:8000/health> |
 
-- 项目首页：<http://localhost:3000>
-- 后端接口文档：<http://localhost:8000/docs>
-- 后端健康检查：<http://localhost:8000/health>
+首次构建和首次任务会下载依赖及模型，请保留模型缓存卷。普通停止使用：
 
-后台任务默认启动 3 个 worker。运行时可修改
-`backend/config/workers.toml` 中的 `processing.worker_count`，后端会在 1 秒内热加载，
-无需重启容器。全站公告位于 `frontend/public/announcement.json`；修改内容后刷新页面
-即可生效，设置 `enabled` 为 `false` 可关闭公告。
-
-后端默认最多保留 4 个内存等待任务、32 个已排队或正在处理的任务，以及 32 个上传会话，
-并保留至少 2 GB 空闲磁盘。内存队列已满时，已接收任务留在数据库中等待调度。
-资源限制和停止超时的配置见 [部署说明](./DEPLOYMENT_LOCAL_BUILD.md#7-systemd)；
-对齐结果的可重复检查见 [对齐基准](./ALIGNMENT_BENCHMARK.md)。
-
-### 第 6 步：完成第一次测试
-
-1. 准备一个较短的 MP4 视频，建议首次测试控制在 1 分钟以内。
-2. 准备 UTF-8 编码的 TXT 歌词，每句歌词单独成行。
-3. 打开首页，选择视频、歌词和 `ON VOCAL`。
-4. 提交后观察上传及处理进度。
-5. 任务完成后检查注音、时间轴和字幕预览，再尝试导出。
-
-首次执行高精度对齐会准备 Yohane、TorchAudio MMS_FA 等模型；首次执行歌声识别或人声分离还可能下载 Whisper、UVR 模型，因此第一次任务会明显较慢。Yohane 的 FA-Kara 源码和模型目录默认从宿主机 `models/yohane/FA-Kara`、`models/yohane/model` 挂载，模型文件不会提交到 GitHub。若 Yohane 文件尚未上传，系统会自动使用 MMS_FA 或 Whisper 备用流程；也可以将 `NICOKARA_YOHANE_ENABLED=false` 写入 `.env` 暂时关闭 Yohane。
-
-### 第 7 步：停止和再次启动
-
-在运行日志窗口按 `Ctrl + C` 停止服务，然后执行：
-
-```powershell
+~~~bash
 docker compose down
-```
+~~~
 
-下次启动通常不需要重新构建：
+不要把 `docker compose down -v` 当作普通停止命令，它会删除 SQLite 和模型缓存卷。
 
-```powershell
-docker compose up
-```
+### GPU 对齐
 
-修改了 `Dockerfile`、`backend/pyproject.toml` 或 `frontend/package-lock.json` 后，再执行：
+宿主机已配置 Docker GPU 支持时，可以使用 CUDA 版 Torch 和 FA-Kara：
 
-```powershell
-docker compose up --build
-```
+~~~bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+~~~
 
-### 第 8 步：常见问题
+该覆盖文件将 `NICOKARA_FA_KARA_DEVICE` 设为 `cuda`，并要求可用的 NVIDIA GPU。没有 GPU 时直接使用默认 CPU 配置即可。
 
-| 现象 | 处理方法 |
-|---|---|
-| `docker` 不是可识别的命令 | 启动 Docker Desktop，并重新打开 PowerShell |
-| 提示 WSL 或虚拟化不可用 | 执行 `wsl --update`，并确认 BIOS/UEFI 已启用虚拟化 |
-| 端口 3000 或 8000 被占用 | 关闭占用端口的旧程序，或先执行 `docker compose down` |
-| 构建期间下载很慢 | 保持网络连接并重试 `docker compose up --build`；Docker 会复用已经完成的缓存 |
-| 页面打不开 | 执行 `docker compose ps`，确认 `frontend` 和 `backend` 状态正常 |
-| 后端显示不健康 | 执行 `docker compose logs --tail 100 backend` 查看最后 100 行日志 |
-| 第一次任务长时间停留在模型阶段 | 首次任务可能正在下载 Whisper 或 UVR 模型，查看后端日志确认下载仍在继续 |
+### 开发热更新
 
-查看全部服务日志：
+开发配置会把源代码挂载到容器，并启用前后端热更新：
 
-```powershell
-docker compose logs -f
-```
+~~~bash
+docker compose -f docker-compose.dev.yml up --build
+~~~
 
-只查看后端日志：
+代码修改后通常不需要重新构建；修改依赖文件、Dockerfile 或锁文件后再加上 `--build`。
 
-```powershell
-docker compose logs -f backend
-```
+## 使用流程
 
-彻底停止容器但保留任务文件和模型缓存：
+### 提交素材
 
-```powershell
-docker compose down
-```
+1. 选择一个标准 MP4 视频，确保视频包含可播放的音轨。
+2. 粘贴歌词，或选择一个 UTF-8 的 `TXT` / `LRC` 文件。通常每句歌词单独一行。
+3. 如需继续编辑已有结果，可额外导入本站导出的调整后注音 JSON、Mora 时间轴 JSON 或 ASS 字幕。最多导入 3 个文件，每个不超过 4 MiB。
+4. 提交任务并保持页面打开，直到进入任务状态页。上传队列会显示位置，上传可以暂停、取消和恢复。
 
-不要随意添加 `-v`。`docker compose down -v` 会删除 Docker 数据卷中的数据库和模型缓存，下次需要重新下载和初始化。
+导入 ASS 会强制使用完整视频上传并进入云端渲染；只导入注音或时间轴数据时，仍可能使用音频优先路径。
+
+首页固定以 `ON VOCAL` 和 `auto` 流程创建任务。视频完成后，在结果页分别准备 ON VOCAL 和 OFF VOCAL 版本，不需要重复识别和对齐。
+
+### 处理和确认
+
+服务器会先处理歌词读音。遇到 `READING_REVIEW_REQUIRED` 时，逐词确认或修改假名后再继续时间轴对齐。对齐主流程会优先使用可用的 Yohane 资源，随后使用 FA-Kara/TorchAudio `MMS_FA`，失败或不可用时回退到内置 Whisper 时间轴，并在任务产物和管理员日志中记录实际引擎。
+
+任务失败可以重新入队，排队或处理中的任务可以取消。已完成任务重新打开注音审核后，时间轴、字幕和视频会按新的读音重新生成。
+
+### 预览和编辑
+
+有时间轴的任务可以在浏览器中：
+
+- 播放逐字高亮字幕，按句定位、循环试听和调整播放速度。
+- 修改行、词和 Mora 的起止时间，使用撤销和重做。
+- 调整字体、字号、注音大小与偏移、颜色、描边、阴影以及上下行位置。
+- 将时间轴和注音修改自动保存到云端，同时保留浏览器草稿。
+
+`AUDIO_ONLY` 任务的原视频只保存在当前浏览器内存中。刷新或重新打开结果页后，需要重新选择同一个 MP4 才能继续预览和本地导出。
+
+### 导出结果
+
+每个任务都有独立的 ON VOCAL 和 OFF VOCAL 导出区域：
+
+| 方式 | ON VOCAL | OFF VOCAL |
+| --- | --- | --- |
+| 本地导出 | 复用当前设备上的原视频和原音轨，不重新上传视频 | 先从服务器准备 UVR 伴奏，再由浏览器替换音轨并导出 |
+| 云端导出 | 重新上传原视频，服务器按当前时间轴和样式嵌字编码 | 重新上传原视频并使用服务器生成的伴奏编码 |
+
+本地导出使用 Mediabunny、Canvas 和 WebCodecs，桌面目标为 `1080p/30`，移动端目标为 `720p/30`。浏览器不支持 H.264 或 AAC 时仍可预览，但应改用云端渲染。云端渲染只重新嵌字和编码，不会重新识别或对齐歌词。
+
+完整视频任务可以下载原始识别数据、处理后歌词、时间轴、ASS 字幕和 Kirakara `.krl` 工程；有时间轴的任务都可以单独导出调整后的注音、时间轴和 ASS。
+
+## 浏览器自动选路
+
+~~~text
+MP4 + 歌词
+   |
+   v
+浏览器能力检查
+   |
+   +-- AUDIO_ONLY：Mediabunny 提取 M4A，按 8 MiB 分片上传音频和歌词
+   |
+   +-- REMOTE_VIDEO：按 8 MiB 分片上传完整 MP4 和歌词
+          |
+          v
+     后端队列和处理流水线
+          |
+          v
+   注音确认 -> 对齐 -> Mora / ASS / KRL
+          |
+          +-- 浏览器本地预览和导出
+          +-- 云端 Kirakara 嵌字和 FFmpeg 编码
+~~~
+
+音频和视频分片都支持断点续传，单片网络失败最多自动重试 3 次。上传使用 `client_submission_id` 幂等；连接在任务创建后中断时，页面会尝试找回原任务，而不是重复创建。
+音频上传开始后如果服务器拒绝，不会再次自动上传完整视频；只有浏览器提取音频失败时才会回退到完整视频路径。
+
+## 处理流水线
+
+实际步骤会根据输入模式和对齐器选择分支。高精度直对齐可以跳过 Whisper；OFF VOCAL 或需要人声 stem 时才会运行 UVR：
+
+~~~text
+FFmpeg 音频处理
+   |
+   +-- 按需：MDX / UVR 分离人声与伴奏
+   +-- 按需：faster-whisper 歌声识别
+   |
+   v
+Janome / pykakasi / alkana 日语读音处理
+   -> Yohane / FA-Kara MMS_FA / Whisper 回退对齐
+   -> Mora 时间轴与 Kirakara ASS
+   -> 浏览器本地导出或 FFmpeg 云端渲染
+~~~
+
+默认后端使用 `faster-whisper`、`audio-separator` 的 `UVR_MDXNET_KARA_2.onnx`、TorchAudio `MMS_FA`、FFmpeg、Janome、pykakasi 和 alkana。配置 `DEEPSEEK_API_KEY`（Docker Compose）或 `NICOKARA_DEEPSEEK_API_KEY`（直接运行后端）后，可以启用 DeepSeek 读音复核；不配置时使用本地读音处理器。
+
+## 配置
+
+后端设置使用 `NICOKARA_` 前缀，完整变量和默认值见 [.env.example](./.env.example)。Docker Compose 还会把根目录 `.env` 中的部分变量映射到容器。
+
+常用配置如下：
+
+| 配置 | 默认值 | 用途 |
+| --- | --- | --- |
+| `NICOKARA_ADMIN_TOKEN` | 空 | 管理员页面和管理 API 的 Bearer Token；为空时管理接口不可用 |
+| `NICOKARA_FA_KARA_ENABLED` | `true` | 启用 FA-Kara/MMS_FA 主对齐器 |
+| `NICOKARA_FA_KARA_DEVICE` | `cpu`（Compose）/ `auto`（直接运行） | `auto`、`cpu` 或 `cuda` |
+| `NICOKARA_FA_KARA_TIMEOUT_SECONDS` | `600` | MMS_FA 单次对齐超时 |
+| `NICOKARA_YOHANE_ENABLED` | `true` | Yohane 资源存在时允许优先使用 |
+| `NICOKARA_JOB_RETENTION_HOURS` | `24` | 任务文件和结果的默认保留时间 |
+| `NICOKARA_LOG_LEVEL` | `INFO` | 控制台日志级别 |
+| `NICOKARA_EVENT_LOG_LEVEL` | `INFO` | 管理事件日志级别 |
+
+Yohane 不随仓库提供。Docker Compose 默认只读挂载：
+
+~~~text
+./models/yohane/FA-Kara  -> /app/models/yohane/FA-Kara
+./models/yohane/model    -> /app/models/yohane/model
+~~~
+
+可以通过 `NICOKARA_YOHANE_SOURCE_HOST_DIR` 和 `NICOKARA_YOHANE_MODEL_HOST_DIR` 更换宿主机目录。缺少必要文件、模型加载失败或对齐超时时，会自动使用备用引擎。
+
+worker 数量在 [backend/config/workers.toml](./backend/config/workers.toml) 中配置：
+
+~~~toml
+[processing]
+worker_count = 3
+reload_interval_seconds = 1.0
+~~~
+
+默认资源保护包括：每客户端最多 2 个活动任务、最多 4 个内存等待任务、最多 32 个活动任务、最多 32 个上传会话、默认 1 个并行上传槽，并要求至少保留 2 GiB 空闲磁盘。
+
+## API 和管理员入口
+
+API 默认前缀为 `/api/v1`，运行后可直接打开 [OpenAPI 文档](http://localhost:8000/docs) 查看请求和响应模式。
+
+| 能力 | 入口 |
+| --- | --- |
+| 上传队列和可恢复视频分片 | `/upload-tickets` |
+| 任务创建、状态、取消和重试 | `/jobs`、`/jobs/{job_id}` |
+| 注音、时间轴、ASS、KRL 和视频产物 | `/jobs/{job_id}/readings`、`timeline`、`subtitle`、`exports/*`、`download` |
+| 浏览器音频优先上传 | `/browser/audio-uploads`、`/browser/audio-jobs` |
+| 已有任务的云端渲染 | `/browser/jobs/{job_id}/cloud-render` |
+| 页面访问统计 | `/analytics/pageview` |
+| 管理监控、日志和任务时间线 | `/admin/overview`、`/admin/queue-health`、`/admin/logs`、`/admin/jobs/{job_id}/timeline` |
+
+管理员 API 使用：
+
+~~~bash
+curl -H "Authorization: Bearer $NICOKARA_ADMIN_TOKEN" http://localhost:8000/api/v1/admin/overview
+~~~
+
+管理页面位于 <http://localhost:3000/admin>，结构化日志页面位于 <http://localhost:3000/admin/logs>。日志会记录队列、worker、处理阶段、降级和失败原因，并对歌词、凭据、Token、Cookie、签名 URL 和完整本地路径进行脱敏。
+
+## 直接开发运行
+
+Docker 是默认开发方式。需要直接运行时，要求 Python `>=3.11`、Node.js `>=22.13.0` 和可从 `PATH` 调用的 FFmpeg。
+
+### 后端
+
+~~~bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[ai,dev]"
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+~~~
+
+PowerShell 激活虚拟环境时使用：
+
+~~~powershell
+./.venv/Scripts/Activate.ps1
+~~~
+
+### 前端
+
+在另一个终端执行：
+
+~~~bash
+cd frontend
+npm ci
+NEXT_PUBLIC_API_URL=/api/v1 npm run dev -- --hostname 0.0.0.0 --port 3000
+~~~
+
+开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。需要其他后端地址时设置 `NICOKARA_DEV_API_ORIGIN`。开发和 standalone 构建会发送 COOP/COEP 响应头，以支持跨源隔离相关的浏览器媒体能力。
+
+## 测试和代码检查
+
+~~~bash
+cd backend
+python -m pytest
+
+cd ../frontend
+npm test
+npm run lint
+npm run typecheck
+npm run build
+~~~
+
+前端 `npm run build` 会先执行类型检查，再生成 standalone 构建产物。
+
+## 数据目录和项目结构
+
+Docker Compose 默认把以下内容持久化：
+
+| 内容 | 容器位置 | 宿主机或卷 |
+| --- | --- | --- |
+| SQLite | `/app/backend/data/nicokara.sqlite3` | `backend-data` 卷 |
+| 任务输入、中间文件和结果 | `/app/storage/jobs` | `./storage/jobs` |
+| Whisper / Hugging Face 缓存 | `/root/.cache/huggingface` | `whisper-cache` 卷 |
+| MMS / Torch 缓存 | `/root/.cache/torch` | `mms-model-cache` 卷 |
+| UVR 模型缓存 | `/app/models/audio-separator` | `mdx-model-cache` 卷 |
+
+~~~text
+nicokara-cloud/
+|-- frontend/                 前端页面、浏览器媒体处理、预览和测试
+|-- backend/                  FastAPI、任务队列、对齐、字幕和测试
+|-- backend/config/           worker 配置
+|-- storage/jobs/             任务文件和视频结果，不提交到 Git
+|-- models/                   本地模型目录，不提交到 Git
+|-- release/                  生产部署和发布包脚本
+|-- docs/                     部署、架构、评测、审计和路线图文档
+|-- docker-compose*.yml       生产、开发和 GPU 配置
++-- .env.example              环境变量示例
+~~~
+
+## 部署和进一步阅读
+
+- [本地构建与无 Docker 部署](./docs/deployment/DEPLOYMENT_LOCAL_BUILD.md)：生产构建、发布包、Nginx、systemd、升级和回滚。
+- [浏览器处理契约](./docs/architecture/MOBILE_BROWSER_PROCESSING.md)：自动选路、音频分片协议、浏览器能力边界和本地导出设计。
+- [对齐基准](./docs/quality/ALIGNMENT_BENCHMARK.md)：固定歌曲集的准确率、耗时和内存统计工具。
+- [FA-Kara 接入审计](./docs/integrations/FA_KARA_INTEGRATION_AUDIT.md)：上游逻辑、许可、适配范围和回退策略。
+- [更新日志](./CHANGELOG.md)：已经完成并验证的主要改动。
+- [路线图](./docs/planning/ROADMAP.md)：尚未实现的计划。
+- [第三方许可](./THIRD_PARTY_NOTICES.md) 和 [项目许可证](./LICENSE)。
+
+## 致谢
+
+- [Kirakara-Player](https://github.com/FMPeach/Kirakara-Player)：字幕布局、预览和浏览器渲染适配参考。
+- [FA-Kara](https://github.com/moriwx/FA-Kara)：歌词发音标记、非静音处理、MMS 强制对齐和时间回映射参考。
+
+第三方版权和许可证以 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) 为准。
