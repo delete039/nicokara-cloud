@@ -21,6 +21,8 @@ class AlignedToken:
     end_ms: int
     confidence: float
     moras: list[AlignedMora] = field(default_factory=list)
+    romaji_moras: list[str] = field(default_factory=list)
+    romaji_position: str | None = None
 
 
 @dataclass(frozen=True)

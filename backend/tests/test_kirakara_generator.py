@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from app.alignment.models import (
     AlignedLine,
     AlignedMora,
@@ -7,7 +11,7 @@ from app.alignment.models import (
     LyricTimeline,
 )
 from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenerator
-from app.subtitle.font_metrics import ass_font_geometry
+from app.subtitle.font_metrics import ass_font_geometry, text_measurer
 
 
 def main_y(top: float) -> str:
@@ -183,6 +187,10 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
             "ruby_size": 30,
             "ruby_letter_spacing": 2,
             "ruby_offset": 8,
+            "romaji_follow_ruby": False,
+            "romaji_size": 24,
+            "romaji_letter_spacing": 4,
+            "romaji_offset": 10,
             "stroke_width": 6,
             "stroke_color_before": "#112233",
             "stroke_color_after": "#aabbcc",
@@ -203,6 +211,9 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
     assert config.ruby_font_size == 45
     assert config.ruby_letter_spacing == 3
     assert config.ruby_offset == 12
+    assert config.romaji_font_size == 36
+    assert config.romaji_letter_spacing == 6
+    assert config.romaji_offset == 15
     assert config.upper_left_x == 144
     assert config.lower_right_x == 1776
     assert config.upper_y == 615
@@ -213,6 +224,59 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
     assert config.sung_outline_color == "&H00CCBBAA"
     assert config.shadow_color == "&H00665544"
     assert config.shadow_depth == 6
+
+
+def test_kirakara_generator_renders_timed_romaji_above_the_kana_layer() -> None:
+    token = AlignedToken(
+        "今日",
+        "きょう",
+        1000,
+        2000,
+        1,
+        [
+            AlignedMora("きょ", 1000, 1500, True, 1),
+            AlignedMora("う", 1500, 2000, True, 1),
+        ],
+        romaji_moras=["kyo", "u"],
+        romaji_position="above",
+    )
+    timeline = LyricTimeline(
+        confidence=1,
+        lines=[lyric_line("今日", "きょう", 1000, 2000, [token])],
+    )
+
+    config = KirakaraAssConfig.from_browser_style(
+        {
+            "romaji_follow_ruby": False,
+            "romaji_size": 24,
+            "romaji_letter_spacing": 4,
+            "romaji_offset": 10,
+        }
+    )
+    content = KirakaraAssGenerator(config=config).generate(timeline)
+
+    assert "Style: KirakaraRomaji," in content
+    romaji_events = [line for line in content.splitlines() if ",KirakaraRomaji," in line]
+    progress_events = [line for line in content.splitlines() if ",KirakaraRomajiProgress," in line]
+    assert "".join(event[-1] for event in romaji_events) == "kyou"
+    assert progress_events[0].startswith("Dialogue: 4,0:00:01.00,0:00:01.17")
+    romaji_x = [
+        float(re.search(r"\\pos\(([^,]+),", event).group(1))
+        for event in romaji_events
+    ]
+    measure = text_measurer(
+        config.font_name,
+        config.romaji_font_size,
+        bold=True,
+    )
+    assert romaji_x[1] - romaji_x[0] == pytest.approx(measure("k"))
+    assert romaji_x[3] - romaji_x[0] == pytest.approx(
+        measure("kyo") + config.romaji_letter_spacing
+    )
+    romaji_y = float(re.search(r"\\pos\([^,]+,([^)]+)\)", romaji_events[0]).group(1))
+    kana_event = next(line for line in content.splitlines() if ",KirakaraRuby," in line)
+    kana_y = float(re.search(r"\\pos\([^,]+,([^)]+)\)", kana_event).group(1))
+    assert romaji_y < kana_y
 
 
 def test_kirakara_generator_accepts_wider_browser_style_ranges() -> None:
@@ -317,7 +381,7 @@ def test_kirakara_generator_clips_sung_fill_and_outline_continuously() -> None:
     assert ",13.5,0,1,8.25,0,7," in progress_style
 
 
-def test_kirakara_generator_isolates_wide_ruby_and_shifts_following_text(
+def test_kirakara_generator_keeps_base_spacing_uniform_with_wide_ruby(
     monkeypatch,
 ) -> None:
     def fixed_text_measurer(_font_name: str, size: int, *, bold: bool = False):
@@ -352,16 +416,72 @@ def test_kirakara_generator_isolates_wide_ruby_and_shifts_following_text(
         line for line in content.splitlines() if ",KirakaraRuby," in line
     ]
 
-    # Upstream Kirakara isolates a ruby group to max(base width, ruby width).
-    # 4 * 39 + 3 * 7.5 = 178.5, with unrounded browser letter spacing.
+    # Ruby may overhang its base span, but it must not change the configured
+    # spacing between adjacent base characters.
     assert len(base_events) == 2
-    assert rf"\pos(233.25,{main_y(645)})" in base_events[0]
+    assert rf"\pos(192,{main_y(645)})" in base_events[0]
     assert base_events[0].endswith("生")
-    assert rf"\pos(384,{main_y(645)})" in base_events[1]
+    assert rf"\pos(301.5,{main_y(645)})" in base_events[1]
     assert base_events[1].endswith("き")
     assert len(ruby_events) == 4
-    assert rf"\pos(192,{ruby_y(645)})" in ruby_events[0]
-    assert rf"\pos(331.5,{ruby_y(645)})" in ruby_events[-1]
+    assert rf"\pos(150.75,{ruby_y(645)})" in ruby_events[0]
+    assert rf"\pos(290.25,{ruby_y(645)})" in ruby_events[-1]
+
+
+def test_kirakara_generator_separates_adjacent_wide_annotations(
+    monkeypatch,
+) -> None:
+    def fixed_text_measurer(_font_name: str, size: int, *, bold: bool = False):
+        del bold
+        return lambda text: float(len(text) * size)
+
+    monkeypatch.setattr(
+        "app.subtitle.kirakara_generator.text_measurer",
+        fixed_text_measurer,
+    )
+    timeline = LyricTimeline(
+        confidence=1,
+        lines=[
+            lyric_line(
+                "火山",
+                "あいうえおか",
+                1000,
+                3000,
+                [
+                    AlignedToken(
+                        "火",
+                        "あいう",
+                        1000,
+                        2000,
+                        1,
+                        romaji_moras=["abcdef"],
+                        romaji_position="above",
+                    ),
+                    AlignedToken(
+                        "山",
+                        "えおか",
+                        2000,
+                        3000,
+                        1,
+                        romaji_moras=["ghijkl"],
+                        romaji_position="above",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    content = KirakaraAssGenerator().generate(timeline)
+    base_events = [line for line in content.splitlines() if ",KirakaraBase," in line]
+    ruby_events = [line for line in content.splitlines() if ",KirakaraRuby," in line]
+    romaji_events = [line for line in content.splitlines() if ",KirakaraRomaji," in line]
+
+    assert rf"\pos(192,{main_y(645)})" in base_events[0]
+    assert rf"\pos(301.5,{main_y(645)})" in base_events[1]
+    assert rf"\pos(159,{ruby_y(645)})" in ruby_events[0]
+    assert rf"\pos(298.5,{ruby_y(645)})" in ruby_events[3]
+    assert r"\pos(57," in romaji_events[0]
+    assert r"\pos(298.5," in romaji_events[6]
 
 
 def test_kirakara_generator_preserves_mora_timing_when_counts_differ() -> None:

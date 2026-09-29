@@ -51,11 +51,13 @@ export function ReviewedDataDownloads({
   videoName,
   timeline,
   style,
+  includeRomaji,
 }: {
   jobId: string;
   videoName: string;
   timeline: KirakaraTimeline;
   style: KirakaraStyle;
+  includeRomaji?: boolean;
 }) {
   const [downloading, setDownloading] = useState<ReviewedArtifact | null>(null);
   const [error, setError] = useState<ErrorFeedback | null>(null);
@@ -134,6 +136,7 @@ export function ReviewedDataDownloads({
         videoName={videoName}
         timeline={timeline}
         style={style}
+        includeRomaji={includeRomaji}
       />
       {error && (
         <div className="basis-full pt-2">

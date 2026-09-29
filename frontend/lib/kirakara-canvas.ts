@@ -45,12 +45,11 @@ export type KirakaraCanvasContext = {
 };
 
 type LayoutGroup = {
+  unitIndex: number;
   characters: Array<KirakaraFrameCharacter & { width: number; x: number }>;
   ruby: KirakaraFrameRuby | null;
   baseWidth: number;
   rubyWidth: number;
-  effectiveWidth: number;
-  isolatePad: number;
   x: number;
 };
 
@@ -62,6 +61,7 @@ const INDICATOR_STROKE_WIDTH = 3;
 const INDICATOR_OFFSET_Y = 8;
 const MAIN_LINE_HEIGHT = 1.2;
 const RUBY_LINE_HEIGHT = 1.1;
+const ROMAJI_STROKE_WIDTH = 2;
 const baselineCache = new Map<string, number>();
 
 function drawText(
@@ -105,22 +105,24 @@ function unitCharacters(unit: KirakaraFrameUnit): KirakaraFrameCharacter[] {
   return fallbackCharacters(unit);
 }
 
-function splitUnit(unit: KirakaraFrameUnit) {
+function splitUnit(unit: KirakaraFrameUnit, unitIndex: number) {
   const characters = unitCharacters(unit);
   const sorted = [...unit.ruby].sort(
     (left, right) => left.startCharacter - right.startCharacter,
   );
   const groups: Array<{
+    unitIndex: number;
     characters: KirakaraFrameCharacter[];
     ruby: KirakaraFrameRuby | null;
   }> = [];
   let cursor = 0;
   for (const annotation of sorted) {
     if (annotation.startCharacter > cursor) {
-      groups.push({ characters: characters.slice(cursor, annotation.startCharacter), ruby: null });
+      groups.push({ unitIndex, characters: characters.slice(cursor, annotation.startCharacter), ruby: null });
     }
     if (annotation.endCharacter > annotation.startCharacter) {
       groups.push({
+        unitIndex,
         characters: characters.slice(annotation.startCharacter, annotation.endCharacter),
         ruby: annotation,
       });
@@ -128,9 +130,9 @@ function splitUnit(unit: KirakaraFrameUnit) {
     cursor = Math.max(cursor, annotation.endCharacter);
   }
   if (cursor < characters.length) {
-    groups.push({ characters: characters.slice(cursor), ruby: null });
+    groups.push({ unitIndex, characters: characters.slice(cursor), ruby: null });
   }
-  return groups.length > 0 ? groups : [{ characters, ruby: null }];
+  return groups.length > 0 ? groups : [{ unitIndex, characters, ruby: null }];
 }
 
 function measureBaselineOffset(
@@ -212,7 +214,9 @@ function layoutLine(
   const rubyFontSize = style.rubySize * scaleY;
   const mainFont = `${style.fontBold ? "700" : "normal"} ${mainFontSize}px ${style.fontFamily}`;
   const rubyFont = `400 ${rubyFontSize}px ${style.fontFamily}`;
-  const sourceGroups = line.units.flatMap((unit) => splitUnit(unit));
+  const sourceGroups = line.units.flatMap((unit, unitIndex) =>
+    splitUnit(unit, unitIndex),
+  );
 
   const groups = sourceGroups.map((group): LayoutGroup => {
     context.font = mainFont;
@@ -229,33 +233,83 @@ function layoutLine(
       (width, character) => width + context.measureText(character).width,
       0,
     ) + Math.max(0, rubyCharacters.length - 1) * style.rubyLetterSpacing * scaleX;
-    const effectiveWidth = Math.max(baseWidth, rubyWidth);
     return {
       ...group,
       characters,
       baseWidth,
       rubyWidth,
-      effectiveWidth,
-      isolatePad: (effectiveWidth - baseWidth) / 2,
       x: 0,
     };
   });
 
   const groupSpacing = style.letterSpacing * scaleX;
-  const totalWidth = groups.reduce((total, group) => total + group.effectiveWidth, 0)
+  const totalWidth = groups.reduce((total, group) => total + group.baseWidth, 0)
     + Math.max(0, groups.length - 1) * groupSpacing;
   const left = style.horizontalMargin * scaleX;
   let cursorX = line.slot === "upper" ? left : context.canvas.width - left - totalWidth;
   for (const group of groups) {
     group.x = cursorX;
-    let characterX = cursorX + group.isolatePad;
+    let characterX = cursorX;
     for (const character of group.characters) {
       character.x = characterX;
       characterX += character.width + style.letterSpacing * scaleX;
     }
-    cursorX += group.effectiveWidth + groupSpacing;
+    cursorX += group.baseWidth + groupSpacing;
   }
   return groups;
+}
+
+function packLabelLefts(
+  labels: Array<{ left: number; width: number }>,
+  gap: number,
+): number[] {
+  if (labels.length <= 1) return labels.map(({ left }) => left);
+
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const label of labels) {
+    offsets.push(offset);
+    offset += label.width + gap;
+  }
+  const blocks: Array<{
+    start: number;
+    end: number;
+    weight: number;
+    value: number;
+  }> = [];
+  labels.forEach(({ left }, index) => {
+    blocks.push({
+      start: index,
+      end: index,
+      weight: 1,
+      value: left - offsets[index],
+    });
+    while (
+      blocks.length >= 2
+      && blocks[blocks.length - 2].value > blocks[blocks.length - 1].value
+    ) {
+      const right = blocks.pop()!;
+      const leftBlock = blocks.pop()!;
+      const weight = leftBlock.weight + right.weight;
+      blocks.push({
+        start: leftBlock.start,
+        end: right.end,
+        weight,
+        value: (
+          leftBlock.value * leftBlock.weight
+          + right.value * right.weight
+        ) / weight,
+      });
+    }
+  });
+
+  const packed = new Array<number>(labels.length);
+  for (const block of blocks) {
+    for (let index = block.start; index <= block.end; index += 1) {
+      packed[index] = block.value + offsets[index];
+    }
+  }
+  return packed;
 }
 
 function drawLine(
@@ -268,8 +322,15 @@ function drawLine(
 ): void {
   const fontSize = style.fontSize * scaleY;
   const rubyFontSize = style.rubySize * scaleY;
+  const romajiSize = style.romajiFollowRuby ? style.rubySize : style.romajiSize;
+  const romajiLetterSpacing = style.romajiFollowRuby
+    ? style.rubyLetterSpacing
+    : style.romajiLetterSpacing;
+  const romajiOffset = style.romajiFollowRuby ? style.rubyOffset : style.romajiOffset;
+  const romajiFontSize = romajiSize * scaleY;
   const mainFont = `${style.fontBold ? "700" : "normal"} ${fontSize}px ${style.fontFamily}`;
   const rubyFont = `400 ${rubyFontSize}px ${style.fontFamily}`;
+  const romajiFont = `700 ${romajiFontSize}px ${style.fontFamily}`;
   const groups = layoutLine(context, line, style, scaleX, scaleY);
   const lineTop = (line.slot === "upper" ? style.upperY : style.lowerY) * scaleY;
   const baseline = lineTop + measureBaselineOffset(
@@ -284,9 +345,25 @@ function drawLine(
     "normal",
     RUBY_LINE_HEIGHT,
   );
-  const rubyBaseline = lineTop
+  const rubyAboveBaseline = lineTop
     - style.rubyOffset * scaleY
     - (rubyFontSize * RUBY_LINE_HEIGHT - rubyBaselineOffset);
+  const rubyTop = lineTop
+    - style.rubyOffset * scaleY
+    - rubyFontSize * RUBY_LINE_HEIGHT;
+  const romajiBaselineOffset = measureBaselineOffset(
+    romajiFontSize,
+    style.fontFamily,
+    "700",
+    RUBY_LINE_HEIGHT,
+  );
+  const romajiAboveBaseline = rubyTop
+    - romajiOffset * scaleY
+    - (romajiFontSize * RUBY_LINE_HEIGHT - romajiBaselineOffset);
+  const romajiBelowBaseline = lineTop
+    + fontSize * MAIN_LINE_HEIGHT
+    + romajiOffset * scaleY
+    + romajiBaselineOffset;
 
   const previousAlpha = context.globalAlpha ?? 1;
   context.globalAlpha = previousAlpha * (line.opacity ?? 1);
@@ -296,8 +373,16 @@ function drawLine(
     const dotSize = INDICATOR_SIZE * scaleY;
     const spacing = INDICATOR_SPACING * scaleX;
     const baseX = style.horizontalMargin * scaleX;
+    const hasRomajiAbove = line.units.some(
+      (unit) => unit.romaji?.position === "above",
+    );
     const baseY = lineTop
-      - (style.rubySize + style.rubyOffset + INDICATOR_OFFSET_Y) * scaleY;
+      - (
+        style.rubySize
+        + style.rubyOffset
+        + (hasRomajiAbove ? romajiSize + romajiOffset : 0)
+        + INDICATOR_OFFSET_Y
+      ) * scaleY;
     line.indicatorOpacities.forEach((opacity, index) => {
       if (opacity <= 0) return;
       context.globalAlpha = previousAlpha * (line.opacity ?? 1) * opacity;
@@ -317,6 +402,18 @@ function drawLine(
     });
     context.globalAlpha = previousAlpha * (line.opacity ?? 1);
   }
+
+  const rubyGroups = groups.filter((group) => group.ruby !== null);
+  const rubyLefts = packLabelLefts(
+    rubyGroups.map((group) => ({
+      left: group.x + (group.baseWidth - group.rubyWidth) / 2,
+      width: group.rubyWidth,
+    })),
+    style.rubyLetterSpacing * scaleX,
+  );
+  const rubyLeftByGroup = new Map(
+    rubyGroups.map((group, index) => [group, rubyLefts[index]]),
+  );
 
   context.textBaseline = "alphabetic";
   for (const group of groups) {
@@ -362,7 +459,9 @@ function drawLine(
     }
 
     if (!group.ruby) continue;
-    const rubyX = group.x + (group.effectiveWidth - group.rubyWidth) / 2;
+    const rubyX = rubyLeftByGroup.get(group)
+      ?? group.x + (group.baseWidth - group.rubyWidth) / 2;
+    const rubyBaseline = rubyAboveBaseline;
     context.font = rubyFont;
     const rubyStrokeWidth = Math.round(style.strokeWidth * 0.8) * scaleY;
     context.lineWidth = rubyStrokeWidth * 2.2;
@@ -420,6 +519,137 @@ function drawLine(
       characterX += width + style.rubyLetterSpacing * scaleX;
     }
   }
+
+  const romajiLayouts: Array<{
+    segments: Array<{
+      text: string;
+      characters: Array<{ text: string; progress: number }>;
+    }>;
+    segmentWidths: number[];
+    textWidth: number;
+    naturalLeft: number;
+    baseline: number;
+  }> = [];
+  for (let unitIndex = 0; unitIndex < line.units.length; unitIndex += 1) {
+    const unit = line.units[unitIndex];
+    if (!unit.romaji) continue;
+    const unitGroups = groups.filter((group) => group.unitIndex === unitIndex);
+    const firstGroup = unitGroups[0];
+    const lastGroup = unitGroups.at(-1);
+    if (!firstGroup || !lastGroup) continue;
+
+    const fallbackCharacters = [...unit.romaji.text].map((text, index, characters) => ({
+      text,
+      progress: Math.min(1, Math.max(0, unit.progress * characters.length - index)),
+    }));
+    const characters = unit.romaji.characters
+      ?.map(({ text }) => text).join("") === unit.romaji.text
+        ? unit.romaji.characters
+        : fallbackCharacters;
+    const sourceSegments = unit.romaji.segments
+      ?.filter((segment) => segment.text.length > 0)
+      .map((segment) => ({
+        ...segment,
+        characters: segment.characters
+          .map(({ text }) => text).join("") === segment.text
+            ? segment.characters
+            : [...segment.text].map((text) => ({ text, progress: unit.progress })),
+      }));
+    const segments = sourceSegments
+      && sourceSegments.map(({ text }) => text).join("") === unit.romaji.text
+      ? sourceSegments
+      : [{ text: unit.romaji.text, characters }];
+    context.font = romajiFont;
+    const segmentWidths = segments.map(({ text }) => context.measureText(text).width);
+    const textWidth = segmentWidths.reduce((total, width) => total + width, 0)
+      + Math.max(0, segments.length - 1) * romajiLetterSpacing * scaleX;
+    const unitLeft = firstGroup.x;
+    const unitRight = lastGroup.x + lastGroup.baseWidth;
+    romajiLayouts.push({
+      segments,
+      segmentWidths,
+      textWidth,
+      naturalLeft: unitLeft + (unitRight - unitLeft - textWidth) / 2,
+      baseline: unit.romaji.position === "above"
+        ? romajiAboveBaseline
+        : romajiBelowBaseline,
+    });
+  }
+
+  const romajiLefts = new Array<number>(romajiLayouts.length);
+  const layoutsByBaseline = new Map<number, number[]>();
+  romajiLayouts.forEach(({ baseline }, index) => {
+    const indexes = layoutsByBaseline.get(baseline) ?? [];
+    indexes.push(index);
+    layoutsByBaseline.set(baseline, indexes);
+  });
+  for (const indexes of layoutsByBaseline.values()) {
+    const packed = packLabelLefts(
+      indexes.map((index) => ({
+        left: romajiLayouts[index].naturalLeft,
+        width: romajiLayouts[index].textWidth,
+      })),
+      romajiLetterSpacing * scaleX,
+    );
+    indexes.forEach((layoutIndex, packedIndex) => {
+      romajiLefts[layoutIndex] = packed[packedIndex];
+    });
+  }
+
+  const strokeWidth = ROMAJI_STROKE_WIDTH * scaleY;
+  romajiLayouts.forEach((layout, layoutIndex) => {
+    const {
+      segments,
+      segmentWidths,
+      baseline: romajiBaseline,
+    } = layout;
+    let segmentX = romajiLefts[layoutIndex];
+    context.lineWidth = strokeWidth * 2.2;
+
+    segments.forEach((segment, segmentIndex) => {
+      let prefix = "";
+      segment.characters.forEach(({ text, progress }) => {
+        const characterX = segmentX + context.measureText(prefix).width;
+        drawText(
+          context,
+          text,
+          characterX,
+          romajiBaseline,
+          pass === "shadow" ? style.shadowColor : style.colorBefore,
+          pass === "shadow" ? style.shadowColor : style.strokeColorBefore,
+          style.shadowColor,
+          style.shadowDepth * scaleY,
+          pass,
+        );
+        context.save();
+        context.beginPath();
+        clipCharacter(
+          context,
+          text,
+          characterX,
+          romajiBaseline,
+          romajiFontSize,
+          progress,
+          strokeWidth,
+        );
+        context.clip();
+        drawText(
+          context,
+          text,
+          characterX,
+          romajiBaseline,
+          pass === "shadow" ? style.shadowColor : style.colorAfter,
+          pass === "shadow" ? style.shadowColor : style.strokeColorAfter,
+          style.shadowColor,
+          style.shadowDepth * scaleY,
+          pass,
+        );
+        context.restore();
+        prefix += text;
+      });
+      segmentX += segmentWidths[segmentIndex] + romajiLetterSpacing * scaleX;
+    });
+  });
   context.globalAlpha = previousAlpha;
 }
 

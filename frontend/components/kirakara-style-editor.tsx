@@ -25,6 +25,7 @@ function RangeField({
   min,
   max,
   unit = "px",
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -32,6 +33,7 @@ function RangeField({
   min: number;
   max: number;
   unit?: string;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
@@ -42,11 +44,13 @@ function RangeField({
       </span>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="h-2 w-full cursor-pointer accent-primary"
+        className="h-2 w-full cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
       />
     </label>
   );
@@ -164,11 +168,59 @@ export function KirakaraStyleEditor({
         </fieldset>
 
         <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
-          <legend className="px-1 text-xs font-semibold text-muted-foreground">注音</legend>
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">假名注音</legend>
           <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
             <RangeField label="注音大小" value={style.rubySize} min={10} max={60} onChange={(rubySize) => update({ rubySize })} />
             <RangeField label="注音字间距" value={style.rubyLetterSpacing} min={-2} max={20} onChange={(rubyLetterSpacing) => update({ rubyLetterSpacing })} />
             <RangeField label="注音偏移" value={style.rubyOffset} min={0} max={32} onChange={(rubyOffset) => update({ rubyOffset })} />
+          </div>
+        </fieldset>
+
+        <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">罗马音注音</legend>
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              aria-label="跟随假名注音"
+              checked={style.romajiFollowRuby}
+              onChange={(event) => update(event.target.checked
+                ? { romajiFollowRuby: true }
+                : {
+                    romajiFollowRuby: false,
+                    romajiSize: style.rubySize,
+                    romajiLetterSpacing: style.rubyLetterSpacing,
+                    romajiOffset: style.rubyOffset,
+                  })}
+            />
+            跟随假名注音
+          </label>
+          <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <RangeField
+              label="罗马音大小"
+              value={style.romajiFollowRuby ? style.rubySize : style.romajiSize}
+              min={10}
+              max={60}
+              disabled={style.romajiFollowRuby}
+              onChange={(romajiSize) => update({ romajiSize })}
+            />
+            <RangeField
+              label="罗马音音间距"
+              value={style.romajiFollowRuby
+                ? style.rubyLetterSpacing
+                : style.romajiLetterSpacing}
+              min={-2}
+              max={20}
+              disabled={style.romajiFollowRuby}
+              onChange={(romajiLetterSpacing) => update({ romajiLetterSpacing })}
+            />
+            <RangeField
+              label="罗马音偏移"
+              value={style.romajiFollowRuby ? style.rubyOffset : style.romajiOffset}
+              min={0}
+              max={32}
+              disabled={style.romajiFollowRuby}
+              onChange={(romajiOffset) => update({ romajiOffset })}
+            />
           </div>
         </fieldset>
 

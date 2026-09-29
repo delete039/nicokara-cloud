@@ -46,12 +46,17 @@ export type KirakaraRuby = {
   endCharacter: number;
 };
 
+export type KirakaraRomajiPosition = "above" | "below";
+
 export type KirakaraRenderUnit = {
   text: string;
   reading: string;
   startMs: number;
   endMs: number;
   moras: KirakaraMora[];
+  /** Optional export-only secondary layer generated after mora timing is final. */
+  romajiMoras?: string[];
+  romajiPosition?: KirakaraRomajiPosition;
   ruby?: KirakaraRuby[];
 };
 
@@ -78,6 +83,7 @@ export type KirakaraFrameUnit = {
   progress: number;
   characters?: KirakaraFrameCharacter[];
   ruby: KirakaraFrameRuby[];
+  romaji?: KirakaraFrameRomaji;
 };
 
 export type KirakaraFrameCharacter = {
@@ -87,6 +93,16 @@ export type KirakaraFrameCharacter = {
 
 export type KirakaraFrameRuby = KirakaraRuby & {
   characters?: KirakaraFrameCharacter[];
+};
+
+export type KirakaraFrameRomaji = {
+  text: string;
+  position: KirakaraRomajiPosition;
+  characters?: KirakaraFrameCharacter[];
+  segments?: Array<{
+    text: string;
+    characters: KirakaraFrameCharacter[];
+  }>;
 };
 
 export type KirakaraFrameLine = {
@@ -629,6 +645,49 @@ function frameRuby(
   };
 }
 
+function frameRomaji(
+  unit: KirakaraRenderUnit,
+  playbackMs: number,
+): KirakaraFrameRomaji | undefined {
+  if (!unit.romajiMoras?.some(Boolean)) return undefined;
+  const sourceSegments = moraSegments(unit);
+  const duration = Math.max(0, unit.endMs - unit.startMs);
+  const timedSegments = unit.romajiMoras.map((text, index) => ({
+    text,
+    startMs: sourceSegments[index]?.startMs
+      ?? unit.startMs + duration * index / unit.romajiMoras!.length,
+    endMs: sourceSegments[index]?.endMs
+      ?? unit.startMs + duration * (index + 1) / unit.romajiMoras!.length,
+  }));
+  const text = timedSegments.map((segment) => segment.text).join("");
+  if (!text) return undefined;
+  const segments = timedSegments.map((segment) => {
+    const characters = [...segment.text];
+    const segmentDuration = segment.endMs - segment.startMs;
+    return {
+      text: segment.text,
+      characters: characters.map((character, index) => {
+        const startMs = segment.startMs
+          + segmentDuration * index / characters.length;
+        const endMs = segment.startMs
+          + segmentDuration * (index + 1) / characters.length;
+        return {
+          text: character,
+          progress: endMs > startMs
+            ? clampProgress((playbackMs - startMs) / (endMs - startMs))
+            : playbackMs >= endMs ? 1 : 0,
+        };
+      }),
+    };
+  });
+  return {
+    text,
+    position: unit.romajiPosition ?? "above",
+    characters: segments.flatMap((segment) => segment.characters),
+    segments,
+  };
+}
+
 function lineOpacity(value: KirakaraLayoutLine, playbackMs: number): number {
   let opacity = 1;
   if (
@@ -676,6 +735,7 @@ function unitFrame(unit: KirakaraRenderUnit, playbackMs: number): KirakaraFrameU
       frameRuby(unit, ruby, playbackMs, progress),
     ),
     progress,
+    romaji: frameRomaji(unit, playbackMs),
     characters: characters.map((text, index) => ({
       text,
       progress: characterProgress[index] ?? 0,

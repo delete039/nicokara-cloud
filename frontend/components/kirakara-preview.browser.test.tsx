@@ -58,8 +58,19 @@ vi.mock("@/lib/review-draft-store", () => ({
 }));
 
 vi.mock("@/lib/kirakara-capabilities", () => ({
-  detectKirakaraCapabilities: vi.fn(async () => null),
+  detectKirakaraCapabilities: vi.fn(async () => ({ preview: true, export: false, profile: null })),
   kirakaraSupportMessage: vi.fn(() => ""),
+}));
+
+vi.mock("@/components/kirakara-render-actions", () => ({
+  KirakaraRenderActions: ({ timeline }: {
+    timeline: { lines: Array<{ units: Array<{ romajiMoras?: string[] }> }> };
+  }) => (
+    <div
+      data-testid="render-actions"
+      data-romaji-enabled={String(Boolean(timeline.lines[0]?.units[0]?.romajiMoras?.length))}
+    />
+  ),
 }));
 
 import { KirakaraPreview } from "./kirakara-preview";
@@ -119,6 +130,38 @@ describe("KirakaraPreview browser behavior", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+  });
+
+  it("shows and hides the preview romaji layer with the double-ruby checkbox", async () => {
+    const { container } = await renderWorkbench("preview-romaji-toggle");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "双注音（假名 + 罗马音）",
+    }) as HTMLInputElement;
+    const canvas = container.querySelector('[data-kirakara-canvas-preview="true"]');
+    const locateButton = screen.getByRole("button", { name: "定位歌词" });
+
+    expect(checkbox.checked).toBe(false);
+    expect(
+      locateButton.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(checkbox.closest("div")?.className).toContain("ml-auto");
+    expect(screen.queryByLabelText("罗马音位置")).toBeNull();
+    await waitFor(() => expect(canvas?.getAttribute("data-kirakara-romaji-enabled")).toBe("false"));
+    await waitFor(() => expect(screen.getByTestId("render-actions").getAttribute("data-romaji-enabled")).toBe("false"));
+    fireEvent.click(checkbox);
+    const position = screen.getByLabelText("罗马音位置") as HTMLSelectElement;
+    expect(position.value).toBe("above");
+    expect(
+      locateButton.compareDocumentPosition(position) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(position.closest("div")).toBe(checkbox.closest("div"));
+    await waitFor(() => expect(canvas?.getAttribute("data-kirakara-romaji-enabled")).toBe("true"));
+    await waitFor(() => expect(screen.getByTestId("render-actions").getAttribute("data-romaji-enabled")).toBe("true"));
+    expect(canvas?.getAttribute("data-kirakara-romaji-position")).toBe("above");
+    fireEvent.change(position, { target: { value: "below" } });
+    await waitFor(() => expect(canvas?.getAttribute("data-kirakara-romaji-position")).toBe("below"));
+    fireEvent.click(checkbox);
+    expect(screen.queryByLabelText("罗马音位置")).toBeNull();
   });
 
   it("REQ-FOLLOW-04 does not save a timeline edit during automatic following", async () => {

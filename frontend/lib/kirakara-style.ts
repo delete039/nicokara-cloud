@@ -6,6 +6,11 @@ export type KirakaraStyle = {
   rubySize: number;
   rubyLetterSpacing: number;
   rubyOffset: number;
+  /** Video-preview/export-only controls; the KRL config stays SUG-compatible. */
+  romajiFollowRuby: boolean;
+  romajiSize: number;
+  romajiLetterSpacing: number;
+  romajiOffset: number;
   colorBefore: string;
   colorAfter: string;
   strokeColorBefore: string;
@@ -34,6 +39,10 @@ export const DEFAULT_KIRAKARA_STYLE: KirakaraStyle = Object.freeze({
   rubySize: 26,
   rubyLetterSpacing: 5,
   rubyOffset: 4,
+  romajiFollowRuby: true,
+  romajiSize: 26,
+  romajiLetterSpacing: 5,
+  romajiOffset: 4,
   colorBefore: "#ffffff",
   colorAfter: "#a50000",
   strokeColorBefore: "#000000",
@@ -112,14 +121,44 @@ export function normalizeKirakaraStyle(
   value: Partial<KirakaraStyle> | null | undefined,
 ): KirakaraStyle {
   const source = value ?? {};
+  const rubySize = numberInRange(
+    source.rubySize,
+    DEFAULT_KIRAKARA_STYLE.rubySize,
+    10,
+    60,
+  );
+  const rubyLetterSpacing = numberInRange(
+    source.rubyLetterSpacing,
+    DEFAULT_KIRAKARA_STYLE.rubyLetterSpacing,
+    -2,
+    20,
+  );
+  const rubyOffset = numberInRange(
+    source.rubyOffset,
+    DEFAULT_KIRAKARA_STYLE.rubyOffset,
+    0,
+    32,
+  );
   return {
     fontFamily: fontFamily(source.fontFamily),
     fontSize: numberInRange(source.fontSize, DEFAULT_KIRAKARA_STYLE.fontSize, 24, 120),
     fontBold: boolean(source.fontBold, DEFAULT_KIRAKARA_STYLE.fontBold),
     letterSpacing: numberInRange(source.letterSpacing, DEFAULT_KIRAKARA_STYLE.letterSpacing, -4, 32),
-    rubySize: numberInRange(source.rubySize, DEFAULT_KIRAKARA_STYLE.rubySize, 10, 60),
-    rubyLetterSpacing: numberInRange(source.rubyLetterSpacing, DEFAULT_KIRAKARA_STYLE.rubyLetterSpacing, -2, 20),
-    rubyOffset: numberInRange(source.rubyOffset, DEFAULT_KIRAKARA_STYLE.rubyOffset, 0, 32),
+    rubySize,
+    rubyLetterSpacing,
+    rubyOffset,
+    romajiFollowRuby: boolean(
+      source.romajiFollowRuby,
+      DEFAULT_KIRAKARA_STYLE.romajiFollowRuby,
+    ),
+    romajiSize: numberInRange(source.romajiSize, rubySize, 10, 60),
+    romajiLetterSpacing: numberInRange(
+      source.romajiLetterSpacing,
+      rubyLetterSpacing,
+      -2,
+      20,
+    ),
+    romajiOffset: numberInRange(source.romajiOffset, rubyOffset, 0, 32),
     colorBefore: color(source.colorBefore, DEFAULT_KIRAKARA_STYLE.colorBefore),
     colorAfter: color(source.colorAfter, DEFAULT_KIRAKARA_STYLE.colorAfter),
     strokeColorBefore: color(source.strokeColorBefore, DEFAULT_KIRAKARA_STYLE.strokeColorBefore),
@@ -164,6 +203,10 @@ export function kirakaraStylePayload(style: KirakaraStyle) {
     ruby_size: normalized.rubySize,
     ruby_letter_spacing: normalized.rubyLetterSpacing,
     ruby_offset: normalized.rubyOffset,
+    romaji_follow_ruby: normalized.romajiFollowRuby,
+    romaji_size: normalized.romajiSize,
+    romaji_letter_spacing: normalized.romajiLetterSpacing,
+    romaji_offset: normalized.romajiOffset,
     color_before: normalized.colorBefore,
     color_after: normalized.colorAfter,
     stroke_color_before: normalized.strokeColorBefore,

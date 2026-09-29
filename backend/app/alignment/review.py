@@ -43,6 +43,14 @@ def lyric_timeline_from_dict(value: dict[str, Any]) -> LyricTimeline:
                             )
                             for mora in token.get("moras", [])
                         ],
+                        romaji_moras=[
+                            str(mora) for mora in token.get("romaji_moras", [])
+                        ],
+                        romaji_position=(
+                            str(token["romaji_position"])
+                            if token.get("romaji_position") is not None
+                            else None
+                        ),
                     )
                     for token in line.get("tokens", [])
                 ],
@@ -132,6 +140,31 @@ def _reviewed_moras(
     return moras
 
 
+def _reviewed_romaji(
+    value: Any,
+    position: Any,
+    mora_count: int,
+    line_index: int,
+    token_index: int,
+) -> tuple[list[str], str | None]:
+    if value is None:
+        return [], None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise TimelineReviewError(
+            f"line {line_index + 1} token {token_index + 1} romaji is invalid"
+        )
+    if value and len(value) != mora_count:
+        raise TimelineReviewError(
+            f"line {line_index + 1} token {token_index + 1} romaji count is invalid"
+        )
+    normalized_position = "above" if position is None else position
+    if normalized_position not in {"above", "below"}:
+        raise TimelineReviewError(
+            f"line {line_index + 1} token {token_index + 1} romaji position is invalid"
+        )
+    return list(value), normalized_position if value else None
+
+
 def apply_timeline_review(
     source: LyricTimeline,
     review: dict[str, Any],
@@ -198,6 +231,21 @@ def apply_timeline_review(
                 raise TimelineReviewError(
                     f"line {line_index + 1} token {token_index + 1} timing is invalid"
                 )
+            moras = _reviewed_moras(
+                reading,
+                token_start,
+                token_finish,
+                reviewed_token.get("moras"),
+                line_index,
+                token_index,
+            )
+            romaji_moras, romaji_position = _reviewed_romaji(
+                reviewed_token.get("romaji_moras"),
+                reviewed_token.get("romaji_position"),
+                len(moras),
+                line_index,
+                token_index,
+            )
             tokens.append(
                 AlignedToken(
                     surface=surface,
@@ -205,14 +253,9 @@ def apply_timeline_review(
                     start_ms=token_start,
                     end_ms=token_finish,
                     confidence=1.0,
-                    moras=_reviewed_moras(
-                        reading,
-                        token_start,
-                        token_finish,
-                        reviewed_token.get("moras"),
-                        line_index,
-                        token_index,
-                    ),
+                    moras=moras,
+                    romaji_moras=romaji_moras,
+                    romaji_position=romaji_position,
                 )
             )
             token_end = token_finish

@@ -25,6 +25,8 @@ export type TimelineReviewPayload = {
         start_ms: number;
         end_ms: number;
       }>;
+      romaji_moras?: string[];
+      romaji_position?: "above" | "below";
     }>;
   }>;
   style?: ReturnType<typeof kirakaraStylePayload>;
@@ -758,6 +760,8 @@ export function timelineReviewPayload(
             start_ms: mora.startMs,
             end_ms: mora.endMs,
           })),
+          ...(unit.romajiMoras ? { romaji_moras: unit.romajiMoras } : {}),
+          ...(unit.romajiPosition ? { romaji_position: unit.romajiPosition } : {}),
         })),
       };
     }),

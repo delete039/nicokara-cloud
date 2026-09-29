@@ -17,6 +17,10 @@ describe("Kirakara style", () => {
       rubySize: 26,
       rubyLetterSpacing: 5,
       rubyOffset: 4,
+      romajiFollowRuby: true,
+      romajiSize: 26,
+      romajiLetterSpacing: 5,
+      romajiOffset: 4,
       strokeColorBefore: "#000000",
       strokeColorAfter: "#ffffff",
       shadowDepth: 0,
@@ -54,6 +58,30 @@ describe("Kirakara style", () => {
 
   it("REQ-STYLE-RANGE-02 accepts a main font smaller than the old 48px minimum", () => {
     expect(normalizeKirakaraStyle({ fontSize: 32 }).fontSize).toBe(32);
+  });
+
+  it("keeps romaji linked to kana by default and normalizes independent preview values", () => {
+    expect(normalizeKirakaraStyle({
+      rubySize: 31,
+      rubyLetterSpacing: 7,
+      rubyOffset: 9,
+    })).toMatchObject({
+      romajiFollowRuby: true,
+      romajiSize: 31,
+      romajiLetterSpacing: 7,
+      romajiOffset: 9,
+    });
+    expect(normalizeKirakaraStyle({
+      romajiFollowRuby: false,
+      romajiSize: 500,
+      romajiLetterSpacing: -20,
+      romajiOffset: 80,
+    })).toMatchObject({
+      romajiFollowRuby: false,
+      romajiSize: 60,
+      romajiLetterSpacing: -2,
+      romajiOffset: 32,
+    });
   });
 
   it("REQ-STYLE-PRESET-01 provides complete normalized style presets", () => {
@@ -105,7 +133,7 @@ describe("Kirakara style", () => {
   });
 
   it("REQ-STYLE-PAYLOAD-01 sends every render-affecting style field", () => {
-    expect(kirakaraStylePayload({
+    const payload = kirakaraStylePayload({
       ...DEFAULT_KIRAKARA_STYLE,
       fontBold: false,
       letterSpacing: 3,
@@ -116,7 +144,12 @@ describe("Kirakara style", () => {
       shadowColor: "#445566",
       shadowDepth: 4,
       horizontalMargin: 96,
-    })).toMatchObject({
+      romajiFollowRuby: false,
+      romajiSize: 45,
+      romajiLetterSpacing: 8,
+      romajiOffset: 12,
+    });
+    expect(payload).toMatchObject({
       font_bold: false,
       letter_spacing: 3,
       ruby_letter_spacing: 2,
@@ -126,6 +159,10 @@ describe("Kirakara style", () => {
       shadow_color: "#445566",
       shadow_depth: 4,
       horizontal_margin: 96,
+      romaji_follow_ruby: false,
+      romaji_size: 45,
+      romaji_letter_spacing: 8,
+      romaji_offset: 12,
     });
   });
 });

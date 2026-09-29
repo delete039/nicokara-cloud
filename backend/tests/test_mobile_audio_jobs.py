@@ -565,6 +565,8 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
                                         "reading": "こんにち",
                                         "start_ms": 1200,
                                         "end_ms": 2400,
+                                        "romaji_moras": ["ko", "n", "ni", "chi"],
+                                        "romaji_position": "above",
                                     }
                                 ],
                             }
@@ -573,6 +575,10 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
                             "font_family": "Yu Gothic",
                             "font_size": 72,
                             "ruby_size": 30,
+                            "romaji_follow_ruby": False,
+                            "romaji_size": 24,
+                            "romaji_letter_spacing": 4,
+                            "romaji_offset": 10,
                             "stroke_width": 6,
                             "upper_y": 410,
                             "lower_y": 580,
@@ -602,6 +608,11 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         assert json.loads(Path(job["render_timeline_path"]).read_text(encoding="utf-8"))["lines"][0][
             "reading"
         ] == "こんにち"
+        render_token = json.loads(
+            Path(job["render_timeline_path"]).read_text(encoding="utf-8")
+        )["lines"][0]["tokens"][0]
+        assert render_token["romaji_moras"] == ["ko", "n", "ni", "chi"]
+        assert render_token["romaji_position"] == "above"
         assert json.loads(timeline_path.read_text(encoding="utf-8"))["lines"][0]["reading"] == "きょう"
         assert Path(job["ass_path"]).exists()
         ass_content = Path(job["ass_path"]).read_text(
@@ -612,6 +623,8 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         assert f"Style: KirakaraBase,{geometry.family},{round(108 * geometry.size_ratio, 4)}" in ass_content
         assert rf"\an7\pos(192,{615 + geometry.top_offset(108, 1.2):g})" in ass_content
         assert "&H00563412" in ass_content
+        assert "Style: KirakaraRomaji," in ass_content
+        assert ",KirakaraRomaji," in ass_content
 
 
 def test_cloud_render_rejects_a_video_that_does_not_match_the_audio_job(

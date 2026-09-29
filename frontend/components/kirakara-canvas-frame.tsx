@@ -22,6 +22,13 @@ export function KirakaraCanvasFrame({
   style: KirakaraStyle;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const romajiEnabled = Boolean(frame?.lines.some((line) =>
+    line.units.some((unit) => unit.romaji),
+  ));
+  const romajiPosition = frame?.lines
+    .flatMap((line) => line.units)
+    .find((unit) => unit.romaji)
+    ?.romaji?.position ?? "none";
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -40,6 +47,8 @@ export function KirakaraCanvasFrame({
     <canvas
       ref={canvasRef}
       data-kirakara-canvas-preview="true"
+      data-kirakara-romaji-enabled={romajiEnabled ? "true" : "false"}
+      data-kirakara-romaji-position={romajiPosition}
       className="pointer-events-none absolute inset-0 size-full"
       aria-hidden="true"
     />

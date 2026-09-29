@@ -1,13 +1,14 @@
 "use client";
 
 import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { KirakaraCanvasFrame } from "@/components/kirakara-canvas-frame";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
 import { ReviewedDataDownloads } from "@/components/reviewed-data-downloads";
+import { attachKirakaraRomaji } from "@/lib/kirakara-project";
 import {
   detectKirakaraCapabilities,
   kirakaraSupportMessage,
@@ -23,6 +24,7 @@ import {
   activeKirakaraFrame,
   toKirakaraTimeline,
   type KirakaraFrame,
+  type KirakaraRomajiPosition,
   type KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
 import {
@@ -292,6 +294,8 @@ export function KirakaraPreview({
   );
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
+  const [includeRomaji, setIncludeRomaji] = useState(false);
+  const [romajiPosition, setRomajiPosition] = useState<KirakaraRomajiPosition>("above");
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [autosaveTrigger, setAutosaveTrigger] = useState<{
     jobId: string;
@@ -307,6 +311,12 @@ export function KirakaraPreview({
     typeof window === "undefined"
       ? DEFAULT_KIRAKARA_STYLE
       : loadKirakaraStyle(window.localStorage),
+  );
+  const previewTimeline = useMemo(
+    () => timeline && includeRomaji
+      ? attachKirakaraRomaji(timeline, romajiPosition)
+      : timeline,
+    [includeRomaji, romajiPosition, timeline],
   );
 
   const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {
@@ -539,11 +549,11 @@ export function KirakaraPreview({
       }
     }
     setFrame(
-      timeline
-        ? activeKirakaraFrame(timeline, currentMs)
+      previewTimeline
+        ? activeKirakaraFrame(previewTimeline, currentMs)
         : null,
     );
-  }, [previewLeadMs, timeline]);
+  }, [previewLeadMs, previewTimeline, timeline]);
 
   useEffect(() => {
     frameLoop.current ??= createPreviewFrameLoop({
@@ -859,6 +869,32 @@ export function KirakaraPreview({
               >
                 定位歌词
               </button>
+              <div className="ml-auto flex items-center gap-4 pl-4">
+                <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeRomaji}
+                    onChange={(event) => setIncludeRomaji(event.target.checked)}
+                  />
+                  双注音（假名 + 罗马音）
+                </label>
+                {includeRomaji && (
+                  <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    罗马音位置
+                    <select
+                      aria-label="罗马音位置"
+                      value={romajiPosition}
+                      onChange={(event) => setRomajiPosition(
+                        event.target.value as KirakaraRomajiPosition,
+                      )}
+                      className="focus-ring h-9 rounded-md border bg-background px-2 text-sm text-foreground"
+                    >
+                      <option value="above">汉字上方</option>
+                      <option value="below">汉字下方</option>
+                    </select>
+                  </label>
+                )}
+              </div>
               <span className="sr-only" data-playing={isPlaying}>播放状态</span>
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
@@ -1082,15 +1118,16 @@ export function KirakaraPreview({
                 <ReviewedDataDownloads
                   jobId={jobId}
                   videoName={expectedVideoName}
-                  timeline={timeline}
+                  timeline={previewTimeline ?? timeline}
                   style={style}
+                  includeRomaji={includeRomaji}
                 />
                   {exportDisabled && <p className="text-sm text-muted-foreground">服务器正在处理当前导出，完成后可继续导出其他版本。当前编辑结果会继续保留。</p>}
                   {capabilities ? (
                     <KirakaraRenderActions
                       capabilities={capabilities}
                       video={video}
-                      timeline={timeline}
+                      timeline={previewTimeline ?? timeline}
                       style={style}
                       jobId={jobId}
                       disabled={exportDisabled}

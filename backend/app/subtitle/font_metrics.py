@@ -10,6 +10,26 @@ import struct
 from PIL import ImageFont
 
 
+def _family_key(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _fontconfig_family_matches(requested: str, resolved: str) -> bool:
+    requested_key = _family_key(requested)
+    if requested_key in {"sansserif", "serif", "monospace"}:
+        return True
+    aliases = {
+        "notosansjp": {"notosansjp", "notosanscjkjp"},
+        "notosanscjkjp": {"notosansjp", "notosanscjkjp"},
+    }
+    accepted = aliases.get(requested_key, {requested_key})
+    return any(
+        _family_key(family) in accepted
+        for family in resolved.split(",")
+        if family.strip()
+    )
+
+
 def font_candidates(font_name: str, *, bold: bool) -> list[str]:
     windows_fonts = {
         "Noto Sans CJK JP": "C:/Windows/Fonts/NotoSansJP-VF.ttf",
@@ -51,12 +71,13 @@ def font_candidates(font_name: str, *, bold: bool) -> list[str]:
 @lru_cache(maxsize=16)
 def _font(font_name: str, size: int, bold: bool):
     candidates: list[tuple[str, int]] = []
+    fontconfig_fallback: tuple[str, int] | None = None
     try:
         result = subprocess.run(
             [
                 "fc-match",
                 "-f",
-                "%{file}\n%{index}",
+                "%{file}\n%{index}\n%{family}",
                 f"{font_name}:style={'Bold' if bold else 'Regular'}",
             ],
             check=True,
@@ -66,10 +87,16 @@ def _font(font_name: str, size: int, bold: bool):
         )
         if result.stdout.strip():
             parts = result.stdout.strip().splitlines()
-            candidates.append((parts[0], int(parts[1]) & 0xFFFF if len(parts) > 1 else 0))
+            match = (parts[0], int(parts[1]) & 0xFFFF if len(parts) > 1 else 0)
+            if len(parts) > 2 and _fontconfig_family_matches(font_name, parts[2]):
+                candidates.append(match)
+            else:
+                fontconfig_fallback = match
     except (OSError, subprocess.SubprocessError):
         pass
     candidates.extend((path, 0) for path in font_candidates(font_name, bold=bold))
+    if fontconfig_fallback is not None:
+        candidates.append(fontconfig_fallback)
     for candidate, index in candidates:
         if Path(candidate).is_file():
             font = ImageFont.truetype(candidate, size=size, index=index)

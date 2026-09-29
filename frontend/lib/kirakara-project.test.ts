@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_KIRAKARA_STYLE } from "./kirakara-style";
 import {
+  attachKirakaraRomaji,
   buildKirakaraProject,
   serializeKirakaraLrc,
 } from "./kirakara-project";
@@ -41,7 +42,17 @@ const timeline: KirakaraTimeline = {
 };
 
 describe("Kirakara project compatibility", () => {
-  it("serializes cloud timing as Kirakara @Ruby LRC without inferred ruby parsing", () => {
+  it("creates the secondary layer only after the final mora timing is available", () => {
+    const exported = attachKirakaraRomaji(timeline);
+
+    expect(exported).not.toBe(timeline);
+    expect(exported.lines[0].units[0].romajiMoras).toEqual(["kyo", "u"]);
+    expect(exported.lines[0].units[1].romajiMoras).toEqual(["mo"]);
+    expect(exported.lines[0].units[0].romajiPosition).toBe("above");
+    expect(timeline.lines[0].units[0].romajiMoras).toBeUndefined();
+  });
+
+  it("serializes cloud timing as SUG-compatible inline double-ruby LRC", () => {
     const twoRubyTimeline: KirakaraTimeline = {
       ...timeline,
       lines: [
@@ -65,17 +76,45 @@ describe("Kirakara project compatibility", () => {
         },
       ],
     };
-    const lrc = serializeKirakaraLrc(twoRubyTimeline);
+    const lrc = serializeKirakaraLrc(twoRubyTimeline, {
+      includeRomaji: true,
+    });
 
-    const lines = lrc.split("\n");
-    expect(lines[0]).toBe(
-      "[00:01:00]今日[00:01:50]も[00:01:50]歌[00:01:80]",
+    expect(lrc).toBe(
+      "{今日|[00:01:00]きょ[00:01:20]う>[00:01:00]kyo[00:01:20]u}{も|>[00:01:50]mo}{歌|[00:01:50]う[00:01:65]た>[00:01:50]u[00:01:65]ta}[00:01:80]",
     );
-    expect(lines.slice(1)).toEqual([
-      "@Ruby1=今日,きょ[00:00:20]う,[00:01:00],[00:01:50]",
-      "@Ruby2=歌,う[00:00:15]た,[00:01:50],[00:01:80]",
-    ]);
-    expect(lrc).not.toContain("{今日|");
+    expect(lrc).not.toContain("@Ruby");
+  });
+
+  it("keeps KRL in SUG-compatible kana-first order even when preview uses romaji above", () => {
+    const previewOnlyOptions = {
+      includeRomaji: true,
+      romajiPosition: "above",
+    } as const;
+
+    expect(serializeKirakaraLrc(timeline, previewOnlyOptions)).toBe(
+      "{今日|[00:01:00]きょ[00:01:20]う>[00:01:00]kyo[00:01:20]u}{も|>[00:01:50]mo}[00:01:80]",
+    );
+
+    const project = buildKirakaraProject(
+      timeline,
+      DEFAULT_KIRAKARA_STYLE,
+      previewOnlyOptions,
+    );
+    const lyricStart = project.indexOf("\n\n\n");
+    const config = JSON.parse(project.slice("config ".length, lyricStart));
+    expect(config).toMatchObject({
+      rubySize: DEFAULT_KIRAKARA_STYLE.rubySize,
+      rubyLetterSpacing: DEFAULT_KIRAKARA_STYLE.rubyLetterSpacing,
+      ruby2Size: 22,
+      ruby2LetterSpacing: 1,
+    });
+  });
+
+  it("defaults to kana-only inline ruby until romaji is enabled", () => {
+    expect(serializeKirakaraLrc(timeline)).toBe(
+      "{今日|[00:01:00]きょ[00:01:20]う}[00:01:50]も[00:01:80]",
+    );
   });
 
   it("builds the exact config-plus-LRC KRL structure accepted by Kirakara", () => {
@@ -96,15 +135,61 @@ describe("Kirakara project compatibility", () => {
       line2Y: 563,
       letterSpacing: 9,
       rubyIsolateEnabled: true,
+      rubyBold: true,
+      ruby2Size: 22,
+      ruby2Offset: 3,
+      ruby2LetterSpacing: 1,
+      ruby2Bold: true,
+      ruby2StrokeWidth: 2,
+      bgColor: "#008000",
+      indicatorFillColor: "#ebebeb",
+      songTitle: {
+        enabled: false,
+        durationSec: 6,
+        textFade: true,
+        prelude: {
+          enabled: false,
+          fadeEnabled: false,
+          fadeDurationMs: 666,
+        },
+        groups: [],
+      },
     });
     const projectBody = project.slice(lyricStart + 3);
     expect(projectBody).toBe(serializeKirakaraLrc(timeline));
-    expect(projectBody.indexOf("[00:01:00]今日")).toBeLessThan(
-      projectBody.indexOf("@Ruby1=今日"),
-    );
+    expect(projectBody).toContain("{今日|");
+    expect(projectBody).not.toContain("@Ruby");
   });
 
-  it("REQ-STYLE-KRL-01 reuses upstream KRL fields and preserves shadow extensions", () => {
+  it("keeps the supplied SUG template field order and excludes webpage-only romaji style", () => {
+    const project = buildKirakaraProject(timeline, {
+      ...DEFAULT_KIRAKARA_STYLE,
+      romajiFollowRuby: false,
+      romajiSize: 48,
+      romajiLetterSpacing: 9,
+      romajiOffset: 14,
+    }, { includeRomaji: true });
+    const lyricStart = project.indexOf("\n\n\n");
+    const config = JSON.parse(project.slice("config ".length, lyricStart));
+
+    expect(Object.keys(config)).toEqual([
+      "fontSize", "letterSpacing", "fontFamily", "fontBold",
+      "rubySize", "rubyOffset", "rubyLetterSpacing", "rubyBold", "rubyStrokeWidth",
+      "ruby2Size", "ruby2Offset", "ruby2LetterSpacing", "ruby2Bold", "ruby2StrokeWidth",
+      "rubyIsolateEnabled", "colorBefore", "colorAfter", "strokeColorBefore",
+      "strokeColorAfter", "strokeWidth", "line1X", "line1Y", "line2Right", "line2Y",
+      "bgColor", "fadeEnabled", "fadeParagraphOnly", "fadeDurationMs", "indicatorEnabled",
+      "indicatorDuration", "indicatorSize", "indicatorSpacing", "indicatorStrokeWidth",
+      "indicatorStrokeColor", "indicatorFillColor", "indicatorFadeRatio", "indicatorOffsetX",
+      "indicatorOffsetY", "characterProfiles", "roleLabelPrefix", "roleLabelSeparator",
+      "roleLabelSuffix", "songTitle",
+    ]);
+    expect(config.roleLabelSuffix).toBe("：");
+    expect(project.slice(lyricStart + 3)).toContain("{今日|[00:01:00]きょ");
+    expect(project).not.toContain("@Ruby");
+  });
+
+  it("REQ-STYLE-KRL-01 reuses upstream KRL fields without browser render extensions", () => {
     const project = buildKirakaraProject(timeline, {
       ...DEFAULT_KIRAKARA_STYLE,
       fontBold: false,
@@ -113,8 +198,6 @@ describe("Kirakara project compatibility", () => {
       rubyOffset: 7,
       strokeColorBefore: "#123456",
       strokeColorAfter: "#abcdef",
-      shadowColor: "#654321",
-      shadowDepth: 4,
       horizontalMargin: 90,
     });
     const lyricStart = project.indexOf("\n\n\n");
@@ -127,11 +210,38 @@ describe("Kirakara project compatibility", () => {
       rubyOffset: 7,
       strokeColorBefore: "#123456",
       strokeColorAfter: "#abcdef",
-      shadowColor: "#654321",
-      shadowDepth: 4,
       line1X: 90,
       line2Right: 90,
     });
+    expect(config).not.toHaveProperty("shadowColor");
+    expect(config).not.toHaveProperty("shadowDepth");
+    expect(config).not.toHaveProperty("bgImageOpacity");
+  });
+
+  it("keeps preview-only romaji styling out of the KRL config", () => {
+    const previewStyle = {
+      ...DEFAULT_KIRAKARA_STYLE,
+      romajiFollowRuby: false,
+      romajiSize: 48,
+      romajiLetterSpacing: 9,
+      romajiOffset: 14,
+    } as const;
+    const project = buildKirakaraProject(
+      timeline,
+      previewStyle,
+      { includeRomaji: true },
+    );
+    const lyricStart = project.indexOf("\n\n\n");
+    const config = JSON.parse(project.slice("config ".length, lyricStart));
+
+    expect(config).toMatchObject({
+      ruby2Size: 22,
+      ruby2LetterSpacing: 1,
+      ruby2Offset: 3,
+    });
+    expect(config).not.toHaveProperty("romajiSize");
+    expect(config).not.toHaveProperty("romajiLetterSpacing");
+    expect(config).not.toHaveProperty("romajiOffset");
   });
 
   it("keeps visible paragraph separators at Kirakara timing boundaries", () => {

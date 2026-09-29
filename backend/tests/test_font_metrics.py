@@ -45,6 +45,52 @@ def test_fontconfig_query_requests_the_rendered_weight(monkeypatch) -> None:
     font_metrics._font.cache_clear()
 
 
+def test_unrelated_fontconfig_fallback_does_not_override_japanese_font_candidates(
+    monkeypatch,
+) -> None:
+    loaded_paths: list[str] = []
+
+    class Result:
+        stdout = "/fonts/DejaVuSans.ttf\n0\nDejaVu Sans\n"
+
+    monkeypatch.setattr(font_metrics.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+
+    def truetype(path, *args, **kwargs):
+        loaded_paths.append(str(path))
+        return object()
+
+    monkeypatch.setattr(font_metrics.ImageFont, "truetype", truetype)
+    font_metrics._font.cache_clear()
+
+    font_metrics._font("Noto Sans JP", 96, False)
+
+    assert loaded_paths[0].endswith("NotoSansCJK-Regular.ttc")
+    font_metrics._font.cache_clear()
+
+
+def test_exact_fontconfig_match_stays_preferred(monkeypatch) -> None:
+    loaded_paths: list[str] = []
+
+    class Result:
+        stdout = "/fonts/ExampleSans.ttf\n0\nExample Sans\n"
+
+    monkeypatch.setattr(font_metrics.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+
+    def truetype(path, *args, **kwargs):
+        loaded_paths.append(str(path))
+        return object()
+
+    monkeypatch.setattr(font_metrics.ImageFont, "truetype", truetype)
+    font_metrics._font.cache_clear()
+
+    font_metrics._font("Example Sans", 96, False)
+
+    assert loaded_paths[0] == "/fonts/ExampleSans.ttf"
+    font_metrics._font.cache_clear()
+
+
 @pytest.mark.parametrize("bold,weight", [(False, 400), (True, 700)])
 def test_variable_noto_uses_requested_weight(bold, weight):
     path = Path("C:/Windows/Fonts/NotoSansJP-VF.ttf")

@@ -15,11 +15,14 @@ function context(
     strokeStyle: string | CanvasGradient | CanvasPattern;
     shadowColor?: string;
   }> = [];
+  const fillStates: Array<{ text: string; x: number; y: number; font: string }> = [];
   const canvasContext = {
     canvas: { width: 1280, height: 720 },
     clearRect: vi.fn(),
     fillRect: vi.fn(),
-    fillText: vi.fn(),
+    fillText: vi.fn((text: string, x: number, y: number) => {
+      fillStates.push({ text, x, y, font: canvasContext.font });
+    }),
     strokeText: vi.fn(() => {
       strokeStates.push({
         lineJoin: canvasContext.lineJoin,
@@ -53,6 +56,7 @@ function context(
     shadowOffsetX: 0,
     shadowOffsetY: 0,
     strokeStates,
+    fillStates,
   };
   return canvasContext;
 }
@@ -92,9 +96,9 @@ describe("drawKirakaraFrame", () => {
 
     drawKirakaraFrame(canvas, frame);
 
-    expect(canvas.fillText).toHaveBeenCalledWith("今", 148.5, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("日", 197.5, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("歌", 1040.5, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("今", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("日", 177, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("歌", 1063, expect.any(Number));
     const upperCall = canvas.fillText.mock.calls.find(([text]) => text === "今");
     const lowerCall = canvas.fillText.mock.calls.find(([text]) => text === "歌");
     expect(upperCall?.[2]).toBeCloseTo(492.72, 2);
@@ -107,9 +111,9 @@ describe("drawKirakaraFrame", () => {
 
     drawKirakaraFrame(canvas, frame);
 
-    expect(canvas.fillText).toHaveBeenCalledWith("き", 128, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("ょ", 173, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("う", 218, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("き", 107.5, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("ょ", 152.5, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("う", 197.5, expect.any(Number));
     const rubyCall = canvas.fillText.mock.calls.find(([text]) => text === "き");
     expect(rubyCall?.[2]).toBeCloseTo(421.58, 2);
     expect(
@@ -227,7 +231,7 @@ describe("drawKirakaraFrame", () => {
     expect(canvas.fillText).toHaveBeenCalledWith("き", 152.5, expect.any(Number));
   });
 
-  it("isolates ruby that is wider than its kanji and shifts following text", () => {
+  it("keeps base character spacing uniform when ruby is wider than its kanji", () => {
     const canvas = context((text, font) =>
       [...text].length * (font.startsWith("700") ? 40 : 20),
     );
@@ -251,9 +255,79 @@ describe("drawKirakaraFrame", () => {
       ],
     });
 
-    expect(canvas.fillText).toHaveBeenCalledWith("火", 143, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("ほ", 128, expect.any(Number));
-    expect(canvas.fillText).toHaveBeenCalledWith("山", 207, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("火", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("ほ", 113, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("山", 177, expect.any(Number));
+  });
+
+  it("separates adjacent wide ruby labels without moving the base text", () => {
+    const canvas = context((text, font) =>
+      [...text].length * (font.includes("64px") ? 40 : 20),
+    );
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "火山",
+        units: [
+          {
+            text: "火",
+            progress: 0,
+            ruby: [{ text: "あいう", startCharacter: 0, endCharacter: 1 }],
+          },
+          {
+            text: "山",
+            progress: 0,
+            ruby: [{ text: "えおか", startCharacter: 0, endCharacter: 1 }],
+          },
+        ],
+      }],
+    });
+
+    expect(canvas.fillText).toHaveBeenCalledWith("火", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("山", 177, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("あ", 100, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("え", 175, expect.any(Number));
+  });
+
+  it("separates adjacent wide romaji labels without moving the base text", () => {
+    const canvas = context((text, font) =>
+      [...text].length * (font.includes("64px") ? 40 : 10),
+    );
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "火山",
+        units: [
+          {
+            text: "火",
+            progress: 0,
+            ruby: [],
+            romaji: {
+              text: "abcdef",
+              position: "above",
+              characters: [..."abcdef"].map((text) => ({ text, progress: 0 })),
+            },
+          },
+          {
+            text: "山",
+            progress: 0,
+            ruby: [],
+            romaji: {
+              text: "ghijkl",
+              position: "above",
+              characters: [..."ghijkl"].map((text) => ({ text, progress: 0 })),
+            },
+          },
+        ],
+      }],
+    } as KirakaraFrame);
+
+    expect(canvas.fillText).toHaveBeenCalledWith("火", 128, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("山", 177, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("a", 110, expect.any(Number));
+    expect(canvas.fillText).toHaveBeenCalledWith("g", 175, expect.any(Number));
   });
 
   it("REQ-STYLE-CANVAS-01 applies custom weight, margin, outline, and shadow", () => {
@@ -283,6 +357,151 @@ describe("drawKirakaraFrame", () => {
     expect(canvas.shadowColor).toBe("transparent");
     expect(canvas.shadowOffsetX).toBe(0);
     expect(canvas.strokeStyle).toBe("#abcdef");
+  });
+
+  it("draws the optional romaji layer above the kana ruby", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "今日",
+        units: [{
+          text: "今日",
+          progress: 0.5,
+          ruby: [{ text: "きょう", startCharacter: 0, endCharacter: 2 }],
+          romaji: {
+            text: "kyou",
+            position: "above",
+            characters: [..."kyou"].map((text) => ({ text, progress: 0.5 })),
+          },
+        }],
+      }],
+    } as KirakaraFrame);
+
+    const mainY = canvas.fillText.mock.calls.find(([text]) => text === "今")![2];
+    const kanaY = canvas.fillText.mock.calls.find(([text]) => text === "き")![2];
+    const romajiY = canvas.fillText.mock.calls.find(([text]) => text === "k")![2];
+    expect(romajiY).toBeTypeOf("number");
+    expect(romajiY).toBeLessThan(kanaY);
+    expect(kanaY).toBeLessThan(mainY);
+  });
+
+  it("can draw romaji below the base text", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "今日",
+        units: [{
+          text: "今日",
+          progress: 0.5,
+          ruby: [{ text: "きょう", startCharacter: 0, endCharacter: 2 }],
+          romaji: {
+            text: "kyou",
+            position: "below",
+            characters: [..."kyou"].map((text) => ({ text, progress: 0.5 })),
+          },
+        }],
+      }],
+    } as KirakaraFrame);
+
+    const mainY = canvas.fillText.mock.calls.find(([text]) => text === "今")![2];
+    const romajiY = canvas.fillText.mock.calls.find(([text]) => text === "k")![2];
+    expect(romajiY).toBeGreaterThan(mainY);
+  });
+
+  it("uses kana settings for romaji by default and allows independent preview overrides", () => {
+    const drawWithStyle = (style: typeof DEFAULT_KIRAKARA_STYLE) => {
+      const canvas = context();
+      drawKirakaraFrame(canvas, {
+        lines: [{
+          slot: "upper",
+          text: "今日",
+          units: [{
+            text: "今日",
+            progress: 0.5,
+            ruby: [{ text: "きょう", startCharacter: 0, endCharacter: 2 }],
+            romaji: {
+              text: "ky",
+              position: "below",
+              characters: [..."ky"].map((text) => ({ text, progress: 0.5 })),
+            },
+          }],
+        }],
+      } as KirakaraFrame, { style });
+      return canvas;
+    };
+
+    const following = drawWithStyle({
+      ...DEFAULT_KIRAKARA_STYLE,
+      rubySize: 34,
+      rubyLetterSpacing: 7,
+      rubyOffset: 9,
+    });
+    const followingK = following.fillStates.find(({ text }) => text === "k")!;
+    const followingY = following.fillStates.find(({ text }) => text === "y")!;
+    expect(followingK.font).toContain("34px");
+    expect(followingY.x - followingK.x).toBe(40);
+
+    const independent = drawWithStyle({
+      ...DEFAULT_KIRAKARA_STYLE,
+      romajiFollowRuby: false,
+      romajiSize: 30,
+      romajiLetterSpacing: 3,
+      romajiOffset: 15,
+    });
+    const independentK = independent.fillStates.find(({ text }) => text === "k")!;
+    const independentY = independent.fillStates.find(({ text }) => text === "y")!;
+    expect(independentK.font).toContain("30px");
+    expect(independentY.x - independentK.x).toBe(40);
+    expect(independentK.y).toBeGreaterThan(followingK.y);
+  });
+
+  it("applies romaji spacing between mora groups instead of between letters", () => {
+    const canvas = context((text) => [...text].length * 10);
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "今日",
+        units: [{
+          text: "今日",
+          progress: 0.5,
+          ruby: [],
+          romaji: {
+            text: "kyou",
+            position: "above",
+            characters: [..."kyou"].map((text) => ({ text, progress: 0.5 })),
+            segments: [
+              {
+                text: "kyo",
+                characters: [..."kyo"].map((text) => ({ text, progress: 0.5 })),
+              },
+              {
+                text: "u",
+                characters: [{ text: "u", progress: 0.5 }],
+              },
+            ],
+          },
+        }],
+      }],
+    } as unknown as KirakaraFrame, {
+      style: {
+        ...DEFAULT_KIRAKARA_STYLE,
+        romajiFollowRuby: false,
+        romajiLetterSpacing: 8,
+      },
+    });
+
+    const k = canvas.fillStates.find(({ text }) => text === "k")!;
+    const y = canvas.fillStates.find(({ text }) => text === "y")!;
+    const o = canvas.fillStates.find(({ text }) => text === "o")!;
+    const u = canvas.fillStates.find(({ text }) => text === "u")!;
+    expect(y.x - k.x).toBe(10);
+    expect(o.x - y.x).toBe(10);
+    expect(u.x - o.x).toBe(18);
   });
 
   it("draws the sung shadow behind the sung outline", () => {

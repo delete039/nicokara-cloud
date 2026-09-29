@@ -10,6 +10,7 @@ import {
   type KirakaraLine,
   type KirakaraTimeline,
 } from "./kirakara-timeline";
+import { attachKirakaraRomaji } from "./kirakara-project";
 
 function line(
   surface: string,
@@ -402,6 +403,40 @@ describe("toKirakaraTimeline", () => {
 });
 
 describe("activeKirakaraFrame", () => {
+  it("exposes a timed secondary romaji layer only when it is attached after alignment", () => {
+    const plain = activeKirakaraFrame(toKirakaraTimeline(cloudTimeline), 1250);
+    const withRomaji = activeKirakaraFrame(
+      attachKirakaraRomaji(toKirakaraTimeline(cloudTimeline)),
+      1250,
+    );
+
+    expect(plain?.lines[0].units[0].romaji).toBeUndefined();
+    expect(withRomaji?.lines[0].units[0].romaji).toEqual({
+      text: "kyou",
+      position: "above",
+      characters: [
+        { text: "k", progress: 1 },
+        { text: "y", progress: 1 },
+        { text: "o", progress: 1 },
+        { text: "u", progress: 0.25 },
+      ],
+      segments: [
+        {
+          text: "kyo",
+          characters: [
+            { text: "k", progress: 1 },
+            { text: "y", progress: 1 },
+            { text: "o", progress: 1 },
+          ],
+        },
+        {
+          text: "u",
+          characters: [{ text: "u", progress: 0.25 }],
+        },
+      ],
+    });
+  });
+
   it("shows the current and next lyric in alternating upper and lower slots", () => {
     const frame = activeKirakaraFrame(toKirakaraTimeline(cloudTimeline), 1250);
 

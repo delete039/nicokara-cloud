@@ -655,4 +655,36 @@ describe("Kirakara timeline review", () => {
       }).style,
     ).toMatchObject({ font_size: 72, upper_y: 410 });
   });
+
+  it("serializes post-timing romaji and its independent render style for cloud export", () => {
+    const exportTimeline: KirakaraTimeline = {
+      ...timeline,
+      lines: timeline.lines.map((line) => ({
+        ...line,
+        units: line.units.map((unit) => ({
+          ...unit,
+          romajiMoras: unit.text === "君" ? ["ki", "mi"] : ["no"],
+          romajiPosition: "above" as const,
+        })),
+      })),
+    };
+    const payload = timelineReviewPayload(exportTimeline, {
+      ...DEFAULT_KIRAKARA_STYLE,
+      romajiFollowRuby: false,
+      romajiSize: 42,
+      romajiLetterSpacing: 7,
+      romajiOffset: 11,
+    });
+
+    expect(payload.lines[0].tokens[0]).toMatchObject({
+      romaji_moras: ["ki", "mi"],
+      romaji_position: "above",
+    });
+    expect(payload.style).toMatchObject({
+      romaji_follow_ruby: false,
+      romaji_size: 42,
+      romaji_letter_spacing: 7,
+      romaji_offset: 11,
+    });
+  });
 });

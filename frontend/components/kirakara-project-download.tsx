@@ -23,14 +23,18 @@ export function KirakaraProjectDownload({
   videoName,
   timeline,
   style = DEFAULT_KIRAKARA_STYLE,
+  includeRomaji: controlledIncludeRomaji,
 }: {
   jobId: string;
   videoName: string;
   timeline?: KirakaraTimeline;
   style?: KirakaraStyle;
+  includeRomaji?: boolean;
 }) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [localIncludeRomaji, setLocalIncludeRomaji] = useState(false);
+  const includeRomaji = controlledIncludeRomaji ?? localIncludeRomaji;
 
   async function download() {
     if (downloading) return;
@@ -38,7 +42,7 @@ export function KirakaraProjectDownload({
     setError(null);
     try {
       const source = timeline ?? toKirakaraTimeline(await getTimeline(jobId));
-      const blob = new Blob([buildKirakaraProject(source, style)], {
+      const blob = new Blob([buildKirakaraProject(source, style, { includeRomaji })], {
         type: "text/plain;charset=utf-8",
       });
       const url = URL.createObjectURL(blob);
@@ -73,6 +77,16 @@ export function KirakaraProjectDownload({
         )}
         {JOB_COPY.downloadSubtitle}
       </button>
+      {controlledIncludeRomaji === undefined && (
+        <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={localIncludeRomaji}
+            onChange={(event) => setLocalIncludeRomaji(event.target.checked)}
+          />
+          双注音（假名 + 罗马音）
+        </label>
+      )}
       {error && <p className="mt-2 text-xs text-destructive" role="alert">{error}</p>}
     </div>
   );
