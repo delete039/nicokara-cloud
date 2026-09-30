@@ -1,3 +1,5 @@
+import { isSupportedVideoName } from "@/lib/video-formats";
+
 export type LocalMobileJobStage =
   | "INSPECTING"
   | "PREPARING_MODELS"
@@ -80,8 +82,8 @@ export async function runLocalMobileJob<TTimeline>(
   try {
     emit("INSPECTING");
     ensureNotAborted(signal);
-    if (!input.video.name.toLowerCase().endsWith(".mp4")) {
-      throw new Error("Local processing requires an MP4 video");
+    if (!isSupportedVideoName(input.video.name)) {
+      throw new Error("Local processing requires a supported video format");
     }
     if (!input.lyrics.trim()) {
       throw new Error("Local processing requires lyrics");

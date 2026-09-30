@@ -11,7 +11,7 @@
 - UVR 与 CTC 浏览器模型清单和 Cache Storage 缓存接口。
 - 完全本地任务状态机及可替换适配器。
 - 只上传音频、不上传视频的后端任务契约。
-- 浏览器提取 MP4 主音轨、显示进度、取消和失败回退。
+- 浏览器提取受支持视频容器的主音轨、显示进度、取消和失败回退。
 - 云端时间轴转换、浏览器本地视频播放和 Kirakara Canvas 同步字幕预览。
 - WebCodecs H.264 导出能力检测，以及移动端 720p/30、桌面端 1080p/30 配置边界。
 - Mediabunny 逐帧 Canvas 合成、fragmented MP4 顺序封装、导出进度和取消。
@@ -78,7 +78,7 @@ FA-Kara 的核心流程是：使用 UVR/MSST 得到人声、进行歌词读音�
 
 ## 浏览器音频提取
 
-前端使用 Mediabunny 1.52.3 读取 MP4，丢弃视频轨并将主音轨封装为 M4A。兼容的 AAC 音轨会优先直接复制数据，不执行视频解码，也不加载 FFmpeg WASM。提取模块通过动态导入按需加载，当前生产构建的独立压缩前代码块约 505 KB，不进入首页首屏代码。
+前端使用 Mediabunny 1.52.3 读取受支持的视频容器，丢弃视频轨并将主音轨封装为 M4A。兼容的 AAC 音轨会优先直接复制数据，不执行视频解码，也不加载 FFmpeg WASM。提取模块通过动态导入按需加载，当前生产构建的独立压缩前代码块约 505 KB，不进入首页首屏代码。
 
 提取流程支持 0 至 100 的进度和 `AbortSignal` 取消。提取器未找到音轨、容器损坏或浏览器无法处理编码时，页面自动切换为 `REMOTE_VIDEO`；用户主动取消不会触发回退。音频开始上传后的服务器错误直接反馈，不会再次上传完整视频，避免重复创建任务。
 
@@ -119,7 +119,7 @@ POST /api/v1/browser/audio-uploads/{ticket_id}/complete
 |---|---|---|
 | `audio_name` | 文本 | WAV、MP3、M4A、AAC、FLAC 或 OGG 文件名 |
 | `audio_size_bytes` | 整数 | 浏览器提取后音频的总字节数 |
-| `original_video_name` | 文本 | 本地保留的原 MP4 文件名 |
+| `original_video_name` | 文本 | 本地保留的原视频文件名 |
 | `original_video_size_bytes` | 整数 | 原视频大小，必须不超过 300 MB |
 | `chunk_size_bytes` | 整数 | 当前固定为 8 MiB |
 | `total_chunks` | 整数 | 必须与音频大小和分片大小一致 |
@@ -153,7 +153,7 @@ POST /api/v1/browser/audio-uploads/{ticket_id}/complete
 
 ## 下一步验收
 
-1. 使用桌面 Chrome/Edge、Android Chrome 与 iPhone Safari 测试常见 AAC MP4 的兼容率、耗时、峰值内存和后台切换行为。
+1. 使用桌面 Chrome/Edge、Android Chrome 与 iPhone Safari 测试常见视频容器及 AAC 音轨的兼容率、耗时、峰值内存和后台切换行为。
 2. 接入云端 FA-Kara/MMS_FA 可插拔对齐器，复用 UVR 人声结果并输出相同 Mora 时间轴契约。
 3. 将 UVR 模型托管到独立模型源，补 SHA-256 校验、断点缓存和真机峰值内存测试。
 4. 转换 ReazonSpeech CTC 为 ONNX INT8，使用固定日语歌曲集测量 Mora 中位误差、P95 误差、失败率和实时倍率。

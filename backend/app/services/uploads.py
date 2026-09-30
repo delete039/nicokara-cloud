@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
 from app.core.resource_limits import check_disk_space
+from app.video.formats import looks_like_video
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -20,7 +21,8 @@ class SavedUpload:
 
 
 def looks_like_mp4(header: bytes) -> bool:
-    return len(header) >= 12 and header[4:8] == b"ftyp"
+    """Compatibility wrapper for integrations that still import this helper."""
+    return looks_like_video(header, ".mp4")
 
 
 def looks_like_audio(header: bytes, suffix: str) -> bool:
@@ -31,7 +33,7 @@ def looks_like_audio(header: bytes, suffix: str) -> bool:
             len(header) >= 2 and header[0] == 0xFF and header[1] & 0xE0 == 0xE0
         )
     if suffix in {".m4a", ".mp4"}:
-        return looks_like_mp4(header)
+        return looks_like_video(header, ".mp4")
     if suffix == ".aac":
         return len(header) >= 2 and header[0] == 0xFF and header[1] & 0xF0 == 0xF0
     if suffix == ".flac":
@@ -41,7 +43,7 @@ def looks_like_audio(header: bytes, suffix: str) -> bool:
     return False
 
 
-async def save_mp4(
+async def save_video(
     upload: UploadFile,
     destination: Path,
     *,
@@ -72,10 +74,10 @@ async def save_mp4(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="视频文件为空",
             )
-        if not looks_like_mp4(bytes(header)):
+        if not looks_like_video(bytes(header), destination.suffix):
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail="文件内容不是有效的 MP4 容器",
+                detail="文件内容不是有效的受支持视频容器",
             )
         return SavedUpload(destination, total, digest.hexdigest())
     except Exception:
@@ -83,6 +85,10 @@ async def save_mp4(
         raise
     finally:
         await upload.close()
+
+
+# Compatibility alias for callers and integrations that still use the old name.
+save_mp4 = save_video
 
 
 async def save_audio(

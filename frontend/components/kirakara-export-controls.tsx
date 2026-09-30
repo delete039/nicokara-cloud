@@ -70,7 +70,7 @@ export function KirakaraExportControls({
       setOutputUrl(null);
     }
 
-    const suggestedName = `${video.name.replace(/\.mp4$/i, "") || "nicokara"}.${vocalMode === "off" ? "off-vocal" : "on-vocal"}.nicokara.mp4`;
+    const suggestedName = `${video.name.replace(/\.[^.]+$/u, "") || "nicokara"}.${vocalMode === "off" ? "off-vocal" : "on-vocal"}.nicokara.mp4`;
     try {
       const destination = await createBrowserFileDestination(suggestedName);
       const replacementAudio = await resolveExportAudio(

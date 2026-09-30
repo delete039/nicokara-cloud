@@ -44,6 +44,11 @@ import {
   type ReviewedArtifactKind,
 } from "@/lib/reviewed-artifact-import";
 import {
+  isSupportedVideoName,
+  SUPPORTED_VIDEO_ACCEPT,
+  SUPPORTED_VIDEO_LABEL,
+} from "@/lib/video-formats";
+import {
   ApiRequestError,
   createAudioOnlyJob,
   createJob,
@@ -117,6 +122,12 @@ export function UploadForm() {
   }, [video]);
 
   function selectVideo(nextVideo: File | null) {
+    if (nextVideo && !isSupportedVideoName(nextVideo.name)) {
+      setVideo(null);
+      setMobileRoute(null);
+      setError(validationErrorFeedback("invalid_video_type"));
+      return;
+    }
     setVideo(nextVideo);
     setMobileRoute(null);
     setError(null);
@@ -220,7 +231,7 @@ export function UploadForm() {
       setError(validationErrorFeedback("lyrics_source_conflict"));
       return;
     }
-    if (!video.name.toLowerCase().endsWith(".mp4")) {
+    if (!isSupportedVideoName(video.name)) {
       setError(validationErrorFeedback("invalid_video_type"));
       return;
     }
@@ -350,7 +361,7 @@ export function UploadForm() {
         <input
           ref={videoInput}
           type="file"
-          accept="video/mp4,.mp4"
+          accept={SUPPORTED_VIDEO_ACCEPT}
           className="sr-only"
           disabled={uploading}
           onChange={(event) => {
@@ -390,10 +401,12 @@ export function UploadForm() {
                 }`}
               />
               <p className="font-medium">
-                {draggingVideo ? "松开以上传 MP4 视频" : UPLOAD_COPY.videoPrompt}
+                {draggingVideo
+                  ? `松开以上传${SUPPORTED_VIDEO_LABEL}视频`
+                  : UPLOAD_COPY.videoPrompt}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                拖放 MP4 文件到这里，或点击选择。{UPLOAD_COPY.videoHelp}
+                拖放支持的视频文件到这里，或点击选择。{UPLOAD_COPY.videoHelp}
               </p>
             </div>
           )}

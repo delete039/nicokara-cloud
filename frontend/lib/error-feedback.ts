@@ -22,7 +22,7 @@ export type ValidationErrorCode =
 const VALIDATION_ERRORS: Record<ValidationErrorCode, ErrorFeedback> = {
   video_required: {
     title: "尚未选择视频",
-    description: "生成任务需要一个包含画面和音轨的 MP4 视频。",
+    description: "生成任务需要一个包含画面和音轨的常见视频格式文件。",
     solutions: ["点击“上传原版 MV”并选择视频文件。"],
     technicalDetails: [],
     retryable: false,
@@ -46,10 +46,10 @@ const VALIDATION_ERRORS: Record<ValidationErrorCode, ErrorFeedback> = {
   },
   invalid_video_type: {
     title: "视频格式不受支持",
-    description: "服务器当前只接受标准 MP4 容器的视频。",
+    description: "服务器支持常见视频容器，并会检查文件内容是否与扩展名匹配。",
     solutions: [
-      "使用视频转换工具将素材重新编码为标准 MP4 后再上传。",
-      "不要仅修改文件扩展名，服务器会检查文件内部的 MP4 标识。",
+      "使用视频转换工具重新导出为 MP4、MOV、MKV、WebM、AVI 或其他常见格式后再上传。",
+      "不要仅修改文件扩展名，服务器会检查文件内部的容器标识。",
     ],
     technicalDetails: [],
     retryable: false,
@@ -184,8 +184,8 @@ function structuredValidationFeedback(
 
 function readableValidationDescription(detail?: string | null): string {
   const normalized = detail?.trim() ?? "";
-  if (/original_video_name.*mp4/iu.test(normalized)) {
-    return "原视频文件名或格式不是 MP4，服务器无法确认要处理的视频。";
+  if (/original_video_name.*(?:mp4|supported video)/iu.test(normalized)) {
+    return "原视频文件名或格式不受支持，服务器无法确认要处理的视频。";
   }
   if (/必须提供歌词|lyrics.*required/iu.test(normalized)) {
     return "没有收到可用歌词，无法创建字幕生成任务。";
@@ -375,9 +375,9 @@ export function httpErrorFeedback(
   if (status === 415) {
     return {
       title: "上传内容格式不正确",
-      description: "服务器检测到视频不是有效 MP4，或歌词文件不是 UTF-8 文本。",
+      description: "服务器检测到视频不是有效的受支持容器，或歌词文件不是 UTF-8 文本。",
       solutions: [
-        "重新编码视频为 MP4，不要只修改扩展名。",
+        "重新编码视频为常见格式，不要只修改扩展名。",
         "将歌词文件另存为 UTF-8 编码的 TXT 文件。",
       ],
       technicalDetails,
@@ -390,7 +390,7 @@ export function httpErrorFeedback(
       title: "提交内容未通过校验",
       description: readableValidationDescription(detail),
       solutions: [
-        "点击“返回修改”，确认选择了 MP4 视频，并且只使用一种歌词来源。",
+        "点击“返回修改”，确认选择了受支持的视频，并且只使用一种歌词来源。",
         "修改对应内容后重新提交；如果持续失败，请将下方技术信息提供给管理员。",
       ],
       technicalDetails,
@@ -538,7 +538,7 @@ const JOB_FAILURES: Record<string, JobFailureDefinition> = {
     description: "服务器无法从视频中提取可供分析的音轨。",
     solutions: [
       "确认视频可以正常播放且确实包含音频。",
-      "将视频重新编码为 H.264 视频加 AAC 音频的标准 MP4 后再上传。",
+      "将视频重新编码为带有常规视频和音频轨道的 MP4、MOV 或 MKV 后再上传。",
       "管理员应检查 FFmpeg 是否可用，并根据任务 ID 查询后端日志。",
     ],
   },

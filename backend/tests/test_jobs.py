@@ -26,6 +26,10 @@ def fake_mp4(payload: bytes = b"video-data") -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom" + payload
 
 
+def fake_mov(payload: bytes = b"video-data") -> bytes:
+    return b"\x00\x00\x00\x18ftypqt  \x00\x00\x00\x00qt  " + payload
+
+
 def reviewed_timeline_bytes() -> bytes:
     return json.dumps(
         {
@@ -98,6 +102,20 @@ def test_upload_mp4_and_lyrics(tmp_path: Path) -> None:
         ).read_text(encoding="utf-8") == "君の知らない物語\n"
 
 
+def test_upload_accepts_mov_and_preserves_the_container_suffix(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("concert.MOV", fake_mov(), "video/quicktime")},
+            data={"lyrics_text": "lyrics"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["original_video_name"] == "concert.MOV"
+    assert (tmp_path / "jobs" / body["id"] / "input.mov").exists()
+
+
 def test_upload_accepts_reviewed_timeline_without_plain_lyrics(
     tmp_path: Path,
 ) -> None:
@@ -132,6 +150,17 @@ def test_rejects_non_mp4_content(tmp_path: Path) -> None:
         response = client.post(
             "/api/v1/jobs",
             files={"video": ("song.mp4", b"not-an-mp4", "video/mp4")},
+        )
+
+    assert response.status_code == 415
+    assert list((tmp_path / "jobs").iterdir()) == []
+
+
+def test_rejects_unknown_video_extension(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            files={"video": ("song.xyz", fake_mp4(), "application/octet-stream")},
         )
 
     assert response.status_code == 415

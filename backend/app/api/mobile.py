@@ -43,7 +43,7 @@ from app.schemas.jobs import (
 from app.services.chunked_uploads import (
     acquire_completion_lock,
     assemble_chunked_audio,
-    assemble_chunked_mp4,
+    assemble_chunked_video as assemble_chunked_mp4,
     missing_chunk_indices,
     read_chunked_upload_metadata,
     received_chunk_indices,
@@ -52,7 +52,8 @@ from app.services.chunked_uploads import (
     start_chunked_upload,
     touch_chunked_upload,
 )
-from app.services.uploads import save_audio, save_lyrics, save_mp4
+from app.services.uploads import save_audio, save_lyrics, save_video as save_mp4
+from app.video.formats import is_supported_video_name, video_input_filename
 from app.services.review_drafts import timeline_source_revision
 from app.services.reviewed_artifacts import (
     ensure_lyrics_source_from_reviewed_artifacts,
@@ -103,8 +104,8 @@ def create_or_resume_audio_upload(
         raise HTTPException(status_code=409, detail="Client submission already created a job.")
 
     original_video_name = safe_display_name(payload.original_video_name)
-    if Path(original_video_name).suffix.lower() != ".mp4":
-        raise HTTPException(status_code=422, detail="original_video_name must identify an MP4 video.")
+    if not is_supported_video_name(original_video_name):
+        raise HTTPException(status_code=422, detail="original_video_name must identify a supported video format.")
     if not 0 < payload.original_video_size_bytes <= MAX_LOCAL_MEDIA_BYTES:
         raise HTTPException(status_code=413, detail="本地素材必须小于或等于 300 MB")
 
@@ -465,13 +466,13 @@ async def create_audio_only_job(
             return job_response(database, existing)
 
     display_video_name = safe_display_name(original_video_name)
-    if Path(display_video_name).suffix.lower() != ".mp4":
+    if not is_supported_video_name(display_video_name):
         await audio.close()
         if lyrics_file is not None:
             await lyrics_file.close()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="original_video_name must identify an MP4 video.",
+            detail="original_video_name must identify a supported video format.",
         )
     if not 0 < original_video_size_bytes <= MAX_LOCAL_MEDIA_BYTES:
         await audio.close()
@@ -662,15 +663,16 @@ async def queue_audio_job_for_cloud_render(
     completion_lock = None
     try:
         reservation = request.app.state.active_job_limiter.reserve(client_key)
+        input_filename = video_input_filename(video_name)
         if upload_ticket_id is not None:
             completion_lock = acquire_completion_lock(settings.storage_dir, upload_ticket_id)
             saved = assemble_chunked_mp4(
-                settings.storage_dir, upload_ticket_id, temp_dir / "input.mp4",
+                settings.storage_dir, upload_ticket_id, temp_dir / input_filename,
                 max_bytes=settings.max_video_bytes,
             )
         else:
             saved = await save_mp4(
-                video, temp_dir / "input.mp4", max_bytes=settings.max_video_bytes,
+                video, temp_dir / input_filename, max_bytes=settings.max_video_bytes,
             )
         if saved.size_bytes != job["video_size_bytes"]:
             raise HTTPException(

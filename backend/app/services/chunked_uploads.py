@@ -15,8 +15,8 @@ from app.services.uploads import (
     CHUNK_SIZE,
     SavedUpload,
     looks_like_audio,
-    looks_like_mp4,
 )
+from app.video.formats import looks_like_video
 
 
 MAX_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
@@ -265,7 +265,7 @@ async def save_upload_chunk(
     }
 
 
-def assemble_chunked_mp4(
+def assemble_chunked_video(
     storage_dir: Path,
     ticket_id: str,
     destination: Path,
@@ -312,15 +312,19 @@ def assemble_chunked_mp4(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Merged video size does not match the session.",
             )
-        if not looks_like_mp4(bytes(header)):
+        if not looks_like_video(bytes(header), destination.suffix):
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail="File content is not a valid MP4 container.",
+                detail="File content is not a supported video container.",
             )
         return SavedUpload(destination, total, digest.hexdigest())
     except Exception:
         shutil.rmtree(destination.parent, ignore_errors=True)
         raise
+
+
+# Compatibility alias for clients and tests that still import the old helper.
+assemble_chunked_mp4 = assemble_chunked_video
 
 
 def assemble_chunked_audio(

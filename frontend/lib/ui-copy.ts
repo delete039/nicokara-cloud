@@ -4,7 +4,7 @@ export const HOME_COPY = {
   steps: [
     {
       title: "提交素材",
-      text: "选择 MP4 视频，并粘贴歌词或上传 UTF-8 TXT / LRC 文件。",
+      text: "选择常见视频格式，并粘贴歌词或上传 UTF-8 TXT / LRC 文件。",
     },
     {
       title: "确认假名注音",
@@ -46,8 +46,9 @@ export const HOME_COPY = {
 
 export const UPLOAD_COPY = {
   videoSectionTitle: "视频素材",
-  videoPrompt: "选择 MP4 视频",
-  videoHelp: "支持最大 1 GB 的 MP4 文件，请确保视频包含可正常播放的音轨。",
+  videoPrompt: "选择视频文件",
+  videoHelp:
+    "支持最大 1 GB 的 MP4、MOV、M4V、MKV、WebM、AVI、WMV、FLV、MPEG、TS、3GP、OGV 文件，请确保视频包含可正常播放的音轨。",
   lyricsSectionTitle: "歌词内容",
   lyricsHint: "每句歌词需单独成行（不然会卡出屏幕QAQ）",
   vocalSectionTitle: "人声模式",

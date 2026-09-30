@@ -33,6 +33,10 @@ import {
 } from "@/lib/kirakara-review";
 import { getLocalVideo, rememberLocalVideo } from "@/lib/local-media-session";
 import {
+  isSupportedVideoName,
+  SUPPORTED_VIDEO_ACCEPT,
+} from "@/lib/video-formats";
+import {
   compatibleTimelineDraft,
   loadBrowserReviewDraft,
   saveBrowserReviewDraft,
@@ -701,6 +705,10 @@ export function KirakaraPreview({
 
   function selectVideo(file: File | null) {
     if (!file) return;
+    if (!isSupportedVideoName(file.name)) {
+      setSelectionWarning("请选择受支持的视频格式。");
+      return;
+    }
     rememberLocalVideo(jobId, file);
     setVideo(file);
     setSelectionWarning(
@@ -780,7 +788,7 @@ export function KirakaraPreview({
             重新选择原视频
             <input
               type="file"
-              accept="video/mp4,.mp4"
+              accept={SUPPORTED_VIDEO_ACCEPT}
               className="sr-only"
               onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
             />
@@ -907,7 +915,7 @@ export function KirakaraPreview({
                 更换视频
                 <input
                   type="file"
-                  accept="video/mp4,.mp4"
+                  accept={SUPPORTED_VIDEO_ACCEPT}
                   className="sr-only"
                   onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
                 />

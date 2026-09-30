@@ -30,7 +30,7 @@ function ensureNotAborted(signal?: AbortSignal): void {
 }
 
 function audioFileName(videoName: string): string {
-  const baseName = videoName.replace(/\.mp4$/i, "") || "nicokara";
+  const baseName = videoName.replace(/\.[^.]+$/u, "") || "nicokara";
   return `${baseName}.audio.m4a`;
 }
 

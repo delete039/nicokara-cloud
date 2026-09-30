@@ -23,7 +23,7 @@ describe("browser audio extractor", () => {
     };
 
     const audio = await extractor.extractAudioTrack(
-      new File(["video"], "my.song.mp4", { type: "video/mp4" }),
+      new File(["video"], "my.song.mov", { type: "video/quicktime" }),
       { onProgress: (value: number) => progress.push(value) },
       runtime,
     );

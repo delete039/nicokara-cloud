@@ -154,7 +154,9 @@ class FFmpegVideoRenderer:
                     "-shortest",
                 ])
             else:
-                cmd.extend(["-c:a", "copy"])
+                # Source containers may carry WMA, Vorbis, Opus or other
+                # audio codecs that cannot be muxed into the MP4 output.
+                cmd.extend(["-c:a", "aac", "-b:a", "192k"])
             cmd.extend(["-movflags", "+faststart", output_path.name])
             run_process(
                 cmd,

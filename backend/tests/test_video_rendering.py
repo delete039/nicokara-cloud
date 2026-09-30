@@ -65,7 +65,8 @@ pathlib.Path(sys.argv[-1]).write_bytes(
     )
     assert arguments[arguments.index("-c:v") + 1] == "libx264"
     assert arguments[arguments.index("-pix_fmt") + 1] == "yuv420p"
-    assert arguments[arguments.index("-c:a") + 1] == "copy"
+    assert arguments[arguments.index("-c:a") + 1] == "aac"
+    assert arguments[arguments.index("-b:a") + 1] == "192k"
     assert arguments[arguments.index("-movflags") + 1] == "+faststart"
     assert arguments[-1] == "final_karaoke.mp4"
     assert output_path.stat().st_size > 0

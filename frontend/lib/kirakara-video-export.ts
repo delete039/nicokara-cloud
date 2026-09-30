@@ -96,7 +96,7 @@ function ensureNotAborted(signal?: AbortSignal): void {
 }
 
 function outputFileName(videoName: string): string {
-  const baseName = videoName.replace(/\.mp4$/i, "") || "nicokara";
+  const baseName = videoName.replace(/\.[^.]+$/u, "") || "nicokara";
   return `${baseName}.nicokara.mp4`;
 }
 

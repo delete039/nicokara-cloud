@@ -8,14 +8,12 @@ import {
 } from "./error-feedback";
 
 describe("validationErrorFeedback", () => {
-  it("explains how to fix an invalid MP4 selection", () => {
+  it("explains how to fix an invalid video selection", () => {
     const feedback = validationErrorFeedback("invalid_video_type");
 
     expect(feedback.title).toBe("视频格式不受支持");
-    expect(feedback.description).toContain("MP4");
-    expect(feedback.solutions).toContain(
-      "使用视频转换工具将素材重新编码为标准 MP4 后再上传。",
-    );
+    expect(feedback.description).toContain("常见视频容器");
+    expect(feedback.solutions.join(" ")).toContain("MP4、MOV、MKV、WebM");
   });
 });
 

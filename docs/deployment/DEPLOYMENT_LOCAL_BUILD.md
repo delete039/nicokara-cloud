@@ -392,7 +392,7 @@ sudo journalctl -u nicokara-backend -n 100 --no-pager
 sudo journalctl -u nicokara-frontend -n 100 --no-pager
 ```
 
-最后通过网页上传一个短 MP4 和歌词，验证上传、Whisper 转录、字幕生成、视频烧录和下载。
+最后通过网页上传一个短视频（建议用 MP4，也可用其他受支持容器）和歌词，验证上传、Whisper 转录、字幕生成、视频烧录和下载。
 
 ## 10. 剩余边界
 

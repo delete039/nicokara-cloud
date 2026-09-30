@@ -20,10 +20,12 @@ describe("UploadForm", () => {
     expect(html).not.toContain("多声部增强");
     expect(html).not.toContain("稳健双模型");
   });
-  it("shows that MP4 videos can be dragged onto the upload area", () => {
+  it("shows the common video formats accepted by the upload area", () => {
     const html = renderToStaticMarkup(<UploadForm />);
 
-    expect(html).toContain("拖放 MP4 文件到这里");
+    expect(html).toContain("拖放支持的视频文件到这里");
+    expect(html).toContain(".mp4,.m4v,.mov,.3gp");
+    expect(html).toContain(".mkv,.webm,.avi,.wmv");
   });
 
   it("accepts existing LRC lyric files as well as plain text", () => {

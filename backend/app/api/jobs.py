@@ -38,7 +38,7 @@ from app.schemas.jobs import (
 )
 from app.services.chunked_uploads import (
     acquire_completion_lock,
-    assemble_chunked_mp4,
+    assemble_chunked_video as assemble_chunked_mp4,
     missing_chunk_indices,
     read_chunked_upload_metadata,
     received_chunk_count,
@@ -47,7 +47,8 @@ from app.services.chunked_uploads import (
     save_upload_chunk,
     start_chunked_upload,
 )
-from app.services.uploads import save_lyrics, save_mp4
+from app.services.uploads import save_lyrics, save_video as save_mp4
+from app.video.formats import is_supported_video_name, video_input_filename
 from app.services.review_drafts import read_matching_draft, timeline_source_revision
 from app.services.reviewed_artifacts import (
     ensure_lyrics_source_from_reviewed_artifacts,
@@ -221,10 +222,10 @@ def create_upload_ticket(
             if existing_ticket["video_name"] != original_name or existing_ticket["video_size_bytes"] != payload.video_size_bytes:
                 raise HTTPException(status_code=409, detail="上传文件与已存在的会话不一致")
             return upload_ticket_response(database, existing_ticket)
-    if Path(original_name).suffix.lower() != ".mp4":
+    if not is_supported_video_name(original_name):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="第一版仅支持 .mp4 视频",
+            detail="上传文件名不是受支持的视频格式。",
         )
     if payload.video_size_bytes <= 0:
         raise HTTPException(
@@ -403,13 +404,13 @@ def start_upload_chunks(
     original_name = safe_display_name(payload.video_name)
     if original_name != ticket["video_name"]:
         original_name = ticket["video_name"]
-    if Path(original_name).suffix.lower() != ".mp4":
+    if not is_supported_video_name(original_name):
         database.cancel_upload_ticket(ticket_id)
         remove_chunked_upload(settings.storage_dir, ticket_id)
         refresh_upload_queue(settings, database)
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="绗竴鐗堜粎鏀寔 .mp4 瑙嗛",
+            detail="上传文件名不是受支持的视频格式。",
         )
     if payload.video_size_bytes != ticket["video_size_bytes"]:
         database.cancel_upload_ticket(ticket_id)
@@ -607,9 +608,9 @@ async def complete_upload_chunks(
         raise
     job_id = str(uuid4())
     job_dir = settings.storage_dir / job_id
-    video_path = job_dir / "input.mp4"
-    lyrics_path = job_dir / "lyrics.txt"
     original_name = ticket["video_name"]
+    video_path = job_dir / video_input_filename(original_name)
+    lyrics_path = job_dir / "lyrics.txt"
     created = False
     merge_started = time.perf_counter()
     event_logger = request_event_logger(request)
@@ -791,12 +792,12 @@ async def create_job_from_upload_ticket(
 
     job_id = str(uuid4())
     job_dir = settings.storage_dir / job_id
-    video_path = job_dir / "input.mp4"
-    lyrics_path = job_dir / "lyrics.txt"
     original_name = safe_display_name(video.filename)
     if original_name != ticket["video_name"]:
         original_name = ticket["video_name"]
-    if Path(original_name).suffix.lower() != ".mp4":
+    video_path = job_dir / video_input_filename(original_name)
+    lyrics_path = job_dir / "lyrics.txt"
+    if not is_supported_video_name(original_name):
         await video.close()
         if lyrics_file:
             await lyrics_file.close()
@@ -804,7 +805,7 @@ async def create_job_from_upload_ticket(
         refresh_upload_queue(settings, database)
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="第一版仅支持 .mp4 视频",
+            detail="上传文件名不是受支持的视频格式。",
         )
 
     created = False
@@ -879,17 +880,16 @@ async def create_job(
     client_key = client_key_from_request(request, settings)
     job_id = str(uuid4())
     job_dir = settings.storage_dir / job_id
-    video_path = job_dir / "input.mp4"
-    lyrics_path = job_dir / "lyrics.txt"
-
     original_name = safe_display_name(video.filename)
-    if Path(original_name).suffix.lower() != ".mp4":
+    video_path = job_dir / video_input_filename(original_name)
+    lyrics_path = job_dir / "lyrics.txt"
+    if not is_supported_video_name(original_name):
         await video.close()
         if lyrics_file:
             await lyrics_file.close()
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="第一版仅支持 .mp4 视频",
+            detail="上传文件名不是受支持的视频格式。",
         )
 
     active_job_reservation = None
