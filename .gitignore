@@ -39,6 +39,9 @@ release/_stage-*/
 release/_verify-*/
 release/.staging-*/
 release/_archive-list-*.txt
+release/__pycache__/
+release/artifacts/
+release/archive/
 release/deploy-nicokara-cloud-v*-*-*.sh
 release/部署说明-v*-*-*.md
 *.zip

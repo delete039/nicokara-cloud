@@ -16,6 +16,20 @@ def git(*args: str) -> bytes:
     return subprocess.check_output(["git", *args], cwd=ROOT)
 
 
+def canonical_version() -> str:
+    version = git("show", "HEAD:VERSION").decode().strip()
+    if not version or any(character not in "0123456789." for character in version):
+        raise SystemExit("VERSION must contain a numeric dotted version such as 4.1.")
+    frontend_version = json.loads(
+        git("show", "HEAD:frontend/package.json"),
+    )["version"]
+    if frontend_version != version:
+        raise SystemExit(
+            f"VERSION ({version}) does not match frontend/package.json ({frontend_version}).",
+        )
+    return version
+
+
 def main() -> None:
     if git("status", "--porcelain", "--untracked-files=no").strip():
         raise SystemExit("Commit tracked changes before packaging.")
@@ -28,10 +42,11 @@ def main() -> None:
     for name in tracked:
         if name.startswith("frontend/") and (ROOT / name).stat().st_mtime > server.stat().st_mtime:
             raise SystemExit(f"Build is older than {name}; rebuild before packaging.")
-    version = json.loads(git("show", "HEAD:frontend/package.json"))["version"]
+    version = canonical_version()
     release_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     release_name = f"nicokara-cloud-v{version}-{source[:7]}-{release_id}"
-    output = ROOT / "release"
+    output = ROOT / "release" / "artifacts" / f"v{version}"
+    output.mkdir(parents=True, exist_ok=True)
     archive_path = output / f"{release_name}.tar.gz"
     hashes: dict[str, str] = {}
     with tarfile.open(archive_path, "x:gz", format=tarfile.PAX_FORMAT) as archive:
@@ -51,7 +66,8 @@ def main() -> None:
             add(f"frontend/{relative.as_posix()}", file.read_bytes())
         for name in tracked:
             if name.startswith(("backend/app/", "backend/config/")) or name in {
-                "backend/pyproject.toml", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md",
+                "backend/pyproject.toml", "README.md", "CHANGELOG.md", "VERSION",
+                "THIRD_PARTY_NOTICES.md",
             }:
                 if ".env" in Path(name).name or Path(name).suffix in {".sqlite3", ".pyc"}:
                     raise SystemExit(f"Unexpected source file: {name}")

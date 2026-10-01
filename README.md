@@ -2,7 +2,7 @@
 
 在浏览器中上传 MV 和日语歌词，自动完成歌声识别、假名注音、Mora 时间轴、Kirakara 逐字字幕以及 ON VOCAL / OFF VOCAL 视频导出。
 
-> 当前版本：`v0.3.0-alpha.3`。项目仍处于 Alpha 阶段，建议先用短视频验证浏览器兼容性、注音和时间轴效果。
+> 当前版本：`v4.1`。版本历史和后续更新规则见 [版本历史](./docs/releases/VERSION_HISTORY.md) 与 [项目开发标准](./docs/development/PROJECT_STANDARDS.md)。
 
 ## 项目能做什么
 

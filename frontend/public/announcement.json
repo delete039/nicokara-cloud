@@ -1,6 +1,7 @@
 {
   "id": "2026-10-01-update-v1",
   "enabled": true,
+  "version": "v4.1",
   "title": "2026-10-01 更新日志",
   "publishedAt": "2026-10-01",
   "content": [
@@ -16,6 +17,7 @@
   "history": [
     {
       "id": "2026-09-21-update-v1",
+      "version": "v4.0",
       "title": "2026-09-21 更新日志",
       "publishedAt": "2026-09-21",
       "content": [
@@ -31,6 +33,7 @@
     },
     {
       "id": "2026-09-04-update-v1",
+      "version": "v3.2",
       "title": "2026-09-04 更新日志",
       "publishedAt": "2026-09-04",
       "content": [
@@ -48,6 +51,7 @@
     },
     {
       "id": "2026-08-28-update-v1",
+      "version": "v3.2",
       "title": "2026-08-28 更新日志",
       "publishedAt": "2026-08-28",
       "content": [
@@ -68,6 +72,7 @@
     },
     {
       "id": "2026-08-12-update-v1",
+      "version": "v3.0",
       "title": "2026-08-12 更新日志",
       "publishedAt": "2026-08-12",
       "content": [
@@ -94,6 +99,7 @@
     },
     {
       "id": "2026-08-18-update-v1",
+      "version": "v3.1",
       "title": "2026-08-18 更新日志",
       "publishedAt": "2026-08-18",
       "content": [
@@ -112,6 +118,7 @@
     },
     {
       "id": "2026-08-11-update-v1",
+      "version": "v3.0",
       "title": "2026-08-11 更新日志",
       "publishedAt": "2026-08-11",
       "content": [
@@ -130,6 +137,7 @@
     },
     {
       "id": "2026-08-07-update-v1",
+      "version": "v2.1",
       "title": "2026-08-07 更新日志",
       "publishedAt": "2026-08-07",
       "content": [
@@ -151,6 +159,7 @@
     },
     {
       "id": "2026-08-06-update-v1",
+      "version": "v2.1",
       "title": "2026-08-06 更新日志",
       "publishedAt": "2026-08-06",
       "content": [

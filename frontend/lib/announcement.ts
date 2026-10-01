@@ -35,6 +35,9 @@ function parseAnnouncementRecord(
   ) {
     return null;
   }
+  if (value.version !== undefined && !nonEmptyString(value.version)) {
+    return null;
+  }
   if (
     value.buttonLabel !== undefined &&
     !nonEmptyString(value.buttonLabel)
@@ -42,10 +45,12 @@ function parseAnnouncementRecord(
     return null;
   }
 
+  const version = value.version?.trim();
   return {
     id: value.id.trim(),
     enabled: true,
     title: value.title.trim(),
+    ...(version ? { version } : {}),
     publishedAt: value.publishedAt?.trim(),
     content: value.content.map((paragraph) => paragraph.trim()),
     buttonLabel: value.buttonLabel?.trim() ?? "我知道了",

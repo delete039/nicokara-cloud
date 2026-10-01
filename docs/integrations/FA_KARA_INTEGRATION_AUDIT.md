@@ -5,7 +5,7 @@
 - 上游仓库：[moriwx/FA-Kara](https://github.com/moriwx/FA-Kara)
 - 完整核对提交：`029a3e8d03645b2dd56931eff7092175cebf8379`
 - 上游提交日期：2026-08-09
-- 本项目版本：`v0.3.0-alpha.3`
+- 本项目版本：`v4.1`
 
 本次不是只阅读 README 或摘取单个对齐函数。已逐行检查上游的
 `main.py`、`align.py`、`align_yohane.py`、`haruraw2norm.py`、
