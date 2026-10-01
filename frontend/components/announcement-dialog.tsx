@@ -1,6 +1,6 @@
 "use client";
 
-import { Megaphone, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, History, Megaphone, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -8,7 +8,7 @@ import {
   ANNOUNCEMENT_OPEN_EVENT,
   hasSeenAnnouncement,
   markAnnouncementSeen,
-  parseAnnouncement,
+  parseAnnouncementBundle,
 } from "@/lib/announcement";
 import type { Announcement } from "@/types/announcement";
 
@@ -19,7 +19,13 @@ export function isAnnouncementHeadline(paragraph: string): boolean {
 export function AnnouncementDialog() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [history, setHistory] = useState<Announcement[]>([]);
   const [openRequested, setOpenRequested] = useState(false);
+  const [view, setView] = useState<
+    | { kind: "current" }
+    | { kind: "history" }
+    | { kind: "history-detail"; announcement: Announcement }
+  >({ kind: "current" });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -31,16 +37,17 @@ export function AnnouncementDialog() {
           signal: controller.signal,
         });
         if (!response.ok) return;
-        const parsed = parseAnnouncement(await response.json());
+        const parsed = parseAnnouncementBundle(await response.json());
         if (!parsed) return;
 
         let seen = false;
         try {
-          seen = hasSeenAnnouncement(window.localStorage, parsed.id);
+          seen = hasSeenAnnouncement(window.localStorage, parsed.current.id);
         } catch {
           // Storage can be unavailable in strict privacy modes; still show it.
         }
-        setAnnouncement(parsed);
+        setAnnouncement(parsed.current);
+        setHistory(parsed.history);
         if (!seen) setOpenRequested(true);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -52,7 +59,10 @@ export function AnnouncementDialog() {
   }, []);
 
   useEffect(() => {
-    const handleOpen = () => setOpenRequested(true);
+    const handleOpen = () => {
+      setView({ kind: "current" });
+      setOpenRequested(true);
+    };
     window.addEventListener(ANNOUNCEMENT_OPEN_EVENT, handleOpen);
     return () => window.removeEventListener(ANNOUNCEMENT_OPEN_EVENT, handleOpen);
   }, []);
@@ -85,11 +95,32 @@ export function AnnouncementDialog() {
 
   if (!announcement) return null;
 
+  const detailAnnouncement = view.kind === "history-detail"
+    ? view.announcement
+    : announcement;
+  const isHistoryList = view.kind === "history";
+  const isHistoryDetail = view.kind === "history-detail";
+  const title = isHistoryList ? "历史公告" : detailAnnouncement.title;
+  const contentId = isHistoryList ? "announcement-history" : "announcement-content";
+
+  function renderAnnouncementContent(item: Announcement) {
+    return item.content.map((paragraph, index) => (
+      <p
+        key={`${item.id}-${index}`}
+        className={isAnnouncementHeadline(paragraph)
+          ? "break-words text-2xl font-black leading-tight tracking-wide text-primary sm:text-3xl"
+          : undefined}
+      >
+        {paragraph}
+      </p>
+    ));
+  }
+
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby="announcement-title"
-      aria-describedby="announcement-content"
+      aria-describedby={contentId}
       onCancel={(event) => {
         event.preventDefault();
         dismiss();
@@ -102,15 +133,17 @@ export function AnnouncementDialog() {
       <div className="flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
-            <Megaphone className="size-4" aria-hidden="true" />
+            {isHistoryList
+              ? <History className="size-4" aria-hidden="true" />
+              : <Megaphone className="size-4" aria-hidden="true" />}
           </div>
           <div className="min-w-0">
             <h2 id="announcement-title" className="text-lg font-semibold">
-              {announcement.title}
+              {title}
             </h2>
-            {announcement.publishedAt && (
+            {!isHistoryList && detailAnnouncement.publishedAt && (
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {announcement.publishedAt}
+                {detailAnnouncement.publishedAt}
               </p>
             )}
           </div>
@@ -127,30 +160,76 @@ export function AnnouncementDialog() {
       </div>
 
       <div
-        id="announcement-content"
+        id={contentId}
         className="max-h-[min(55dvh,28rem)] space-y-4 overflow-y-auto px-5 py-5 text-sm leading-7 sm:px-6"
       >
-        {announcement.content.map((paragraph, index) => (
-          <p
-            key={`${announcement.id}-${index}`}
-            className={isAnnouncementHeadline(paragraph)
-              ? "break-words text-2xl font-black leading-tight tracking-wide text-primary sm:text-3xl"
-              : undefined}
-          >
-            {paragraph}
-          </p>
-        ))}
+        {isHistoryList ? (
+          history.length > 0 ? (
+            <div className="space-y-2" aria-label="历史公告列表">
+              {history.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setView({ kind: "history-detail", announcement: item })}
+                  className="focus-ring flex w-full items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3 text-left transition hover:bg-muted"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{item.title}</span>
+                    {item.publishedAt && (
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {item.publishedAt}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground">暂无历史公告</p>
+          )
+        ) : renderAnnouncementContent(detailAnnouncement)}
       </div>
 
       <div className="border-t bg-muted/45 px-5 py-4 sm:px-6">
-        <button
-          type="button"
-          onClick={dismiss}
-          autoFocus
-          className="focus-ring inline-flex w-full items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-95"
-        >
-          {announcement.buttonLabel}
-        </button>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {isHistoryList ? (
+            <button
+              type="button"
+              onClick={() => setView({ kind: "current" })}
+              className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+            >
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              返回当前公告
+            </button>
+          ) : isHistoryDetail ? (
+            <button
+              type="button"
+              onClick={() => setView({ kind: "history" })}
+              className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+            >
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              返回历史公告
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setView({ kind: "history" })}
+              className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+            >
+              <History className="size-4" aria-hidden="true" />
+              查看历史公告
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={dismiss}
+            autoFocus={!isHistoryList && !isHistoryDetail}
+            className="focus-ring inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-95"
+          >
+            {isHistoryList || isHistoryDetail ? "关闭公告" : announcement.buttonLabel}
+          </button>
+        </div>
       </div>
     </dialog>
   );

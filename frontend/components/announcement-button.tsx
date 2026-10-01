@@ -12,7 +12,7 @@ export function AnnouncementButton() {
       className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-semibold transition hover:bg-muted"
     >
       <Megaphone className="size-4" aria-hidden="true" />
-      打开公告
+      查看公告
     </button>
   );
 }

@@ -214,6 +214,10 @@ reload_interval_seconds = 1.0
 `/data/nicokara/shared/announcement.json`；修改 JSON 后刷新页面即可生效，设置
 `enabled` 为 `false` 可关闭公告。
 
+公告配置还支持可选的 `history` 数组。数组中的每项使用与当前公告相同的
+`id`、`title`、`publishedAt` 和 `content` 字段；用户可以在公告弹窗或首页的
+“查看公告”按钮中打开“查看历史公告”，浏览这些旧公告。
+
 创建 `/data/nicokara/shared/nicokara.env`：
 
 ```ini

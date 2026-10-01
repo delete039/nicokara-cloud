@@ -6,3 +6,8 @@ export type Announcement = {
   content: string[];
   buttonLabel: string;
 };
+
+export type AnnouncementBundle = {
+  current: Announcement;
+  history: Announcement[];
+};
