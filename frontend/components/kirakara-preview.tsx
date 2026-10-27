@@ -75,7 +75,7 @@ type TimelineSaveState = {
 
 type PictureInPictureState = "idle" | "active" | "blocked";
 
-const PICTURE_IN_PICTURE_VISIBLE_THRESHOLD = 1 / 3;
+const PICTURE_IN_PICTURE_VISIBLE_THRESHOLD = 2 / 5;
 const PICTURE_IN_PICTURE_FRAME_RATE = 30;
 
 enum WorkbenchSideTab {
@@ -398,6 +398,7 @@ export function KirakaraPreview({
       if (pictureInPictureElementRef.current !== compositeVideo) return;
       pictureInPictureOwnedRef.current = false;
       pictureInPictureElementRef.current = null;
+      pictureInPictureAttemptedRef.current = false;
       stopCompositePictureInPicture();
       setPictureInPictureState("idle");
     });
@@ -483,6 +484,7 @@ export function KirakaraPreview({
           // Fall through to the blocked state below.
         }
       }
+      pictureInPictureAttemptedRef.current = false;
       setPictureInPictureState("blocked");
       return false;
     }
@@ -556,6 +558,7 @@ export function KirakaraPreview({
       if (pictureInPictureElementRef.current === element) {
         pictureInPictureOwnedRef.current = false;
         pictureInPictureElementRef.current = null;
+        pictureInPictureAttemptedRef.current = false;
         setPictureInPictureState("idle");
       }
     };

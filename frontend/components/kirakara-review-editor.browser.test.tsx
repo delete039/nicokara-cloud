@@ -327,6 +327,57 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(onSeek).toHaveBeenCalledWith(910);
   });
 
+  it("REQ-EDGE-DRAG-01 keeps both sentence edge handles draggable on a narrow layout", () => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn(() => ({ matches: true })),
+    });
+    const onChange = vi.fn();
+    const onSeek = vi.fn();
+    const { container } = renderEditor({ onChange, onSeek });
+    const track = container.querySelector<HTMLElement>('[data-mora-timeline="true"]');
+    expect(track).toBeTruthy();
+    Object.defineProperty(track, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 100, width: 320 }),
+    });
+    track!.setPointerCapture = vi.fn();
+    track!.hasPointerCapture = vi.fn(() => true);
+    track!.releasePointerCapture = vi.fn();
+
+    for (const edge of ["start", "end"] as const) {
+      const handle = container.querySelector<HTMLElement>(`[data-line-edge="${edge}"]`);
+      expect(handle).toBeTruthy();
+      handle!.setPointerCapture = vi.fn();
+      handle!.hasPointerCapture = vi.fn(() => true);
+      handle!.releasePointerCapture = vi.fn();
+      fireEvent.pointerDown(handle!, {
+        pointerId: edge === "start" ? 1 : 2,
+        pointerType: "touch",
+        button: 0,
+        clientX: 100,
+      });
+      fireEvent.pointerMove(handle!, {
+        pointerId: edge === "start" ? 1 : 2,
+        pointerType: "touch",
+        clientX: 132,
+      });
+      fireEvent.pointerUp(handle!, {
+        pointerId: edge === "start" ? 1 : 2,
+        pointerType: "touch",
+        clientX: 132,
+      });
+    }
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1100, endMs: 2000 })]),
+    }), expect.any(String));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1000, endMs: 2100 })]),
+    }), expect.any(String));
+    expect(onSeek).toHaveBeenCalled();
+  });
+
   it("REQ-BULK-01 selects a continuous Mora range with Shift and distributes it", () => {
     const onChange = vi.fn();
     renderEditor({ onChange });

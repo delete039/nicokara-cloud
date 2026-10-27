@@ -270,6 +270,71 @@ describe("KirakaraPreview browser behavior", () => {
     expect(container.querySelector("[data-picture-in-picture-state]")?.getAttribute("data-picture-in-picture-state")).toBe("active");
   });
 
+  it("REQ-PIP-03 uses the two-fifths visible threshold", async () => {
+    const { container, video } = await renderWorkbench("picture-in-picture-two-fifths");
+    installVideoBehavior(video, true);
+    const requestPictureInPicture = vi.fn(async () => {
+      pictureInPictureElement = video;
+      fireEvent(video, new Event("enterpictureinpicture"));
+      return {} as PictureInPictureWindow;
+    });
+    Object.defineProperty(video, "requestPictureInPicture", {
+      configurable: true,
+      value: requestPictureInPicture,
+    });
+    const surface = container.querySelector<HTMLElement>(
+      '[data-kirakara-preview-surface="true"]',
+    );
+    expect(surface).toBeTruthy();
+    expect(intersectionObserverCallback).toBeTypeOf("function");
+    if (!surface || !intersectionObserverCallback) return;
+
+    await act(async () => {
+      intersectionObserverCallback?.([
+        {
+          isIntersecting: true,
+          intersectionRatio: 0.35,
+          target: surface,
+        } as unknown as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+    });
+    await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(1));
+  });
+
+  it("REQ-PIP-04 retries after PiP closes while the video remains mostly out of view", async () => {
+    const { container, video } = await renderWorkbench("picture-in-picture-retry");
+    installVideoBehavior(video, true);
+    const requestPictureInPicture = vi.fn(async () => {
+      pictureInPictureElement = video;
+      fireEvent(video, new Event("enterpictureinpicture"));
+      return {} as PictureInPictureWindow;
+    });
+    Object.defineProperty(video, "requestPictureInPicture", {
+      configurable: true,
+      value: requestPictureInPicture,
+    });
+    const surface = container.querySelector<HTMLElement>(
+      '[data-kirakara-preview-surface="true"]',
+    );
+    expect(surface).toBeTruthy();
+    expect(intersectionObserverCallback).toBeTypeOf("function");
+    if (!surface || !intersectionObserverCallback) return;
+
+    const outOfView = () => intersectionObserverCallback?.([
+      {
+        isIntersecting: false,
+        intersectionRatio: 0,
+        target: surface,
+      } as unknown as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    await act(async () => { await outOfView(); });
+    await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(1));
+    pictureInPictureElement = null;
+    fireEvent(video, new Event("leavepictureinpicture"));
+    await act(async () => { await outOfView(); });
+    await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(2));
+  });
+
   it("REQ-FOLLOW-04 does not save a timeline edit during automatic following", async () => {
     const api = await import("@/services/api");
     const { video } = await renderWorkbench("follow-no-save");
