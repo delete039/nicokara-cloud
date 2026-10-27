@@ -700,6 +700,19 @@ async def queue_audio_job_for_cloud_render(
             encoding="utf-8-sig",
         )
 
+        source_mode = "off" if vocal_mode == "on" else "on"
+        source_output_value = job.get(f"{source_mode}_output_path")
+        previous_ass_value = job.get("ass_path")
+        audio_swap = bool(
+            vocal_mode in {"on", "off"}
+            and source_output_value
+            and Path(source_output_value).is_file()
+            and previous_ass_value
+            and Path(previous_ass_value).is_file()
+            and Path(previous_ass_value).read_bytes() == ass_path.read_bytes()
+            and job.get("video_sha256") == saved.sha256
+        )
+
         job_dir = settings.storage_dir / job_id
         # Only the winning database update publishes these immutable inputs.
         final_video_path = job_dir / f"cloud-{render_id}.mp4"
@@ -719,6 +732,7 @@ async def queue_audio_job_for_cloud_render(
             expected_updated_at=job["updated_at"],
             upload_ticket_id=upload_ticket_id,
             vocal_mode=vocal_mode,
+            audio_swap=audio_swap,
         )
         if not queued:
             raise HTTPException(

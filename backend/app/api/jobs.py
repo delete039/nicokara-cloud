@@ -119,7 +119,9 @@ def job_response(database: Database, job: dict) -> JobResponse:
             "off_vocal_conversion": job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"},
             "instrumental_ready": stem.is_file() and stem.stat().st_size > 0,
             "has_timeline": bool(job.get("timeline_path")),
-            "render_pending": job.get("resume_stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+            "render_pending": job.get("resume_stage") in {
+                "CLOUD_AUDIO_SWAP_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED",
+            }
                 and job["status"] in {"UPLOADED", "PROCESSING"},
             "available_vocal_modes": [mode for mode in ("on", "off")
                 if job.get(f"{mode}_output_path") and Path(job[f"{mode}_output_path"]).is_file()],
@@ -1608,7 +1610,10 @@ def save_timeline_review(
             raise HTTPException(status_code=404, detail="任务不存在")
         # Audio-only conversion never rewrites the source timeline. Keep draft
         # autosave available while UVR/mux runs or waits to be retried.
-        converting_audio = job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+        converting_audio = job.get("resume_stage") in {
+            "OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED",
+            "CLOUD_AUDIO_SWAP_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED",
+        }
         if not job.get("timeline_path") or (not converting_audio and job["status"] not in {
             "ALIGNED", "SUBTITLE_GENERATED", "COMPLETED",
         }):

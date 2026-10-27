@@ -33,7 +33,7 @@ describe("announcement configuration", () => {
     expect(announcement).toMatchObject({
       id: "2026-10-01-update-v1",
       title: "2026-10-01 更新日志",
-      version: "v4.1",
+      version: "v4.2",
       publishedAt: "2026-10-01",
       buttonLabel: "わかった",
     });

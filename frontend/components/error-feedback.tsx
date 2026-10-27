@@ -1,5 +1,6 @@
 import { AlertTriangle, PencilLine, RefreshCw } from "lucide-react";
 
+import { BackStepButton } from "@/components/back-step-button";
 import type { ErrorFeedback } from "@/lib/error-feedback";
 
 type ErrorFeedbackPanelProps = {
@@ -8,6 +9,8 @@ type ErrorFeedbackPanelProps = {
   retryLabel?: string;
   retrying?: boolean;
   onEdit?: () => void;
+  onBack?: () => void | Promise<void>;
+  backLabel?: string;
 };
 
 export function ErrorFeedbackPanel({
@@ -16,6 +19,8 @@ export function ErrorFeedbackPanel({
   retryLabel,
   retrying = false,
   onEdit,
+  onBack,
+  backLabel,
 }: ErrorFeedbackPanelProps) {
   return (
     <section
@@ -80,6 +85,13 @@ export function ErrorFeedbackPanel({
               <PencilLine className="size-4" />
               返回修改
             </button>
+          )}
+          {onBack && (
+            <BackStepButton
+              onBack={onBack}
+              label={backLabel}
+              className="mt-4"
+            />
           )}
         </div>
       </div>

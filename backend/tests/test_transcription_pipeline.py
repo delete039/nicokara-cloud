@@ -1315,6 +1315,89 @@ def test_cloud_render_queue_skips_recognition_and_only_renders_video(
     assert job["stage"] == "VIDEO_RENDERING_COMPLETE"
 
 
+@pytest.mark.parametrize(
+    ("target_mode", "source_mode", "replacement_name"),
+    [
+        ("off", "on", "audio_instrumental.wav"),
+        ("on", "off", "cloud-input.mp4"),
+    ],
+)
+def test_cloud_vocal_switch_only_replaces_the_audio_track(
+    tmp_path: Path,
+    target_mode: str,
+    source_mode: str,
+    replacement_name: str,
+) -> None:
+    pipeline_module = importlib.import_module("app.tasks.pipeline")
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "storage" / target_mode
+    job_dir.mkdir(parents=True)
+    video_path = job_dir / "cloud-input.mp4"
+    video_path.write_bytes(b"original video")
+    ass_path = job_dir / "kirakara.ass"
+    ass_path.write_text("[Script Info]\n", encoding="utf-8")
+    source_output = job_dir / f"karaoke-{source_mode}.mp4"
+    source_output.write_bytes(b"rendered video")
+    instrumental_path = job_dir / "audio_instrumental.wav"
+    instrumental_path.write_bytes(b"instrumental")
+    job_id = (
+        "52adf1aa-717f-4ed8-8ec8-3b7d8d153901"
+        if target_mode == "on"
+        else "52adf1aa-717f-4ed8-8ec8-3b7d8d153902"
+    )
+    database.create_job(
+        job_id=job_id,
+        original_video_name="song.mp4",
+        video_size_bytes=14,
+        video_sha256="video-sha",
+        video_path=video_path,
+        lyrics_source="text",
+        lyrics_path=None,
+        input_mode="AUDIO_ONLY",
+    )
+    with database.connect() as connection:
+        connection.execute(
+            f"""UPDATE jobs SET status = 'UPLOADED',
+                stage = 'CLOUD_AUDIO_SWAP_QUEUED',
+                resume_stage = 'CLOUD_AUDIO_SWAP_QUEUED',
+                render_vocal_mode = ?, ass_path = ?,
+                {source_mode}_output_path = ? WHERE id = ?""",
+            (target_mode, str(ass_path), str(source_output), job_id),
+        )
+
+    class AudioSwapRenderer:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, Path, Path]] = []
+
+        def render(self, *args, **kwargs) -> None:
+            pytest.fail("switching ON/OFF must not render the video again")
+
+        def replace_audio(self, source, audio, destination) -> None:
+            self.calls.append((source, audio, destination))
+            destination.write_bytes(b"audio swapped")
+
+    renderer = AudioSwapRenderer()
+    pipeline = pipeline_module.TranscriptionPipeline(
+        database=database,
+        extractor=FakeExtractor(),
+        transcriber=FakeTranscriber(),
+        video_renderer=renderer,
+    )
+
+    pipeline.process(job_id)
+
+    assert len(renderer.calls) == 1
+    source, replacement, destination = renderer.calls[0]
+    assert source == source_output
+    assert replacement == job_dir / replacement_name
+    assert destination.read_bytes() == b"audio swapped"
+    job = database.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "COMPLETED"
+    assert job[f"{target_mode}_output_path"] == str(destination)
+
+
 def test_pipeline_records_video_rendering_failure(tmp_path: Path) -> None:
     pipeline_module = importlib.import_module("app.tasks.pipeline")
     database = Database(tmp_path / "jobs.sqlite3")

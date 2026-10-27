@@ -156,7 +156,9 @@ class TranscriptionPipeline:
         transcript_path = job_dir / "transcript.json"
         lyrics_processed_path = job_dir / "lyrics_processed.json"
         timeline_path = job_dir / "timeline.json"
-        if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
+        if job.get("stage") in {
+            "CLOUD_AUDIO_SWAP_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED",
+        }:
             render_timeline = job.get("render_timeline_path") or job.get("timeline_path")
             timeline_path = Path(render_timeline) if render_timeline else timeline_path
         imported_lyrics_path = job_dir / "imported_lyrics_processed.json"
@@ -214,6 +216,61 @@ class TranscriptionPipeline:
                     ass_path=ass_path,
                     output_path=output_path,
                     stage_state=resumed_stage,
+                )
+                return
+            if job.get("stage") == "CLOUD_AUDIO_SWAP_QUEUED":
+                vocal_mode = job.get("render_vocal_mode") or "on"
+                source_mode = "off" if vocal_mode == "on" else "on"
+                source_output_value = job.get(f"{source_mode}_output_path")
+                if self.video_renderer is None or not source_output_value:
+                    raise RuntimeError("Cloud audio replacement is unavailable")
+                source_output = Path(source_output_value)
+                if not source_output.is_file():
+                    raise RuntimeError("Source vocal-mode video is unavailable")
+                replacement_audio = video_path
+                if vocal_mode == "off":
+                    stage = "REMOVING_VOCALS"
+                    self.database.update_job_state(
+                        job_id, status="PROCESSING", stage=stage, progress=20,
+                    )
+                    replacement_audio = self._ensure_instrumental(
+                        job_id, run_id, video_path,
+                    )
+                stage = "RENDERING_VIDEO"
+                output_path = job_dir / f"final_karaoke_{vocal_mode}-{uuid4().hex}.mp4"
+                self.database.update_job_state(
+                    job_id,
+                    status="PROCESSING",
+                    stage=stage,
+                    progress=50,
+                    render_vocal_mode=vocal_mode,
+                )
+                with self.event_logger.stage(
+                    job_id=job_id,
+                    run_id=run_id,
+                    stage=stage,
+                    component="ffmpeg",
+                    message="切换 ON/OFF VOCAL 音轨，保留现有字幕画面",
+                    details={
+                        "source_vocal_mode": source_mode,
+                        "vocal_mode": vocal_mode,
+                        "video_codec": "copy",
+                    },
+                ) as render_trace:
+                    self.video_renderer.replace_audio(
+                        source_output, replacement_audio, output_path,
+                    )
+                    render_trace.result(
+                        exit_code=0,
+                        output_size_bytes=self._file_size(output_path),
+                    )
+                self.database.update_job_state(
+                    job_id,
+                    status="COMPLETED",
+                    stage="VIDEO_RENDERING_COMPLETE",
+                    progress=100,
+                    output_path=output_path,
+                    render_vocal_mode=vocal_mode,
                 )
                 return
             if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
@@ -981,7 +1038,9 @@ class TranscriptionPipeline:
                 timeline_path=(
                     timeline_path
                     if timeline_path.exists()
-                    and job.get("stage") not in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}
+                    and job.get("stage") not in {
+                        "CLOUD_AUDIO_SWAP_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED",
+                    }
                     else None
                 ),
                 ass_path=ass_path if ass_path.exists() else None,

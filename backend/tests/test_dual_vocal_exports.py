@@ -69,12 +69,16 @@ def test_cloud_render_uses_selected_mode_and_keeps_source_revision(tmp_path, vid
         review["lines"][0]["tokens"][0]["moras"] = []
         revision = client.get(f"/api/v1/jobs/{JOB_ID}/timeline").json()["source_revision"]
         review["source_revision"] = revision
-        for mode in ["off", "on"]:
+        for index, mode in enumerate(["off", "on"]):
             response = client.post(f"/api/v1/browser/jobs/{JOB_ID}/cloud-render",
                                    files={"video": ("song.mp4", media, "video/mp4")},
                                    data={"timeline_review": json.dumps(review), "vocal_mode": mode})
             assert response.status_code == 202, response.text
-            assert db.get_job(JOB_ID)["render_vocal_mode"] == mode
+            queued_job = db.get_job(JOB_ID)
+            assert queued_job["render_vocal_mode"] == mode
+            assert queued_job["stage"] == (
+                "CLOUD_AUDIO_SWAP_QUEUED" if index == 1 else "CLOUD_RENDER_QUEUED"
+            )
 
             class Extractor:
                 def extract_stereo(self, source, target):
@@ -86,8 +90,15 @@ def test_cloud_render_uses_selected_mode_and_keeps_source_revision(tmp_path, vid
 
             class Renderer:
                 def render(self, source, ass, target, *, vocal_mode, instrumental_audio_path):
+                    assert index == 0
                     assert vocal_mode == mode
                     assert (instrumental_audio_path is not None) == (mode == "off")
+                    target.write_bytes(mode.encode())
+
+                def replace_audio(self, source, audio, target):
+                    assert index == 1
+                    assert source.read_bytes() == b"off"
+                    assert audio.read_bytes() == media
                     target.write_bytes(mode.encode())
 
             TranscriptionPipeline(database=db, extractor=Extractor(), transcriber=None,

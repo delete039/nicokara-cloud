@@ -30,6 +30,7 @@ describe("KirakaraCanvasFrame", () => {
     expect(canvas).not.toBeNull();
     expect(canvas?.width).toBe(1280);
     expect(canvas?.height).toBe(720);
+    expect(canvas?.className).toContain("object-contain");
     expect(drawKirakaraFrame).toHaveBeenCalledWith(
       context,
       frame,

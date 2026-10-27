@@ -10,8 +10,10 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { BackStepButton } from "@/components/back-step-button";
 import { ErrorFeedbackPanel } from "@/components/error-feedback";
 import { JobMetadata } from "@/components/job-metadata";
 import { ReadingReviewEditor } from "@/components/reading-review-editor";
@@ -54,6 +56,7 @@ import type { Job } from "@/types/job";
 import type { ProcessedLyrics } from "@/types/job";
 
 export function JobStatus({ jobId }: { jobId: string }) {
+  const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [requestError, setRequestError] = useState<ErrorFeedback | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -168,13 +171,8 @@ export function JobStatus({ jobId }: { jobId: string }) {
                 }
               : undefined
           }
+          onBack={returnToPreviousStep}
         />
-        <Link
-          href="/"
-          className="focus-ring inline-block rounded-lg border px-4 py-2 text-sm font-medium"
-        >
-          {JOB_COPY.backToUpload}
-        </Link>
       </div>
     );
   }
@@ -202,6 +200,12 @@ export function JobStatus({ jobId }: { jobId: string }) {
         : presentation.tone === "pending"
           ? Clock3
           : LoaderCircle;
+  const showKirakaraPreview =
+    (job.input_mode === "AUDIO_ONLY" || job.has_timeline) &&
+    (job.status === "ALIGNED" ||
+      job.status === "SUBTITLE_GENERATED" ||
+      job.status === "COMPLETED" ||
+      cloudExportJob);
 
   async function handleCancel() {
     if (!job) return;
@@ -305,6 +309,13 @@ export function JobStatus({ jobId }: { jobId: string }) {
     }
   }
 
+  async function returnToPreviousStep() {
+    if (job && processedLyrics) {
+      await saveBrowserReviewDraft(job.id, "readings", processedLyrics);
+    }
+    router.push("/");
+  }
+
   return (
     <div className="space-y-6">
       {requestError && (
@@ -314,6 +325,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
             setRequestError(null);
             setRefreshKey((value) => value + 1);
           }}
+          onBack={returnToPreviousStep}
         />
       )}
       <div className="rounded-3xl border bg-card p-6 sm:p-9">
@@ -423,6 +435,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
               onRetry={handleRetry}
               retryLabel={JOB_COPY.retryFailed}
               retrying={retrying}
+              onBack={returnToPreviousStep}
             />
           </div>
         )}
@@ -505,10 +518,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           </div>
         )}
 
-        {(job.input_mode === "AUDIO_ONLY" || job.has_timeline) &&
-          (job.status === "ALIGNED" ||
-            job.status === "SUBTITLE_GENERATED" ||
-            job.status === "COMPLETED" || cloudExportJob) && (
+        {showKirakaraPreview && (
             <KirakaraPreview
               jobId={job.id}
               expectedVideoName={job.original_video_name}
@@ -517,6 +527,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
               availableModes={job.available_vocal_modes}
               resultVersion={job.updated_at}
               job={job}
+              onBack={returnToPreviousStep}
               onCloudRenderQueued={(queuedJob) => {
                 setJob(queuedJob);
                 setRefreshKey((value) => value + 1);
@@ -525,6 +536,9 @@ export function JobStatus({ jobId }: { jobId: string }) {
           )}
       </div>
 
+      {!showKirakaraPreview && job.status !== "FAILED" && (
+        <BackStepButton onBack={returnToPreviousStep} />
+      )}
       <Link
         href="/"
         className="focus-ring inline-flex rounded-lg border bg-card px-4 py-2.5 text-sm font-medium transition hover:bg-muted"

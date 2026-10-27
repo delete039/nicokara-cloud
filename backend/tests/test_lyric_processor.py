@@ -85,6 +85,18 @@ def test_local_processor_keeps_ambiguous_compound_reading_complete() -> None:
     assert "".join(token.reading for token in tokens) == "きょう"
 
 
+def test_local_processor_assigns_reading_to_iteration_mark() -> None:
+    processor_module = importlib.import_module("app.lyrics.processor")
+    processor = processor_module.LocalJapaneseLyricProcessor()
+
+    document = processor.process("時々")
+
+    assert [(token.surface, token.reading) for token in document.lines[0].tokens] == [
+        ("時", "とき"),
+        ("々", "どき"),
+    ]
+
+
 def test_local_processor_uses_kana_suffix_as_reading_anchor() -> None:
     processor_module = importlib.import_module("app.lyrics.processor")
     processor = processor_module.LocalJapaneseLyricProcessor()

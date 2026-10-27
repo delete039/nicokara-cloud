@@ -88,7 +88,8 @@ _LETTER_READINGS = {
 
 def _is_kanji(character: str) -> bool:
     return (
-        "\u3400" <= character <= "\u4dbf"
+        character == "々"
+        or "\u3400" <= character <= "\u4dbf"
         or "\u4e00" <= character <= "\u9fff"
         or "\uf900" <= character <= "\ufaff"
     )

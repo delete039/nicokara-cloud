@@ -52,12 +52,14 @@ export function ReviewedDataDownloads({
   timeline,
   style,
   includeRomaji,
+  onEdit,
 }: {
   jobId: string;
   videoName: string;
   timeline: KirakaraTimeline;
   style: KirakaraStyle;
   includeRomaji?: boolean;
+  onEdit?: () => void;
 }) {
   const [downloading, setDownloading] = useState<ReviewedArtifact | null>(null);
   const [error, setError] = useState<ErrorFeedback | null>(null);
@@ -140,7 +142,7 @@ export function ReviewedDataDownloads({
       />
       {error && (
         <div className="basis-full pt-2">
-          <ErrorFeedbackPanel feedback={error} />
+          <ErrorFeedbackPanel feedback={error} onEdit={onEdit} />
         </div>
       )}
     </div>

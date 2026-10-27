@@ -49,7 +49,7 @@ export function KirakaraCanvasFrame({
       data-kirakara-canvas-preview="true"
       data-kirakara-romaji-enabled={romajiEnabled ? "true" : "false"}
       data-kirakara-romaji-position={romajiPosition}
-      className="pointer-events-none absolute inset-0 size-full"
+      className="pointer-events-none absolute inset-0 size-full object-contain"
       aria-hidden="true"
     />
   );

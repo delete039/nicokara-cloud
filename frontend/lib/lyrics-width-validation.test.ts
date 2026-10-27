@@ -52,6 +52,15 @@ describe("lyrics width validation", () => {
     });
   });
 
+  it("reserves ruby width for the Japanese iteration mark", () => {
+    const report = detectLyricsWidthOverflow("々".repeat(20), {
+      measureCharacter: measureFullwidth,
+      measureRubyCharacter: () => 32,
+    });
+
+    expect(report?.lines[0].widthPx).toBe(1551);
+  });
+
   it("extracts visible lyrics from LRC metadata, timestamps, and Kirakara ruby annotations", () => {
     const lines = extractVisibleLyricLines(
       [

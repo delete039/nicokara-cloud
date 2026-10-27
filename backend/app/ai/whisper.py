@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from math import gcd
 from pathlib import Path
+import wave
+
+import numpy as np
+from scipy.signal import resample_poly
 from app.core.processing_control import check_interrupted
 from typing import Any, Callable
 
@@ -75,6 +80,28 @@ def transcript_document_from_dict(value: dict[str, Any]) -> TranscriptDocument:
 ModelFactory = Callable[[str, str, str], Any]
 
 
+def load_pcm16_mono(audio_path: Path) -> np.ndarray:
+    """Normalize a project-generated PCM WAV without invoking PyAV."""
+    with wave.open(str(audio_path), "rb") as audio:
+        channels = audio.getnchannels()
+        sample_rate = audio.getframerate()
+        if channels < 1 or audio.getsampwidth() != 2 or audio.getcomptype() != "NONE":
+            raise ValueError("Whisper analysis audio must be PCM16 WAV")
+        frames = audio.readframes(audio.getnframes())
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float32)
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    samples /= 32768.0
+    if sample_rate != 16_000 and samples.size:
+        divisor = gcd(sample_rate, 16_000)
+        samples = resample_poly(
+            samples,
+            16_000 // divisor,
+            sample_rate // divisor,
+        )
+    return np.asarray(samples, dtype=np.float32)
+
+
 def default_model_factory(model_name: str, device: str, compute_type: str):
     from faster_whisper import WhisperModel
 
@@ -108,8 +135,9 @@ class FasterWhisperTranscriber:
 
     def transcribe(self, audio_path: Path) -> TranscriptDocument:
         check_interrupted()
+        audio = load_pcm16_mono(audio_path)
         raw_segments, info = self.model.transcribe(
-            str(audio_path),
+            audio,
             language="ja",
             beam_size=5,
             vad_filter=False,

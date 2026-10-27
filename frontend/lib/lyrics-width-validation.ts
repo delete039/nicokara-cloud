@@ -95,6 +95,7 @@ function fallbackRubyCharacterWidth(): number {
 function isKanji(character: string): boolean {
   const codePoint = character.codePointAt(0) ?? 0;
   return (
+    character === "々" ||
     (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
     (codePoint >= 0x4e00 && codePoint <= 0x9fff)
   );

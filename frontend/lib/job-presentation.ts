@@ -145,6 +145,16 @@ export function jobPresentation(
       tone: "pending",
     };
   }
+  if (stage === "CLOUD_AUDIO_SWAP_QUEUED") {
+    return {
+      eyebrow: "音轨替换排队",
+      title: "正在切换 ON / OFF VOCAL",
+      description: "沿用已完成的字幕画面，仅替换音轨，不会重新编码视频。",
+      progressLabel: "等待音轨替换",
+      terminal: false,
+      tone: "pending",
+    };
+  }
   if (stage === "CLOUD_RENDER_QUEUED") {
     return {
       eyebrow: "云端渲染排队",

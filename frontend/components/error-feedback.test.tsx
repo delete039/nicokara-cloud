@@ -61,4 +61,21 @@ describe("ErrorFeedbackPanel", () => {
 
     expect(html).toContain("返回修改");
   });
+
+  it("renders a previous-step action when the page can return safely", () => {
+    const html = renderToStaticMarkup(
+      <ErrorFeedbackPanel
+        feedback={{
+          title: "歌词时间轴对齐失败",
+          description: "时间轴未生成。",
+          solutions: ["检查素材后重试。"],
+          technicalDetails: [],
+          retryable: false,
+        }}
+        onBack={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("返回上一步");
+  });
 });

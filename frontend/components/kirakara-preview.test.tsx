@@ -90,7 +90,7 @@ describe("KirakaraPreview", () => {
     expect(html).not.toContain('data-kirakara-dom-preview="true"');
   });
 
-  it("REQ-PLACEMENT-07 gives the video the full workbench width", async () => {
+  it("REQ-PLACEMENT-07 keeps the full-width video sticky above the workbench", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
@@ -100,10 +100,26 @@ describe("KirakaraPreview", () => {
       <preview.KirakaraPreview jobId="job-wide-video" expectedVideoName="song.mp4" />,
     );
 
-    expect(html).toMatch(/data-kirakara-preview-panel="true"[^>]+lg:col-span-2 lg:row-start-1/);
+    expect(html).toMatch(
+      /data-kirakara-preview-panel="true"[^>]+min-w-0/,
+    );
+    expect(html).not.toMatch(/data-kirakara-preview-panel="true"[^>]+lg:col-/);
+    expect(html).toMatch(
+      /data-kirakara-preview-surface="true"[^>]+relative aspect-video w-full/,
+    );
+    expect(html).not.toContain('data-kirakara-preview-panel="true" class="contents');
+    expect(html).toMatch(
+      /data-kirakara-preview-panel="true"[^>]+class="sticky[^\"]*"/,
+    );
+    expect(html).toMatch(
+      /data-kirakara-preview-panel="true"[^>]+top-3/,
+    );
+    expect(html).toMatch(
+      /data-kirakara-preview-panel="true"[^>]+(?:bg-card\/95|bg-card)/,
+    );
   });
 
-  it("REQ-PLACEMENT-08 places the lyric panel left of the timeline", async () => {
+  it("REQ-PLACEMENT-08 makes the two workbench tabs full width and removes side columns", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
@@ -113,8 +129,10 @@ describe("KirakaraPreview", () => {
       <preview.KirakaraPreview jobId="job-editor-columns" expectedVideoName="song.mp4" />,
     );
 
-    expect(html).toMatch(/data-kirakara-controls-panel="true"[^>]+lg:col-start-1 lg:row-start-2/);
-    expect(html).toMatch(/data-kirakara-timeline-panel="true"[^>]+lg:col-start-2 lg:row-start-2/);
+    expect(html).toMatch(/data-kirakara-workbench="desktop-fit"[^>]+mt-4 space-y-3/);
+    expect(html).toMatch(/data-kirakara-controls-panel="true"[^>]+min-w-0/);
+    expect(html).not.toMatch(/data-kirakara-controls-panel="true"[^>]+lg:col-/);
+    expect(html).not.toMatch(/data-kirakara-timeline-panel="true"[^>]+lg:col-/);
   });
 
   it("REQ-PLACEMENT-06 places a full-width export card below the timeline", async () => {

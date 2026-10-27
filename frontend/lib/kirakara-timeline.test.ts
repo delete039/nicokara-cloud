@@ -109,6 +109,12 @@ describe("toKirakaraTimeline", () => {
     ]);
   });
 
+  it("renders kana ruby above the Japanese iteration mark", () => {
+    expect(kanjiRuby("々", "どき")).toEqual([
+      { text: "どき", startCharacter: 0, endCharacter: 1 },
+    ]);
+  });
+
   it("starts mixed-token ruby at the matching mora instead of the token start", () => {
     const source: CloudLyricTimeline = {
       confidence: 1,

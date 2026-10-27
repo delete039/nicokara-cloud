@@ -5,6 +5,7 @@ export function adminStatusLabel(value: string): string {
 export function adminStageLabel(value?: string | null): string {
   if (!value) return "未记录阶段";
   if (value === "REMOVING_VOCALS") return "分离人声";
+  if (value === "CLOUD_AUDIO_SWAP_QUEUED") return "等待音轨替换";
   if (value === "CLOUD_RENDER_QUEUED") return "等待云端渲染";
   return ({ UPLOADED: "等待处理", EXTRACTING_AUDIO: "提取音频", SEPARATING_VOCALS: "分离人声", TRANSCRIBING: "歌声时间分析", PROCESSING_LYRICS: "处理歌词", ALIGNING: "对齐时间轴", GENERATING_SUBTITLE: "生成字幕", RENDERING_VIDEO: "渲染视频", READING_REVIEW_REQUIRED: "等待注音确认", READING_REVIEW_SAVING: "保存注音", COMPLETED: "已完成", FAILED: "处理失败" } as Record<string, string>)[value] ?? value;
 }

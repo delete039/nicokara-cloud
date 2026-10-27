@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { JobStatus } from "./job-status";
 import { getJob } from "@/services/api";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("@/services/api", async (original) => ({
   ...await original<typeof import("@/services/api")>(), getJob: vi.fn(),
 }));

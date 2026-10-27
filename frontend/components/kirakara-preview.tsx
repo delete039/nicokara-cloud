@@ -4,6 +4,7 @@ import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "luc
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { KirakaraCanvasFrame } from "@/components/kirakara-canvas-frame";
+import { BackStepButton } from "@/components/back-step-button";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
 import { KirakaraReviewEditor } from "@/components/kirakara-review-editor";
 import { KirakaraStyleEditor } from "@/components/kirakara-style-editor";
@@ -245,6 +246,7 @@ export function KirakaraPreview({
   availableModes = [],
   resultVersion,
   job,
+  onBack,
   onCloudRenderQueued = () => undefined,
   onVideoElementChange,
 }: {
@@ -255,6 +257,7 @@ export function KirakaraPreview({
   availableModes?: Array<"on" | "off">;
   resultVersion?: string;
   job?: Job;
+  onBack?: () => void | Promise<void>;
   onCloudRenderQueued?: (job: Job) => void;
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
@@ -572,6 +575,58 @@ export function KirakaraPreview({
     saveKirakaraStyle(window.localStorage, nextStyle);
   }
 
+  async function saveTimelineBeforeLeave() {
+    if (!timeline || timelineDraftJobId.current !== jobId) return;
+    let review;
+    try {
+      review = timelineReviewPayload(timeline);
+    } catch {
+      await saveBrowserReviewDraft(jobId, "timeline", {
+        ...timeline,
+        baseSavedAt: cloudSavedAt,
+      });
+      return;
+    }
+    await saveBrowserReviewDraft(jobId, "timeline", {
+      ...timeline,
+      baseSavedAt: cloudSavedAt,
+    });
+    try {
+      const saved = await saveTimelineReviewDraft(jobId, {
+        ...review,
+        base_saved_at: savedAtRef.current,
+      });
+      savedAtRef.current = saved.saved_at;
+    } catch {
+      // The browser draft remains available when the cloud save is unavailable.
+    }
+  }
+
+  async function handleBack() {
+    await saveTimelineBeforeLeave();
+    if (onBack) {
+      await onBack();
+      return;
+    }
+    if (typeof window !== "undefined") {
+      if (window.history.length > 1) window.history.back();
+      else window.location.assign("/");
+    }
+  }
+
+  function focusTimelineEditor() {
+    setSideTab(WorkbenchSideTab.Lyrics);
+    requestAnimationFrame(() => {
+      const editor = document.querySelector<HTMLElement>(
+        '[data-kirakara-timeline-panel="true"]',
+      );
+      editor?.scrollIntoView({ behavior: "smooth", block: "start" });
+      editor
+        ?.querySelector<HTMLElement>("select, input, button")
+        ?.focus({ preventScroll: true });
+    });
+  }
+
   const changePlaybackRate = useCallback((nextRate: number) => {
     const normalized = Math.min(2.5, Math.max(0.1, Math.round(nextRate * 10) / 10));
     if (normalized === playbackRate) return;
@@ -797,11 +852,11 @@ export function KirakaraPreview({
       ) : (
         <div
           data-kirakara-workbench="desktop-fit"
-          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.55fr)] xl:grid-cols-[minmax(20rem,0.65fr)_minmax(0,1.65fr)]"
+          className="mt-4 space-y-3"
         >
           <div
             data-kirakara-preview-panel="true"
-            className="min-w-0 lg:col-span-2 lg:row-start-1"
+            className="sticky top-3 z-30 mx-auto min-w-0 w-full max-w-5xl rounded-xl bg-card/95 pb-2 pt-1 shadow-sm backdrop-blur"
           >
             <div
               data-kirakara-preview-surface="true"
@@ -924,8 +979,8 @@ export function KirakaraPreview({
           </div>
 
           <div
-            data-kirakara-timeline-panel="true"
-            className={`min-w-0 lg:col-start-2 lg:row-start-2 ${
+            data-kirakara-controls-panel="true"
+            className={`min-w-0 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -933,142 +988,6 @@ export function KirakaraPreview({
           >
             {timeline && (
               <>
-                <div
-                  data-timeline-autosave={timelineSaveState.phase}
-                  aria-live="polite"
-                  className="mb-3 flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground"
-                >
-                  {timelineSaveState.phase === "saving" ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <Cloud className="size-3.5" />
-                  )}
-                  <span>
-                    {timelineSaveState.phase === "pending"
-                      ? "等待保存到云端"
-                      : timelineSaveState.phase === "saving"
-                        ? "正在保存时间轴"
-                        : timelineSaveState.phase === "saved"
-                          ? "时间轴已保存到云端"
-                          : timelineSaveState.phase === "restored"
-                            ? timelineSaveState.message ?? "已恢复时间轴草稿"
-                            : timelineSaveState.phase === "error"
-                              ? timelineSaveState.message ?? "时间轴自动保存失败"
-                              : "时间轴修改会自动保存到云端"}
-                  </span>
-                  {timelineSaveState.phase === "error" && (
-                    <button
-                      type="button"
-                      onClick={timelineSaveState.refreshRequired
-                        ? () => window.location.reload() : retryTimelineSave}
-                      className="focus-ring inline-flex items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 hover:underline"
-                    >
-                      <RefreshCw className="size-3.5" />
-                      {timelineSaveState.refreshRequired ? "刷新页面" : "重试保存"}
-                    </button>
-                  )}
-                </div>
-                <KirakaraReviewEditor
-                  key={jobId}
-                  timeline={timeline}
-                  audioSource={video}
-                  editingLineIndex={editingLineIndex}
-                  previewLeadMs={previewLeadMs}
-                  shortcutBindings={shortcutBindings}
-                  onEditingLineChange={selectEditingLine}
-                  onChange={updateTimeline}
-                  onSeek={seekPreview}
-                  canUndo={historyAvailability.canUndo}
-                  canRedo={historyAvailability.canRedo}
-                  onUndo={() => navigateHistory("undo")}
-                  onRedo={() => navigateHistory("redo")}
-                  looping={looping}
-                  onLoopChange={setLooping}
-                  onLoop={loopLine}
-                />
-                <details data-timing-settings="true" className="mt-4 rounded-md border bg-background/60">
-                  <summary className="focus-ring flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-                    <Settings2 className="size-4" />
-                    调轴设置
-                  </summary>
-                  <div className="space-y-3 border-t p-3">
-                    <label className="block text-xs font-medium text-muted-foreground">
-                      复听提前量（ms）
-                      <input
-                        type="number"
-                        min="0"
-                        max="2000"
-                        step="1"
-                        value={previewLeadMs}
-                        onChange={(event) => updatePreviewLead(event.target.value)}
-                        className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => updatePreviewLead(DEFAULT_PREVIEW_LEAD_MS)}
-                      className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
-                    >
-                      恢复默认值
-                    </button>
-                    <div className="grid gap-4 border-t pt-3 sm:grid-cols-2">
-                      {[
-                        { title: "快速定位", settings: QUICK_LINE_SHORTCUT_SETTINGS },
-                        { title: "Mora 选择", settings: MORA_SHORTCUT_SETTINGS },
-                        { title: "播放倍速", settings: PLAYBACK_RATE_SHORTCUT_SETTINGS },
-                      ].map((group) => (
-                        <fieldset key={group.title} className="min-w-0">
-                          <legend className="text-xs font-bold text-foreground">{group.title}</legend>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            {group.settings.map(({ shortcut, label }) => (
-                              <label key={shortcut} className="text-xs font-medium text-muted-foreground">
-                                {label}
-                                <input
-                                  aria-label={`快捷键：${label}`}
-                                  value={shortcutBindings[shortcut].toUpperCase()}
-                                  readOnly
-                                  onKeyDown={(event) => {
-                                    event.preventDefault();
-                                    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
-                                    updateShortcut(shortcut, event.key);
-                                  }}
-                                  className="focus-ring mt-1 block h-9 w-full cursor-pointer rounded-md border bg-background px-3 text-center text-sm font-bold uppercase text-foreground"
-                                />
-                              </label>
-                            ))}
-                          </div>
-                        </fieldset>
-                      ))}
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs leading-5 text-muted-foreground">点击快捷键输入框，再按一个字母、数字或方括号即可替换。</p>
-                      <button
-                        type="button"
-                        onClick={resetShortcuts}
-                        className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
-                      >
-                        恢复快捷键默认值
-                      </button>
-                    </div>
-                    {shortcutError && <p role="alert" className="text-xs text-destructive">{shortcutError}</p>}
-                    <p className="text-xs leading-5 text-muted-foreground">方向键微调边界；空格播放或暂停。快捷键在文本输入和下拉框中不会触发。</p>
-                  </div>
-                </details>
-                {playbackError && <p role="alert" className="mt-2 text-sm text-destructive">{playbackError}</p>}
-              </>
-            )}
-          </div>
-
-          <div
-            data-kirakara-controls-panel="true"
-            className={`min-w-0 lg:col-start-1 lg:row-start-2 ${
-              timeline
-                ? "rounded-lg border bg-background/40 p-3"
-                : "hidden"
-            }`}
-          >
-            {timeline && (
-              <div className="min-w-0">
                 <div role="tablist" aria-label="歌词与字幕样式" className="mb-3 grid grid-cols-2 rounded-md border bg-muted/30 p-1">
                   <button
                     type="button"
@@ -1094,17 +1013,156 @@ export function KirakaraPreview({
                   className="min-w-0"
                 >
                   {sideTab === WorkbenchSideTab.Lyrics ? (
-                    <KirakaraLyricNavigator
-                      timeline={timeline}
-                      playbackLineIndex={playbackLineIndex}
-                      editingLineIndex={editingLineIndex}
-                      onSelect={selectEditingLine}
-                    />
+                    <div
+                      data-kirakara-lyrics-workspace="true"
+                      className="grid min-w-0 gap-4 lg:grid-cols-[minmax(15rem,0.34fr)_minmax(0,1fr)]"
+                    >
+                      <section
+                        data-kirakara-lyrics-selection="true"
+                        aria-labelledby="kirakara-lyrics-selection-heading"
+                        className="min-w-0"
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <h3 id="kirakara-lyrics-selection-heading" className="text-sm font-bold">歌词选择</h3>
+                          <span className="text-xs tabular-nums text-muted-foreground">{timeline.lines.length} 行</span>
+                        </div>
+                        <KirakaraLyricNavigator
+                          timeline={timeline}
+                          playbackLineIndex={playbackLineIndex}
+                          editingLineIndex={editingLineIndex}
+                          onSelect={selectEditingLine}
+                        />
+                      </section>
+                      <div data-kirakara-timeline-panel="true" className="order-2 min-w-0">
+                        <div
+                          data-timeline-autosave={timelineSaveState.phase}
+                          aria-live="polite"
+                          className="mb-3 flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground"
+                        >
+                          {timelineSaveState.phase === "saving" ? (
+                            <LoaderCircle className="size-3.5 animate-spin" />
+                          ) : (
+                            <Cloud className="size-3.5" />
+                          )}
+                          <span>
+                            {timelineSaveState.phase === "pending"
+                              ? "等待保存到云端"
+                              : timelineSaveState.phase === "saving"
+                                ? "正在保存时间轴"
+                                : timelineSaveState.phase === "saved"
+                                  ? "时间轴已保存到云端"
+                                  : timelineSaveState.phase === "restored"
+                                    ? timelineSaveState.message ?? "已恢复时间轴草稿"
+                                    : timelineSaveState.phase === "error"
+                                      ? timelineSaveState.message ?? "时间轴自动保存失败"
+                                      : "时间轴修改会自动保存到云端"}
+                          </span>
+                          {timelineSaveState.phase === "error" && (
+                            <button
+                              type="button"
+                              onClick={timelineSaveState.refreshRequired
+                                ? () => window.location.reload() : retryTimelineSave}
+                              className="focus-ring inline-flex items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 hover:underline"
+                            >
+                              <RefreshCw className="size-3.5" />
+                              {timelineSaveState.refreshRequired ? "刷新页面" : "重试保存"}
+                            </button>
+                          )}
+                        </div>
+                        <KirakaraReviewEditor
+                          key={jobId}
+                          timeline={timeline}
+                          audioSource={video}
+                          editingLineIndex={editingLineIndex}
+                          previewLeadMs={previewLeadMs}
+                          shortcutBindings={shortcutBindings}
+                          onEditingLineChange={selectEditingLine}
+                          onChange={updateTimeline}
+                          onSeek={seekPreview}
+                          canUndo={historyAvailability.canUndo}
+                          canRedo={historyAvailability.canRedo}
+                          onUndo={() => navigateHistory("undo")}
+                          onRedo={() => navigateHistory("redo")}
+                          looping={looping}
+                          onLoopChange={setLooping}
+                          onLoop={loopLine}
+                        />
+                        <details data-timing-settings="true" className="mt-4 rounded-md border bg-background/60">
+                          <summary className="focus-ring flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+                            <Settings2 className="size-4" />
+                            调轴设置
+                          </summary>
+                          <div className="space-y-3 border-t p-3">
+                            <label className="block text-xs font-medium text-muted-foreground">
+                              复听提前量（ms）
+                              <input
+                                type="number"
+                                min="0"
+                                max="2000"
+                                step="1"
+                                value={previewLeadMs}
+                                onChange={(event) => updatePreviewLead(event.target.value)}
+                                className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => updatePreviewLead(DEFAULT_PREVIEW_LEAD_MS)}
+                              className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                            >
+                              恢复默认值
+                            </button>
+                            <div className="grid gap-4 border-t pt-3 sm:grid-cols-2">
+                              {[
+                                { title: "快速定位", settings: QUICK_LINE_SHORTCUT_SETTINGS },
+                                { title: "Mora 选择", settings: MORA_SHORTCUT_SETTINGS },
+                                { title: "播放倍速", settings: PLAYBACK_RATE_SHORTCUT_SETTINGS },
+                              ].map((group) => (
+                                <fieldset key={group.title} className="min-w-0">
+                                  <legend className="text-xs font-bold text-foreground">{group.title}</legend>
+                                  <div className="mt-2 grid grid-cols-2 gap-2">
+                                    {group.settings.map(({ shortcut, label }) => (
+                                      <label key={shortcut} className="text-xs font-medium text-muted-foreground">
+                                        {label}
+                                        <input
+                                          aria-label={`快捷键：${label}`}
+                                          value={shortcutBindings[shortcut].toUpperCase()}
+                                          readOnly
+                                          onKeyDown={(event) => {
+                                            event.preventDefault();
+                                            if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+                                            updateShortcut(shortcut, event.key);
+                                          }}
+                                          className="focus-ring mt-1 block h-9 w-full cursor-pointer rounded-md border bg-background px-3 text-center text-sm font-bold uppercase text-foreground"
+                                        />
+                                      </label>
+                                    ))}
+                                  </div>
+                                </fieldset>
+                              ))}
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-xs leading-5 text-muted-foreground">点击快捷键输入框，再按一个字母、数字或方括号即可替换。</p>
+                              <button
+                                type="button"
+                                onClick={resetShortcuts}
+                                className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                              >
+                                恢复快捷键默认值
+                              </button>
+                            </div>
+                            {shortcutError && <p role="alert" className="text-xs text-destructive">{shortcutError}</p>}
+                            <p className="text-xs leading-5 text-muted-foreground">方向键微调边界；空格播放或暂停。快捷键在文本输入和下拉框中不会触发。</p>
+                          </div>
+                        </details>
+                        {playbackError && <p role="alert" className="mt-2 text-sm text-destructive">{playbackError}</p>}
+                      </div>
+                    </div>
                   ) : (
                     <KirakaraStyleEditor style={style} onChange={updateStyle} />
                   )}
                 </div>
-              </div>
+              </>
             )}
           </div>
 
@@ -1129,6 +1187,7 @@ export function KirakaraPreview({
                   timeline={previewTimeline ?? timeline}
                   style={style}
                   includeRomaji={includeRomaji}
+                  onEdit={focusTimelineEditor}
                 />
                   {exportDisabled && <p className="text-sm text-muted-foreground">服务器正在处理当前导出，完成后可继续导出其他版本。当前编辑结果会继续保留。</p>}
                   {capabilities ? (
@@ -1158,6 +1217,11 @@ export function KirakaraPreview({
           {timelineError ?? selectionWarning}
         </p>
       )}
+
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+        <p className="text-xs text-muted-foreground">返回上一步前会自动保存当前时间轴草稿。</p>
+        <BackStepButton onBack={handleBack} />
+      </div>
 
       <aside className="mt-6 border-t pt-4 text-sm leading-relaxed text-muted-foreground" aria-labelledby="kirakara-acknowledgements-heading">
         <h3 id="kirakara-acknowledgements-heading" className="font-semibold text-foreground">特别鸣谢</h3>

@@ -214,14 +214,12 @@ describe("KirakaraPreview browser behavior", () => {
     expect(navigator?.className).toContain("[&::-webkit-scrollbar]:hidden");
   });
 
-  it("REQ-LIST-02 places the lyric tabs after the timeline for vertical layouts", async () => {
+  it("REQ-LIST-02 keeps the timeline and lyric navigator in one full-width module", async () => {
     const { container } = await renderWorkbench("vertical-lyrics");
     const timelinePanel = container.querySelector('[data-kirakara-timeline-panel="true"]');
     const controlsPanel = container.querySelector('[data-kirakara-controls-panel="true"]');
-    const position = timelinePanel && controlsPanel
-      ? timelinePanel.compareDocumentPosition(controlsPanel)
-      : 0;
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(timelinePanel?.closest('[data-kirakara-controls-panel="true"]')).toBe(controlsPanel);
+    expect(controlsPanel?.className).not.toContain("lg:col-");
   });
 
   it("REQ-LIST-03-A displays lyric line numbers and text", async () => {
@@ -507,21 +505,24 @@ describe("KirakaraPreview browser behavior", () => {
     expect((screen.getByLabelText("播放倍速") as HTMLSelectElement).value).toBe("0.9");
   });
 
-  it("REQ-PLACEMENT-01 switches the right-side panel between lyrics and subtitle style", async () => {
+  it("REQ-PLACEMENT-01 switches the full-width workspace between lyrics and subtitle style", async () => {
     await renderWorkbench("side-tabs");
+    const controlsPanel = document.querySelector('[data-kirakara-controls-panel="true"]');
     expect(screen.getByRole("tab", { name: "滚动歌词" }).getAttribute("aria-selected")).toBe("true");
+    expect(controlsPanel?.className).not.toContain("lg:col-");
     fireEvent.click(screen.getByRole("tab", { name: "字幕样式" }));
     expect(screen.getByRole("heading", { name: "字幕样式" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "字幕样式" }).closest('[data-kirakara-controls-panel="true"]')).toBe(controlsPanel);
   });
 
-  it("REQ-PLACEMENT-02 orders the timeline before the side tabs in vertical flow", async () => {
+  it("REQ-PLACEMENT-02 keeps timing tools inside the scrolling lyrics tab", async () => {
     const { container } = await renderWorkbench("vertical-panel-order");
     const timelinePanel = container.querySelector('[data-kirakara-timeline-panel="true"]');
     const controlsPanel = container.querySelector('[data-kirakara-controls-panel="true"]');
-    const position = timelinePanel && controlsPanel
-      ? timelinePanel.compareDocumentPosition(controlsPanel)
-      : 0;
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const lyricsTab = screen.getByRole("tab", { name: "滚动歌词" });
+    expect(timelinePanel?.closest('[data-kirakara-controls-panel="true"]')).toBe(controlsPanel);
+    expect(lyricsTab.closest('[data-kirakara-controls-panel="true"]')).toBe(controlsPanel);
+    expect(timelinePanel?.className).toContain("order-2");
   });
 
   it("REQ-EXPORT-01 keeps download actions in the export card", async () => {

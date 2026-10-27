@@ -343,7 +343,7 @@ def create_app(
 
     app = FastAPI(
         title=resolved_settings.app_name,
-        version="4.1",
+        version="4.2",
         lifespan=lifespan,
     )
     app.add_middleware(UploadStorageMiddleware, settings=resolved_settings)

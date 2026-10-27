@@ -888,12 +888,18 @@ class Database:
             error_message,
             utc_now(),
         ]
-        if stage in {"ALIGNMENT_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
+        if stage in {
+            "ALIGNMENT_QUEUED",
+            "CLOUD_AUDIO_SWAP_QUEUED",
+            "CLOUD_RENDER_QUEUED",
+            "VIDEO_RENDER_QUEUED",
+        }:
             assignments.append("resume_stage = ?")
             values.append(stage)
         elif stage == "RENDERING_VIDEO":
             assignments.append(
-                "resume_stage = CASE WHEN resume_stage = 'OFF_VOCAL_QUEUED' "
+                "resume_stage = CASE WHEN resume_stage IN "
+                "('OFF_VOCAL_QUEUED', 'CLOUD_AUDIO_SWAP_QUEUED') "
                 "THEN resume_stage WHEN input_mode = 'AUDIO_ONLY' "
                 "THEN 'CLOUD_RENDER_QUEUED' ELSE 'VIDEO_RENDER_QUEUED' END"
             )
@@ -1034,7 +1040,11 @@ class Database:
         expected_updated_at: str,
         upload_ticket_id: str | None = None,
         vocal_mode: str | None = None,
+        audio_swap: bool = False,
     ) -> bool:
+        queued_stage = (
+            "CLOUD_AUDIO_SWAP_QUEUED" if audio_swap else "CLOUD_RENDER_QUEUED"
+        )
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._check_job_admission(connection)
@@ -1048,8 +1058,8 @@ class Database:
                 """
                 UPDATE jobs
                 SET status = 'UPLOADED',
-                    stage = 'CLOUD_RENDER_QUEUED',
-                    resume_stage = 'CLOUD_RENDER_QUEUED',
+                    stage = ?,
+                    resume_stage = ?,
                     render_vocal_mode = COALESCE(?, vocal_mode),
                     progress = 10,
                     video_path = ?,
@@ -1066,6 +1076,8 @@ class Database:
                   AND updated_at = ?
                 """,
                 (
+                    queued_stage,
+                    queued_stage,
                     vocal_mode,
                     str(video_path),
                     video_size_bytes,
@@ -1094,7 +1106,8 @@ class Database:
                 reference_id=job_id,
                 details={
                     "status": "UPLOADED",
-                    "stage": "CLOUD_RENDER_QUEUED",
+                    "stage": queued_stage,
+                    "audio_swap": audio_swap,
                 },
             )
         return queued

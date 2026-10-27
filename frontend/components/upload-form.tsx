@@ -44,6 +44,11 @@ import {
   type ReviewedArtifactKind,
 } from "@/lib/reviewed-artifact-import";
 import {
+  loadUploadDraft,
+  rememberUploadDraft,
+  saveUploadDraft,
+} from "@/lib/upload-draft-store";
+import {
   isSupportedVideoName,
   SUPPORTED_VIDEO_ACCEPT,
   SUPPORTED_VIDEO_LABEL,
@@ -95,9 +100,40 @@ export function UploadForm() {
     useState<MobileSubmissionState | null>(null);
   const [lyricsWarning, setLyricsWarning] =
     useState<PendingLyricsWarning | null>(null);
+  const [uploadDraftReady, setUploadDraftReady] = useState(false);
   const alignmentMode = "auto" as const;
 
   useEffect(() => () => mobileAbortController.current?.abort(), []);
+
+  useEffect(() => {
+    let active = true;
+    void loadUploadDraft().then((draft) => {
+      if (!active) return;
+      if (draft) {
+        setVideo(draft.video);
+        setLyricsText(draft.lyricsText);
+        setLyricsFile(draft.lyricsFile);
+        setReviewedArtifacts(draft.reviewedArtifacts);
+      }
+      setUploadDraftReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!uploadDraftReady) return;
+    const timer = setTimeout(() => {
+      rememberUploadDraft({
+        video,
+        lyricsText,
+        lyricsFile,
+        reviewedArtifacts,
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [lyricsFile, lyricsText, reviewedArtifacts, uploadDraftReady, video]);
 
   useEffect(() => {
     if (!video) return;
@@ -246,6 +282,14 @@ export function UploadForm() {
       return;
     }
 
+    const draft = {
+      video,
+      lyricsText,
+      lyricsFile,
+      reviewedArtifacts,
+    };
+    rememberUploadDraft(draft);
+    void saveUploadDraft(draft).catch(() => undefined);
     setUploading(true);
     setUploadPaused(false);
     setProgress(0);
@@ -426,14 +470,7 @@ export function UploadForm() {
           onChange={(event) => {
             lyricsValidationSequence.current += 1;
             ignoredLyricsSignature.current = null;
-            const nextText = event.target.value;
-            setLyricsText(nextText);
-            if ((event.nativeEvent as InputEvent).inputType === "insertFromPaste") {
-              void checkLyricsWidth(nextText, null, false);
-            }
-          }}
-          onBlur={(event) => {
-            void checkLyricsWidth(event.currentTarget.value, null, false);
+            setLyricsText(event.target.value);
           }}
           rows={7}
           placeholder={"君の知らない物語\nいつも通りのある日の事"}
@@ -453,7 +490,6 @@ export function UploadForm() {
               setLyricsFile(nextFile);
               setLyricsText("");
               setError(null);
-              if (nextFile) void checkLyricsWidth("", nextFile, false);
             }}
           />
           <button
