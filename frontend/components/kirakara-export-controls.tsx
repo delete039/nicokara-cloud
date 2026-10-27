@@ -7,11 +7,14 @@ import { createBrowserFileDestination } from "@/lib/browser-file-destination";
 import type { KirakaraExportProfile } from "@/lib/kirakara-capabilities";
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
 import type { KirakaraStyle } from "@/lib/kirakara-style";
-import { exportKirakaraVideo } from "@/lib/kirakara-video-export";
+import {
+  exportKirakaraVideo,
+  replaceKirakaraVideoAudio,
+} from "@/lib/kirakara-video-export";
 import { getOrPrepareInstrumentalAudio } from "@/services/api";
 
 type ExportState = "idle" | "exporting" | "completed" | "error";
-type ExportPhase = "audio" | "rendering" | "validating";
+type ExportPhase = "audio" | "rendering" | "replacing" | "validating";
 
 export async function resolveExportAudio(
   jobId: string,
@@ -33,6 +36,9 @@ export function KirakaraExportControls({
   jobId = "",
   vocalMode = "on",
   disabled = false,
+  counterpartVideo = null,
+  onCompleted,
+  onExportingChange,
 }: {
   video: File;
   timeline: KirakaraTimeline;
@@ -41,6 +47,9 @@ export function KirakaraExportControls({
   jobId?: string;
   vocalMode?: string;
   disabled?: boolean;
+  counterpartVideo?: File | null;
+  onCompleted?: (file: File | null) => void;
+  onExportingChange?: (exporting: boolean) => void;
 }) {
   const abortController = useRef<AbortController | null>(null);
   const [state, setState] = useState<ExportState>("idle");
@@ -50,6 +59,7 @@ export function KirakaraExportControls({
   const [outputName, setOutputName] = useState<string | null>(null);
   const [streamed, setStreamed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const usesAudioSwap = Boolean(counterpartVideo);
 
   useEffect(() => {
     return () => {
@@ -62,8 +72,13 @@ export function KirakaraExportControls({
     const controller = new AbortController();
     abortController.current = controller;
     setState("exporting");
+    onExportingChange?.(true);
     setProgress(0);
-    setPhase(vocalMode === "off" ? "audio" : "rendering");
+    setPhase(
+      counterpartVideo
+        ? vocalMode === "off" ? "audio" : "replacing"
+        : vocalMode === "off" ? "audio" : "rendering",
+    );
     setError(null);
     if (outputUrl) {
       URL.revokeObjectURL(outputUrl);
@@ -72,28 +87,47 @@ export function KirakaraExportControls({
 
     const suggestedName = `${video.name.replace(/\.[^.]+$/u, "") || "nicokara"}.${vocalMode === "off" ? "off-vocal" : "on-vocal"}.nicokara.mp4`;
     try {
-      const destination = await createBrowserFileDestination(suggestedName);
+      const destination = counterpartVideo
+        ? await createBrowserFileDestination(suggestedName)
+        : null;
       const replacementAudio = await resolveExportAudio(
         jobId,
         vocalMode,
         getOrPrepareInstrumentalAudio,
         controller.signal,
       );
-      setPhase("rendering");
-      const result = await exportKirakaraVideo({
-        video,
-        replacementAudio,
-        timeline,
-        style,
-        profile,
-        destination: destination ?? undefined,
-        signal: controller.signal,
-        onProgress: setProgress,
-        onValidationStart: () => setPhase("validating"),
-      });
+      let result;
+      if (counterpartVideo) {
+        setPhase("replacing");
+        result = await replaceKirakaraVideoAudio({
+          video: counterpartVideo,
+          replacementAudio: vocalMode === "off" ? replacementAudio! : video,
+          outputName: suggestedName,
+          destination: destination ?? undefined,
+          signal: controller.signal,
+          onProgress: setProgress,
+          onValidationStart: () => setPhase("validating"),
+        });
+      } else {
+        setPhase("rendering");
+        result = await exportKirakaraVideo({
+          video,
+          replacementAudio,
+          outputName: suggestedName,
+          timeline,
+          style,
+          profile,
+          // Keep the first result in memory so the second mode can reuse it.
+          destination: undefined,
+          signal: controller.signal,
+          onProgress: setProgress,
+          onValidationStart: () => setPhase("validating"),
+        });
+      }
       setOutputName(suggestedName);
       setStreamed(result.streamed);
       if (result.file) setOutputUrl(URL.createObjectURL(result.file));
+      onCompleted?.(result.file);
       setState("completed");
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === "AbortError") {
@@ -105,6 +139,7 @@ export function KirakaraExportControls({
       }
     } finally {
       abortController.current = null;
+      onExportingChange?.(false);
     }
   }
 
@@ -116,11 +151,11 @@ export function KirakaraExportControls({
             type="button"
             onClick={startExport}
             disabled={disabled}
-            aria-label={`本地导出 ${vocalMode === "off" ? "OFF VOCAL" : "ON VOCAL"}`}
+            aria-label={`${usesAudioSwap ? "本地替换音轨导出" : "本地导出"} ${vocalMode === "off" ? "OFF VOCAL" : "ON VOCAL"}`}
             className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
             <Download className="size-4" />
-            {state === "error" ? "重新导出" : "导出本地视频"}
+            {state === "error" ? "重新导出" : usesAudioSwap ? "替换音轨导出" : "导出本地视频"}
           </button>
         )}
         {state === "exporting" && (
@@ -155,6 +190,8 @@ export function KirakaraExportControls({
               <LoaderCircle className="size-4 animate-spin" />
               {phase === "audio"
                 ? "正在准备或下载 OFF VOCAL 伴奏"
+                : phase === "replacing"
+                  ? "正在仅替换音轨"
                 : phase === "validating"
                   ? "正在校验输出视频"
                   : "正在本地渲染视频"}
@@ -176,9 +213,9 @@ export function KirakaraExportControls({
         </p>
       )}
       <p className="mt-3 text-xs text-muted-foreground">
-        {vocalMode === "off"
-          ? "OFF VOCAL 会使用云端 UVR 伴奏；原视频仍保留在当前设备中。"
-          : "视频保留在当前设备中处理，不会重新上传到服务器。"}
+        {counterpartVideo
+          ? "复用已生成的视频画面，仅替换当前音轨，不会重新渲染字幕。"
+          : "这是串联导出的第一步，会生成字幕画面；第二个版本将仅替换音轨。"}
       </p>
     </div>
   );

@@ -91,6 +91,22 @@ describe("KirakaraRenderActions", () => {
     expect(html.match(/云端导出（不推荐）/g)).toHaveLength(2);
   });
 
+  it("explains that the two local vocal versions are generated as a serial render and audio swap", () => {
+    const html = renderToStaticMarkup(
+      <KirakaraRenderActions
+        capabilities={{ preview: true, export: true, profile }}
+        video={video}
+        timeline={timeline}
+        style={DEFAULT_KIRAKARA_STYLE}
+        jobId="job-1"
+        onCloudRenderQueued={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("两个版本会串联生成");
+    expect(html).toContain("第二个版本仅替换音轨");
+  });
+
   it("shows only cloud rendering when browser export is unsupported", () => {
     const html = renderToStaticMarkup(
       <KirakaraRenderActions

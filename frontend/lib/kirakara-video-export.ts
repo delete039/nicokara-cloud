@@ -29,6 +29,7 @@ import {
 export type KirakaraVideoExportOptions = {
   video: File;
   replacementAudio?: File;
+  outputName?: string;
   timeline: KirakaraTimeline;
   style?: KirakaraStyle;
   profile: KirakaraExportProfile;
@@ -46,7 +47,7 @@ export type KirakaraVideoExportResult = {
 
 type RuntimeTranscodeOptions = Omit<
   KirakaraVideoExportOptions,
-  "destination" | "onProgress" | "onValidationStart"
+  "destination" | "onProgress" | "onValidationStart" | "outputName"
 > & {
   target: Target;
   onProgress: (progress: number) => void;
@@ -54,6 +55,28 @@ type RuntimeTranscodeOptions = Omit<
 
 export type KirakaraVideoExportRuntime = {
   transcode(options: RuntimeTranscodeOptions): Promise<void>;
+};
+
+export type KirakaraAudioSwapOptions = {
+  video: File;
+  replacementAudio: File;
+  outputName?: string;
+  destination?: BrowserFileDestination;
+  onProgress?: (progress: number) => void;
+  onValidationStart?: () => void;
+  signal?: AbortSignal;
+};
+
+type RuntimeAudioSwapOptions = {
+  sourceVideo: File;
+  replacementAudio: File;
+  target: Target;
+  onProgress: (progress: number) => void;
+  signal?: AbortSignal;
+};
+
+export type KirakaraAudioSwapRuntime = {
+  swap(options: RuntimeAudioSwapOptions): Promise<void>;
 };
 
 export type KirakaraVideoOutputValidator = (
@@ -373,6 +396,110 @@ const mediabunnyRuntime: KirakaraVideoExportRuntime = {
   },
 };
 
+const mediabunnyAudioSwapRuntime: KirakaraAudioSwapRuntime = {
+  async swap({ sourceVideo, replacementAudio, target, onProgress, signal }) {
+    ensureNotAborted(signal);
+    if (!await canEncodeAudio("aac", {
+      sampleRate: KIRAKARA_AAC_PROFILE.sampleRate,
+      numberOfChannels: KIRAKARA_AAC_PROFILE.numberOfChannels,
+      bitrate: KIRAKARA_AAC_PROFILE.bitrate,
+    })) {
+      throw new Error("当前浏览器无法编码 AAC 音轨，请使用云端导出。");
+    }
+    const audioOptions = {
+      codec: "aac" as const,
+      sampleRate: KIRAKARA_AAC_PROFILE.sampleRate,
+      numberOfChannels: KIRAKARA_AAC_PROFILE.numberOfChannels,
+      quality: new Quality({ bitrate: KIRAKARA_AAC_PROFILE.bitrate }),
+      forceTranscode: true,
+    };
+    const videoInput = new Input({
+      source: new BlobSource(sourceVideo),
+      formats: ALL_FORMATS,
+    });
+    const replacementInput = new Input({
+      source: new BlobSource(replacementAudio),
+      formats: ALL_FORMATS,
+    });
+    const output = new Output({
+      format: new Mp4OutputFormat({ fastStart: false }),
+      target,
+    });
+    const videoConversion = await Conversion.init(composableConversionOptions({
+      input: videoInput,
+      output,
+      tracks: "primary",
+      video: { forceTranscode: false },
+      audio: { discard: true },
+      showWarnings: false,
+    }));
+    const audioConversion = await Conversion.init(composableConversionOptions({
+      input: replacementInput,
+      output,
+      tracks: "primary",
+      video: { discard: true },
+      audio: audioOptions,
+      showWarnings: false,
+    }));
+
+    if (
+      !videoConversion.isValid ||
+      !videoConversion.utilizedTracks.some((track) => track.type === "video")
+    ) {
+      const reasons = videoConversion.discardedTracks
+        .map((item) => item.reason)
+        .join(", ");
+      throw new Error(
+        reasons
+          ? `无法复用已生成的视频画面：${reasons}`
+          : "无法读取已生成的视频画面，请改用云端导出",
+      );
+    }
+    if (
+      !audioConversion.isValid ||
+      !audioConversion.utilizedTracks.some((track) => track.type === "audio")
+    ) {
+      throw new Error("当前浏览器无法将替换音轨编码为 AAC，请使用云端导出。");
+    }
+
+    let videoProgress = 0;
+    let audioProgress = 0;
+    const reportProgress = () => {
+      onProgress(Math.min(1, Math.max(0, (videoProgress + audioProgress) / 2)));
+    };
+    videoConversion.onProgress = (progress) => {
+      videoProgress = progress;
+      reportProgress();
+    };
+    audioConversion.onProgress = (progress) => {
+      audioProgress = progress;
+      reportProgress();
+    };
+    const cancel = () => {
+      void videoConversion.cancel();
+      void audioConversion.cancel();
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      ensureNotAborted(signal);
+      await output.start();
+      await Promise.all([videoConversion.execute(), audioConversion.execute()]);
+      await output.finalize();
+      ensureNotAborted(signal);
+    } catch (reason) {
+      if (output.state !== "finalized" && output.state !== "canceled") {
+        await output.cancel().catch(() => undefined);
+      }
+      if (signal?.aborted) throw abortError();
+      throw reason;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      videoInput.dispose();
+      replacementInput.dispose();
+    }
+  },
+};
+
 export async function exportKirakaraVideo(
   options: KirakaraVideoExportOptions,
   runtime: KirakaraVideoExportRuntime = mediabunnyRuntime,
@@ -405,7 +532,7 @@ export async function exportKirakaraVideo(
   });
   ensureNotAborted(options.signal);
 
-  const fileName = outputFileName(options.video.name);
+  const fileName = options.outputName ?? outputFileName(options.video.name);
   const outputFile = options.destination
     ? await options.destination.getFile()
     : bufferTarget?.buffer
@@ -415,6 +542,58 @@ export async function exportKirakaraVideo(
         })
       : null;
   if (!outputFile) throw new Error("本地视频导出没有生成可校验的文件");
+
+  options.onValidationStart?.();
+  await validator(options.video, outputFile);
+  ensureNotAborted(options.signal);
+  options.onProgress?.(100);
+
+  return {
+    fileName,
+    file: options.destination ? null : outputFile,
+    streamed: Boolean(options.destination),
+  };
+}
+
+export async function replaceKirakaraVideoAudio(
+  options: KirakaraAudioSwapOptions,
+  runtime: KirakaraAudioSwapRuntime = mediabunnyAudioSwapRuntime,
+  validator: KirakaraVideoOutputValidator = validateKirakaraVideoOutput,
+): Promise<KirakaraVideoExportResult> {
+  ensureNotAborted(options.signal);
+  const bufferTarget = options.destination ? null : new BufferTarget();
+  const target = options.destination
+    ? new StreamTarget(options.destination.writable, {
+        chunked: true,
+        chunkSize: 8 * 1024 * 1024,
+      })
+    : bufferTarget;
+  if (!target) throw new Error("未找到视频输出目标");
+
+  options.onProgress?.(0);
+  await runtime.swap({
+    sourceVideo: options.video,
+    replacementAudio: options.replacementAudio,
+    target,
+    signal: options.signal,
+    onProgress(progress) {
+      options.onProgress?.(
+        Math.min(99, Math.round(Math.min(1, Math.max(0, progress)) * 100)),
+      );
+    },
+  });
+  ensureNotAborted(options.signal);
+
+  const fileName = options.outputName ?? outputFileName(options.video.name);
+  const outputFile = options.destination
+    ? await options.destination.getFile()
+    : bufferTarget?.buffer
+      ? new File([bufferTarget.buffer], fileName, {
+          type: "video/mp4",
+          lastModified: Date.now(),
+        })
+      : null;
+  if (!outputFile) throw new Error("本地音轨替换没有生成可校验的文件");
 
   options.onValidationStart?.();
   await validator(options.video, outputFile);

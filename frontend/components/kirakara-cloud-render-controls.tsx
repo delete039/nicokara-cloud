@@ -31,6 +31,7 @@ export function KirakaraCloudRenderControls({
   emphasized = false,
   discouraged = false,
   rerender = false,
+  audioSwapAvailable = false,
   vocalMode = "on",
   disabled = false,
   job,
@@ -43,6 +44,7 @@ export function KirakaraCloudRenderControls({
   emphasized?: boolean;
   discouraged?: boolean;
   rerender?: boolean;
+  audioSwapAvailable?: boolean;
   vocalMode?: "on" | "off";
   disabled?: boolean;
   job?: Job;
@@ -76,7 +78,9 @@ export function KirakaraCloudRenderControls({
       ? renderJob.queue_position ? `排队第 ${renderJob.queue_position} 位` : "等待云端处理"
       : renderJob ? jobPresentation(renderJob.status, renderJob.stage, renderJob.input_mode).title : "";
   useEffect(() => () => controller.current?.abort(), []);
-  const idleLabel = discouraged
+  const idleLabel = audioSwapAvailable
+    ? "云端替换音轨"
+    : discouraged
     ? rerender
       ? "重新云端导出（不推荐）"
       : "云端导出（不推荐）"
@@ -183,8 +187,10 @@ export function KirakaraCloudRenderControls({
         </div>
       )}
       <p className="text-xs leading-5 text-muted-foreground">
-        {discouraged &&
-          "会重新上传原视频并占用服务器渲染队列；本地导出可用时，建议优先使用本地导出。"}
+        {audioSwapAvailable
+          ? "会重新上传原视频用于提取目标音轨，并沿用已完成的字幕画面，仅替换音轨。"
+          : discouraged &&
+            "会重新上传原视频并占用服务器渲染队列；本地导出可用时，建议优先使用本地导出。"}
         云端只使用已校正的时间轴和注音进行 Kirakara 视频嵌字，不会重新识别或对齐歌词。
       </p>
       {error && (

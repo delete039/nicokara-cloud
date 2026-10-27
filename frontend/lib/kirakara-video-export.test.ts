@@ -14,6 +14,7 @@ import {
   assertStandardMp4,
   composableConversionOptions,
   exportKirakaraVideo,
+  replaceKirakaraVideoAudio,
   paintKirakaraVideoFrame,
   validateKirakaraVideoOutput,
   type KirakaraVideoExportRuntime,
@@ -336,5 +337,49 @@ describe("exportKirakaraVideo", () => {
       ),
     ).rejects.toThrow("导出视频时长校验失败");
     expect(progress).not.toHaveBeenCalledWith(100);
+  });
+});
+
+describe("replaceKirakaraVideoAudio", () => {
+  it("reuses the completed video and only sends the replacement audio to the runtime", async () => {
+    const sourceVideo = new File(["rendered"], "song.on-vocal.nicokara.mp4", {
+      type: "video/mp4",
+    });
+    const replacementAudio = new File(["instrumental"], "instrumental.wav", {
+      type: "audio/wav",
+    });
+    const runtime = {
+      swap: vi.fn(async ({ target, onProgress }) => {
+        expect(target).toBeInstanceOf(BufferTarget);
+        onProgress(0.25);
+        (target as BufferTarget).buffer = await mp4File([
+          "ftyp", "mdat", "moov",
+        ]).arrayBuffer();
+      }),
+    };
+    const validator = vi.fn().mockResolvedValue(undefined);
+
+    const result = await replaceKirakaraVideoAudio(
+      {
+        video: sourceVideo,
+        replacementAudio,
+        outputName: "song.off-vocal.nicokara.mp4",
+        onProgress: vi.fn(),
+      },
+      runtime,
+      validator,
+    );
+
+    expect(runtime.swap).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceVideo, replacementAudio }),
+    );
+    expect(validator).toHaveBeenCalledWith(
+      sourceVideo,
+      expect.objectContaining({ name: "song.off-vocal.nicokara.mp4" }),
+    );
+    expect(result).toMatchObject({
+      fileName: "song.off-vocal.nicokara.mp4",
+      streamed: false,
+    });
   });
 });

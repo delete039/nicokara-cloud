@@ -51,6 +51,28 @@ describe("KirakaraCloudRenderControls", () => {
     expect(html).toContain("按当前设置重新云端渲染");
   });
 
+  it("labels a cloud request as an audio swap when the other vocal version exists", () => {
+    const timeline: KirakaraTimeline = {
+      confidence: 1,
+      warnings: [],
+      durationMs: 0,
+      lines: [],
+    };
+    const html = renderToStaticMarkup(
+      <KirakaraCloudRenderControls
+        jobId="job-1"
+        video={new File(["video"], "song.mp4", { type: "video/mp4" })}
+        timeline={timeline}
+        vocalMode="off"
+        audioSwapAvailable
+        onQueued={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("云端替换音轨");
+    expect(html).toContain("沿用已完成的字幕画面");
+  });
+
   it("keeps actionable validation guidance for the full error panel", () => {
     const feedback: ErrorFeedback = {
       title: "提交内容未通过校验",
