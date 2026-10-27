@@ -458,7 +458,12 @@ export function KirakaraPreview({
 
     let requestedElement: HTMLVideoElement = element;
     try {
-      const compositeVideo = await createCompositePictureInPictureVideo();
+      let compositeVideo: HTMLVideoElement | null = null;
+      try {
+        compositeVideo = await createCompositePictureInPictureVideo();
+      } catch {
+        stopCompositePictureInPicture();
+      }
       if (compositeVideo) requestedElement = compositeVideo;
       await requestedElement.requestPictureInPicture();
       pictureInPictureElementRef.current = requestedElement;
