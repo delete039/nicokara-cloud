@@ -75,6 +75,9 @@ vi.mock("@/components/kirakara-render-actions", () => ({
 
 import { KirakaraPreview } from "./kirakara-preview";
 
+let intersectionObserverCallback: IntersectionObserverCallback | null = null;
+let pictureInPictureElement: Element | null = null;
+
 function installVideoBehavior(video: HTMLVideoElement, initiallyPaused = true) {
   let paused = initiallyPaused;
   Object.defineProperty(video, "paused", { configurable: true, get: () => paused });
@@ -106,6 +109,8 @@ async function renderWorkbench(jobId: string) {
 describe("KirakaraPreview browser behavior", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    intersectionObserverCallback = null;
+    pictureInPictureElement = null;
     Element.prototype.scrollIntoView = vi.fn();
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -122,6 +127,31 @@ describe("KirakaraPreview browser behavior", () => {
         observe() {}
         disconnect() {}
       },
+    });
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionObserverCallback = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    });
+    Object.defineProperty(document, "pictureInPictureEnabled", {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(document, "pictureInPictureElement", {
+      configurable: true,
+      get: () => pictureInPictureElement,
+    });
+    Object.defineProperty(document, "exitPictureInPicture", {
+      configurable: true,
+      value: vi.fn(async () => {
+        pictureInPictureElement = null;
+      }),
     });
     HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
     window.localStorage.clear();
@@ -162,6 +192,50 @@ describe("KirakaraPreview browser behavior", () => {
     await waitFor(() => expect(canvas?.getAttribute("data-kirakara-romaji-position")).toBe("below"));
     fireEvent.click(checkbox);
     expect(screen.queryByLabelText("罗马音位置")).toBeNull();
+  });
+
+  it("REQ-PIP-01 enters PiP when a playing video leaves the viewport", async () => {
+    const { container, video } = await renderWorkbench("auto-picture-in-picture");
+    installVideoBehavior(video, false);
+    const requestPictureInPicture = vi.fn(async () => {
+      pictureInPictureElement = video;
+      fireEvent(video, new Event("enterpictureinpicture"));
+      return {} as PictureInPictureWindow;
+    });
+    Object.defineProperty(video, "requestPictureInPicture", {
+      configurable: true,
+      value: requestPictureInPicture,
+    });
+    const surface = container.querySelector<HTMLElement>(
+      '[data-kirakara-preview-surface="true"]',
+    );
+    expect(surface).toBeTruthy();
+    expect(intersectionObserverCallback).toBeTypeOf("function");
+    if (!surface || !intersectionObserverCallback) return;
+
+    await act(async () => {
+      intersectionObserverCallback?.([
+        {
+          isIntersecting: false,
+          intersectionRatio: 0,
+          target: surface,
+        } as unknown as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+    });
+    await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(1));
+    expect(container.querySelector("[data-picture-in-picture-state]")?.getAttribute("data-picture-in-picture-state")).toBe("active");
+
+    await act(async () => {
+      intersectionObserverCallback?.([
+        {
+          isIntersecting: true,
+          intersectionRatio: 1,
+          target: surface,
+        } as unknown as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+    });
+    await waitFor(() => expect(document.exitPictureInPicture).toHaveBeenCalledTimes(1));
+    expect(container.querySelector("[data-picture-in-picture-state]")?.getAttribute("data-picture-in-picture-state")).toBe("idle");
   });
 
   it("REQ-FOLLOW-04 does not save a timeline edit during automatic following", async () => {

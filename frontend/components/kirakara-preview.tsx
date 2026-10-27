@@ -73,6 +73,8 @@ type TimelineSaveState = {
   refreshRequired?: boolean;
 };
 
+type PictureInPictureState = "idle" | "active" | "blocked";
+
 enum WorkbenchSideTab {
   Lyrics = "lyrics",
   Style = "style",
@@ -262,8 +264,11 @@ export function KirakaraPreview({
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewSurfaceRef = useRef<HTMLDivElement>(null);
   const frameLoop = useRef<ReturnType<typeof createPreviewFrameLoop> | null>(null);
   const componentActive = useRef(true);
+  const pictureInPictureOwnedRef = useRef(false);
+  const pictureInPictureAttemptedRef = useRef(false);
   const activeJobId = useRef(jobId);
   const autosaveVersion = useRef(0);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -284,6 +289,8 @@ export function KirakaraPreview({
   const programmaticSeekLineRef = useRef<number | null>(null);
   const [playbackMs, setPlaybackMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [pictureInPictureState, setPictureInPictureState] =
+    useState<PictureInPictureState>("idle");
   const [playbackRate, setPlaybackRate] = useState(1);
   const [lastNonDefaultRate, setLastNonDefaultRate] = useState(0.9);
   const [rateNotice, setRateNotice] = useState<number | null>(null);
@@ -331,6 +338,56 @@ export function KirakaraPreview({
     onVideoElementChange?.(element);
   }, [onVideoElementChange]);
 
+  const enterPictureInPicture = useCallback(async (allowPaused = false) => {
+    const element = videoRef.current;
+    if (
+      !element
+      || element.ended
+      || (!allowPaused && element.paused)
+      || typeof document === "undefined"
+      || document.pictureInPictureEnabled === false
+      || typeof element.requestPictureInPicture !== "function"
+    ) {
+      return false;
+    }
+    if (document.pictureInPictureElement === element) {
+      pictureInPictureOwnedRef.current = true;
+      setPictureInPictureState("active");
+      return true;
+    }
+    if (document.pictureInPictureElement) return false;
+    try {
+      await element.requestPictureInPicture();
+      pictureInPictureOwnedRef.current = true;
+      setPictureInPictureState("active");
+      return true;
+    } catch {
+      setPictureInPictureState("blocked");
+      return false;
+    }
+  }, []);
+
+  const exitPictureInPicture = useCallback(async () => {
+    const element = videoRef.current;
+    if (
+      typeof document === "undefined"
+      || !pictureInPictureOwnedRef.current
+      || document.pictureInPictureElement !== element
+      || typeof document.exitPictureInPicture !== "function"
+    ) {
+      pictureInPictureOwnedRef.current = false;
+      return;
+    }
+    try {
+      await document.exitPictureInPicture();
+    } catch {
+      // The browser may have closed the PiP window already.
+    } finally {
+      pictureInPictureOwnedRef.current = false;
+      setPictureInPictureState("idle");
+    }
+  }, []);
+
   useEffect(() => {
     componentActive.current = true;
     return () => {
@@ -360,6 +417,57 @@ export function KirakaraPreview({
   useEffect(() => () => {
     if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
   }, []);
+
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element || typeof document === "undefined") return;
+    const handleEnter = () => {
+      if (document.pictureInPictureElement === element) {
+        setPictureInPictureState("active");
+      }
+    };
+    const handleLeave = () => {
+      if (document.pictureInPictureElement !== element) {
+        pictureInPictureOwnedRef.current = false;
+        setPictureInPictureState("idle");
+      }
+    };
+    element.addEventListener("enterpictureinpicture", handleEnter);
+    element.addEventListener("leavepictureinpicture", handleLeave);
+    return () => {
+      element.removeEventListener("enterpictureinpicture", handleEnter);
+      element.removeEventListener("leavepictureinpicture", handleLeave);
+      if (pictureInPictureOwnedRef.current && document.pictureInPictureElement === element) {
+        void document.exitPictureInPicture().catch(() => undefined);
+      }
+      pictureInPictureOwnedRef.current = false;
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
+    const surface = previewSurfaceRef.current;
+    if (!surface || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => {
+      const element = videoRef.current;
+      if (!element) return;
+      if (entry.isIntersecting && entry.intersectionRatio > 0) {
+        pictureInPictureAttemptedRef.current = false;
+        void exitPictureInPicture();
+        return;
+      }
+      if (
+        pictureInPictureAttemptedRef.current
+        || element.paused
+        || element.ended
+      ) {
+        return;
+      }
+      pictureInPictureAttemptedRef.current = true;
+      void enterPictureInPicture();
+    }, { threshold: [0, 0.25] });
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, [enterPictureInPicture, exitPictureInPicture, videoUrl]);
 
   useEffect(() => {
     let active = true;
@@ -856,9 +964,10 @@ export function KirakaraPreview({
         >
           <div
             data-kirakara-preview-panel="true"
-            className="sticky top-3 z-30 mx-auto min-w-0 w-full max-w-5xl rounded-xl bg-card/95 pb-2 pt-1 shadow-sm backdrop-blur"
+            className="mx-auto min-w-0 w-full max-w-5xl"
           >
             <div
+              ref={previewSurfaceRef}
               data-kirakara-preview-surface="true"
               className="relative aspect-video w-full overflow-hidden rounded-lg bg-black"
             >
@@ -958,6 +1067,27 @@ export function KirakaraPreview({
                   </label>
                 )}
               </div>
+              {pictureInPictureState === "blocked" && (
+                <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>浏览器未允许自动画中画</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pictureInPictureAttemptedRef.current = false;
+                      void enterPictureInPicture(true);
+                    }}
+                    className="focus-ring rounded-sm font-semibold text-foreground underline-offset-4 hover:underline"
+                  >
+                    重试画中画
+                  </button>
+                </div>
+              )}
+              <span
+                className="sr-only"
+                data-picture-in-picture-state={pictureInPictureState}
+              >
+                画中画状态
+              </span>
               <span className="sr-only" data-playing={isPlaying}>播放状态</span>
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">

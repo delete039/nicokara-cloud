@@ -90,7 +90,7 @@ describe("KirakaraPreview", () => {
     expect(html).not.toContain('data-kirakara-dom-preview="true"');
   });
 
-  it("REQ-PLACEMENT-07 keeps the full-width video sticky above the workbench", async () => {
+  it("REQ-PLACEMENT-07 keeps the full-width video in normal flow for PiP handoff", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
@@ -108,15 +108,8 @@ describe("KirakaraPreview", () => {
       /data-kirakara-preview-surface="true"[^>]+relative aspect-video w-full/,
     );
     expect(html).not.toContain('data-kirakara-preview-panel="true" class="contents');
-    expect(html).toMatch(
-      /data-kirakara-preview-panel="true"[^>]+class="sticky[^\"]*"/,
-    );
-    expect(html).toMatch(
-      /data-kirakara-preview-panel="true"[^>]+top-3/,
-    );
-    expect(html).toMatch(
-      /data-kirakara-preview-panel="true"[^>]+(?:bg-card\/95|bg-card)/,
-    );
+    expect(html).not.toMatch(/data-kirakara-preview-panel="true"[^>]+sticky/);
+    expect(html).toContain('data-picture-in-picture-state="idle"');
   });
 
   it("REQ-PLACEMENT-08 makes the two workbench tabs full width and removes side columns", async () => {
