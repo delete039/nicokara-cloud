@@ -238,6 +238,38 @@ describe("KirakaraPreview browser behavior", () => {
     expect(container.querySelector("[data-picture-in-picture-state]")?.getAttribute("data-picture-in-picture-state")).toBe("idle");
   });
 
+  it("REQ-PIP-02 enters PiP for a paused video after two-thirds leaves the viewport", async () => {
+    const { container, video } = await renderWorkbench("auto-picture-in-picture-paused");
+    installVideoBehavior(video, true);
+    const requestPictureInPicture = vi.fn(async () => {
+      pictureInPictureElement = video;
+      fireEvent(video, new Event("enterpictureinpicture"));
+      return {} as PictureInPictureWindow;
+    });
+    Object.defineProperty(video, "requestPictureInPicture", {
+      configurable: true,
+      value: requestPictureInPicture,
+    });
+    const surface = container.querySelector<HTMLElement>(
+      '[data-kirakara-preview-surface="true"]',
+    );
+    expect(surface).toBeTruthy();
+    expect(intersectionObserverCallback).toBeTypeOf("function");
+    if (!surface || !intersectionObserverCallback) return;
+
+    await act(async () => {
+      intersectionObserverCallback?.([
+        {
+          isIntersecting: true,
+          intersectionRatio: 1 / 3,
+          target: surface,
+        } as unknown as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+    });
+    await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(1));
+    expect(container.querySelector("[data-picture-in-picture-state]")?.getAttribute("data-picture-in-picture-state")).toBe("active");
+  });
+
   it("REQ-FOLLOW-04 does not save a timeline edit during automatic following", async () => {
     const api = await import("@/services/api");
     const { video } = await renderWorkbench("follow-no-save");

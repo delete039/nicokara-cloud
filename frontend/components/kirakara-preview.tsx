@@ -75,6 +75,9 @@ type TimelineSaveState = {
 
 type PictureInPictureState = "idle" | "active" | "blocked";
 
+const PICTURE_IN_PICTURE_VISIBLE_THRESHOLD = 1 / 3;
+const PICTURE_IN_PICTURE_FRAME_RATE = 30;
+
 enum WorkbenchSideTab {
   Lyrics = "lyrics",
   Style = "style",
@@ -268,6 +271,10 @@ export function KirakaraPreview({
   const frameLoop = useRef<ReturnType<typeof createPreviewFrameLoop> | null>(null);
   const componentActive = useRef(true);
   const pictureInPictureOwnedRef = useRef(false);
+  const pictureInPictureElementRef = useRef<HTMLVideoElement | null>(null);
+  const pictureInPictureCompositeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pictureInPictureCompositeStreamRef = useRef<MediaStream | null>(null);
+  const pictureInPictureCompositeFrameRef = useRef<number | null>(null);
   const pictureInPictureAttemptedRef = useRef(false);
   const activeJobId = useRef(jobId);
   const autosaveVersion = useRef(0);
@@ -338,6 +345,97 @@ export function KirakaraPreview({
     onVideoElementChange?.(element);
   }, [onVideoElementChange]);
 
+  const stopCompositePictureInPicture = useCallback(() => {
+    if (pictureInPictureCompositeFrameRef.current !== null) {
+      globalThis.cancelAnimationFrame(pictureInPictureCompositeFrameRef.current);
+      pictureInPictureCompositeFrameRef.current = null;
+    }
+    pictureInPictureCompositeStreamRef.current?.getTracks().forEach((track) => track.stop());
+    pictureInPictureCompositeStreamRef.current = null;
+    const compositeVideo = pictureInPictureCompositeVideoRef.current;
+    if (compositeVideo) {
+      compositeVideo.pause();
+      compositeVideo.srcObject = null;
+      compositeVideo.remove();
+    }
+    pictureInPictureCompositeVideoRef.current = null;
+  }, []);
+
+  const createCompositePictureInPictureVideo = useCallback(async () => {
+    if (
+      typeof document === "undefined"
+      || typeof HTMLCanvasElement === "undefined"
+      || typeof HTMLVideoElement === "undefined"
+    ) {
+      return null;
+    }
+    const overlay = previewSurfaceRef.current?.querySelector<HTMLCanvasElement>(
+      '[data-kirakara-canvas-preview="true"]',
+    );
+    if (!overlay || typeof overlay.captureStream !== "function") return null;
+    const width = overlay.width || 1280;
+    const height = overlay.height || 720;
+    const compositeCanvas = document.createElement("canvas");
+    compositeCanvas.width = width;
+    compositeCanvas.height = height;
+    const context = compositeCanvas.getContext("2d");
+    if (!context) return null;
+
+    const stream = compositeCanvas.captureStream(PICTURE_IN_PICTURE_FRAME_RATE);
+    const compositeVideo = document.createElement("video");
+    compositeVideo.muted = true;
+    compositeVideo.playsInline = true;
+    compositeVideo.autoplay = true;
+    compositeVideo.srcObject = stream;
+    compositeVideo.style.position = "fixed";
+    compositeVideo.style.left = "-10000px";
+    compositeVideo.style.top = "-10000px";
+    compositeVideo.style.width = "1px";
+    compositeVideo.style.height = "1px";
+    compositeVideo.style.opacity = "0";
+    compositeVideo.style.pointerEvents = "none";
+    compositeVideo.addEventListener("leavepictureinpicture", () => {
+      if (pictureInPictureElementRef.current !== compositeVideo) return;
+      pictureInPictureOwnedRef.current = false;
+      pictureInPictureElementRef.current = null;
+      stopCompositePictureInPicture();
+      setPictureInPictureState("idle");
+    });
+    document.body.appendChild(compositeVideo);
+    pictureInPictureCompositeStreamRef.current = stream;
+    pictureInPictureCompositeVideoRef.current = compositeVideo;
+
+    const draw = () => {
+      const source = videoRef.current;
+      if (!source || pictureInPictureCompositeVideoRef.current !== compositeVideo) return;
+      context.clearRect(0, 0, width, height);
+      if (source.readyState >= 2 && source.videoWidth > 0 && source.videoHeight > 0) {
+        const scale = Math.min(width / source.videoWidth, height / source.videoHeight);
+        const drawWidth = source.videoWidth * scale;
+        const drawHeight = source.videoHeight * scale;
+        context.fillStyle = "#000";
+        context.fillRect(0, 0, width, height);
+        context.drawImage(
+          source,
+          (width - drawWidth) / 2,
+          (height - drawHeight) / 2,
+          drawWidth,
+          drawHeight,
+        );
+      }
+      context.drawImage(overlay, 0, 0, width, height);
+      pictureInPictureCompositeFrameRef.current = globalThis.requestAnimationFrame(draw);
+    };
+    draw();
+    try {
+      await compositeVideo.play();
+      return compositeVideo;
+    } catch {
+      stopCompositePictureInPicture();
+      return null;
+    }
+  }, [stopCompositePictureInPicture]);
+
   const enterPictureInPicture = useCallback(async (allowPaused = false) => {
     const element = videoRef.current;
     if (
@@ -351,31 +449,51 @@ export function KirakaraPreview({
       return false;
     }
     if (document.pictureInPictureElement === element) {
+      pictureInPictureElementRef.current = element;
       pictureInPictureOwnedRef.current = true;
       setPictureInPictureState("active");
       return true;
     }
     if (document.pictureInPictureElement) return false;
+
+    let requestedElement: HTMLVideoElement = element;
     try {
-      await element.requestPictureInPicture();
+      const compositeVideo = await createCompositePictureInPictureVideo();
+      if (compositeVideo) requestedElement = compositeVideo;
+      await requestedElement.requestPictureInPicture();
+      pictureInPictureElementRef.current = requestedElement;
       pictureInPictureOwnedRef.current = true;
       setPictureInPictureState("active");
       return true;
     } catch {
+      if (requestedElement !== element) {
+        stopCompositePictureInPicture();
+        try {
+          await element.requestPictureInPicture();
+          pictureInPictureElementRef.current = element;
+          pictureInPictureOwnedRef.current = true;
+          setPictureInPictureState("active");
+          return true;
+        } catch {
+          // Fall through to the blocked state below.
+        }
+      }
       setPictureInPictureState("blocked");
       return false;
     }
-  }, []);
+  }, [createCompositePictureInPictureVideo, stopCompositePictureInPicture]);
 
   const exitPictureInPicture = useCallback(async () => {
-    const element = videoRef.current;
+    const ownedElement = pictureInPictureElementRef.current;
     if (
       typeof document === "undefined"
       || !pictureInPictureOwnedRef.current
-      || document.pictureInPictureElement !== element
+      || document.pictureInPictureElement !== ownedElement
       || typeof document.exitPictureInPicture !== "function"
     ) {
       pictureInPictureOwnedRef.current = false;
+      pictureInPictureElementRef.current = null;
+      stopCompositePictureInPicture();
       return;
     }
     try {
@@ -384,9 +502,11 @@ export function KirakaraPreview({
       // The browser may have closed the PiP window already.
     } finally {
       pictureInPictureOwnedRef.current = false;
+      pictureInPictureElementRef.current = null;
+      stopCompositePictureInPicture();
       setPictureInPictureState("idle");
     }
-  }, []);
+  }, [stopCompositePictureInPicture]);
 
   useEffect(() => {
     componentActive.current = true;
@@ -423,12 +543,14 @@ export function KirakaraPreview({
     if (!element || typeof document === "undefined") return;
     const handleEnter = () => {
       if (document.pictureInPictureElement === element) {
+        pictureInPictureElementRef.current = element;
         setPictureInPictureState("active");
       }
     };
     const handleLeave = () => {
-      if (document.pictureInPictureElement !== element) {
+      if (pictureInPictureElementRef.current === element) {
         pictureInPictureOwnedRef.current = false;
+        pictureInPictureElementRef.current = null;
         setPictureInPictureState("idle");
       }
     };
@@ -437,12 +559,17 @@ export function KirakaraPreview({
     return () => {
       element.removeEventListener("enterpictureinpicture", handleEnter);
       element.removeEventListener("leavepictureinpicture", handleLeave);
-      if (pictureInPictureOwnedRef.current && document.pictureInPictureElement === element) {
+      if (
+        pictureInPictureOwnedRef.current
+        && document.pictureInPictureElement === pictureInPictureElementRef.current
+      ) {
         void document.exitPictureInPicture().catch(() => undefined);
       }
       pictureInPictureOwnedRef.current = false;
+      pictureInPictureElementRef.current = null;
+      stopCompositePictureInPicture();
     };
-  }, [videoUrl]);
+  }, [stopCompositePictureInPicture, videoUrl]);
 
   useEffect(() => {
     const surface = previewSurfaceRef.current;
@@ -450,21 +577,24 @@ export function KirakaraPreview({
     const observer = new IntersectionObserver(([entry]) => {
       const element = videoRef.current;
       if (!element) return;
-      if (entry.isIntersecting && entry.intersectionRatio > 0) {
+      if (
+        entry.isIntersecting
+        && entry.intersectionRatio > PICTURE_IN_PICTURE_VISIBLE_THRESHOLD
+      ) {
         pictureInPictureAttemptedRef.current = false;
         void exitPictureInPicture();
         return;
       }
+      if (entry.intersectionRatio > PICTURE_IN_PICTURE_VISIBLE_THRESHOLD) return;
       if (
         pictureInPictureAttemptedRef.current
-        || element.paused
         || element.ended
       ) {
         return;
       }
       pictureInPictureAttemptedRef.current = true;
-      void enterPictureInPicture();
-    }, { threshold: [0, 0.25] });
+      void enterPictureInPicture(true);
+    }, { threshold: [0, PICTURE_IN_PICTURE_VISIBLE_THRESHOLD, 1] });
     observer.observe(surface);
     return () => observer.disconnect();
   }, [enterPictureInPicture, exitPictureInPicture, videoUrl]);
