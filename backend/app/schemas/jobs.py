@@ -21,6 +21,7 @@ class JobResponse(BaseModel):
     off_vocal_conversion: bool = False
     instrumental_ready: bool = False
     has_timeline: bool = False
+    has_transcript: bool = False
     render_pending: bool = False
     available_vocal_modes: list[str] = Field(default_factory=list)
     render_vocal_mode: str | None = None

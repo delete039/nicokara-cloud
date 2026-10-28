@@ -18,6 +18,7 @@ export type Job = {
   off_vocal_conversion?: boolean;
   instrumental_ready?: boolean;
   has_timeline?: boolean;
+  has_transcript?: boolean;
   render_pending?: boolean;
   available_vocal_modes?: Array<"on" | "off">;
   render_vocal_mode?: "on" | "off" | null;

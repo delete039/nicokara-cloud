@@ -464,6 +464,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           job.status === "SUBTITLE_GENERATED" ||
           job.status === "COMPLETED") && (
           <div className="mt-6 flex flex-wrap gap-3">
+            {job.has_transcript && (
             <a
               href={transcriptUrl(job.id)}
               className="focus-ring inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
@@ -471,6 +472,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
               <Download className="size-4" />
               {JOB_COPY.downloadTranscript}
             </a>
+            )}
             {(job.status === "LYRICS_PROCESSED" ||
               job.status === "ALIGNED" ||
               job.status === "SUBTITLE_GENERATED" ||

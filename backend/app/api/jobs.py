@@ -119,6 +119,8 @@ def job_response(database: Database, job: dict) -> JobResponse:
             "off_vocal_conversion": job.get("resume_stage") in {"OFF_VOCAL_QUEUED", "INSTRUMENTAL_QUEUED"},
             "instrumental_ready": stem.is_file() and stem.stat().st_size > 0,
             "has_timeline": bool(job.get("timeline_path")),
+            "has_transcript": bool(job.get("transcript_path"))
+                and Path(job["transcript_path"]).is_file(),
             "render_pending": job.get("resume_stage") in {
                 "CLOUD_AUDIO_SWAP_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED",
             }

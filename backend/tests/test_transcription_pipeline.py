@@ -1688,6 +1688,62 @@ def test_pipeline_uses_imported_readings_without_processing_or_review_pause(
     assert aligner.lyrics == document
 
 
+@pytest.mark.parametrize("input_mode", ["VIDEO", "AUDIO_ONLY"])
+@pytest.mark.parametrize("alignment_mode", ["auto", "standard"])
+def test_reviewed_upload_keeps_audio_and_explicit_model_selection(
+    tmp_path: Path, input_mode: str, alignment_mode: str,
+) -> None:
+    from app.alignment.engine import ResilientAlignmentEngine
+    from app.tasks.pipeline import TranscriptionPipeline
+
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_dir = tmp_path / "job"
+    job_id = create_uploaded_job(database, job_dir)
+    lyrics_path = job_dir / "lyrics.txt"
+    lyrics_path.write_text("君", encoding="utf-8")
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET lyrics_path=?, input_mode=?, alignment_mode=? WHERE id=?",
+            (str(lyrics_path), input_mode, alignment_mode, job_id),
+        )
+
+    class Processor:
+        def process(self, text):
+            return LyricDocument("local", text, [LyricLine(
+                text, text, "きみ", [LyricToken(text, "きみ")],
+            )])
+
+    calls = []
+
+    class Model:
+        def __init__(self, name): self.name = name
+
+        def align(self, lyrics, transcript, *, audio_path):
+            assert audio_path == job_dir / "audio.wav"
+            assert audio_path.is_file()
+            calls.append(self.name)
+            return LyricTimeline(confidence=.9, alignment_engine=self.name)
+
+    transcriber = FakeTranscriber()
+    pipeline = TranscriptionPipeline(
+        database=database, extractor=FakeExtractor(), transcriber=transcriber,
+        lyric_processor=Processor(), aligner=ResilientAlignmentEngine(
+            primary=Model("fa_kara_mms"), multivoice_primary=Model("fa_kara_yohane"),
+            fallback=object(),
+        ),
+    )
+    pipeline.process(job_id)
+    assert database.get_job(job_id)["stage"] == "READING_REVIEW_REQUIRED"
+    assert transcriber.calls == []
+    assert database.claim_reading_review(job_id)
+    assert database.queue_alignment(job_id)
+    pipeline.process(job_id)
+    assert calls == ["fa_kara_mms" if alignment_mode == "standard" else "fa_kara_yohane"]
+    assert transcriber.calls == []
+    assert database.get_job(job_id)["status"] == "ALIGNED"
+
+
 def test_pipeline_classifies_missing_ffmpeg_as_server_tool_failure(
     tmp_path: Path,
 ) -> None:

@@ -365,11 +365,7 @@ class TranscriptionPipeline:
             lyrics_path_value = job.get("lyrics_path")
             render_vocal_mode = "on"
             direct_alignment_job = (
-                (
-                    imported_lyrics_path.is_file()
-                    or job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
-                )
-                and bool(
+                bool(
                     getattr(
                         self.aligner,
                         "supports_transcriptless_alignment",
@@ -1453,10 +1449,7 @@ class TranscriptionPipeline:
         alignment_mode: str = "auto",
         **kwargs,
     ):
-        if (
-            alignment_mode != "standard"
-            and getattr(self.aligner, "supports_alignment_modes", False)
-        ):
+        if getattr(self.aligner, "supports_alignment_modes", False):
             kwargs["alignment_mode"] = alignment_mode
         return self.aligner.align(lyrics, transcript, **kwargs)
 
@@ -1531,14 +1524,11 @@ class TranscriptionPipeline:
             if transcript_path.is_file()
             else None
         )
-        direct_alignment_job = (
-            job.get("input_mode", "VIDEO") == "AUDIO_ONLY"
-            and bool(
-                getattr(
-                    self.aligner,
-                    "supports_transcriptless_alignment",
-                    False,
-                )
+        direct_alignment_job = bool(
+            getattr(
+                self.aligner,
+                "supports_transcriptless_alignment",
+                False,
             )
         )
         alignment_requires_vocals = bool(
