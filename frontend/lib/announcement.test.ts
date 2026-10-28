@@ -31,23 +31,26 @@ describe("announcement configuration", () => {
 
     expect(announcement).not.toBeNull();
     expect(announcement).toMatchObject({
-      id: "2026-10-01-update-v1",
-      title: "2026-10-01 更新日志",
+      id: "2026-10-28-update-v1",
+      title: "2026-10-28 更新日志",
       version: "v4.2",
-      publishedAt: "2026-10-01",
+      publishedAt: "2026-10-28",
       buttonLabel: "わかった",
     });
     expect(announcement?.content).toEqual([
       "更新内容：",
-      "1. 加入了可选的双注音生成功能。",
-      "2. 支持导入多标准视频格式",
-      "3. 修复了一些已知的问题。",
+      "1. 优化了歌词粘贴导入提示功能。",
+      "2. 增加了一些返回上一步功能。",
+      "3. 优化了工作台布局，增加了视频预览画中画显示。",
+      "4. ON/OFF VOCAL 替换时改为仅替换声道。",
+      "5. 修复了一些已知的问题。",
       "QQ 交流群",
       "欢迎加入ニコカラ自动生成器 QQ 交流群：1101583605。",
       "群内可交流使用问题、反馈建议和获取项目更新。",
     ]);
     const bundle = parseAnnouncementBundle(config);
     expect(bundle?.history.map(({ id }) => id)).toEqual([
+      "2026-10-01-update-v1",
       "2026-09-21-update-v1",
       "2026-09-04-update-v1",
       "2026-08-28-update-v1",
