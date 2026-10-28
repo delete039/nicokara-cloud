@@ -228,7 +228,10 @@ def test_video_upload_resumes_only_missing_chunks(ready_job):
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["received_chunk_indices"] == [1]
     assert resumed.json()["missing_chunk_indices"] == [0, 2]
-    assert client.post(f"{url}/start", json={**session, "chunk_size_bytes": 16}).status_code == 409
+    resized = client.post(f"{url}/start", json={**session, "chunk_size_bytes": 16})
+    assert resized.status_code == 200
+    assert resized.json()["chunk_size_bytes"] == session["chunk_size_bytes"]
+    assert client.post(f"{url}/start", json={**session, "video_size_bytes": 18}).status_code == 409
 
 
 def test_cloud_render_accepts_resumed_chunks_and_replays_completion(ready_job):

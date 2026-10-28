@@ -24,41 +24,23 @@ done
 python3 -c 'import sys; assert sys.version_info >= (3, 11)' || fail "需要 Python 3.11 或以上。"
 node -e 'const [a,b]=process.versions.node.split(".").map(Number);if(a<22||(a===22&&b<13))process.exit(1)' || fail "需要 Node.js 22.13 或以上，建议 24。"
 [[ -f "$ARCHIVE_PATH" && -f "$ENV_FILE" && -L "$APP_ROOT/current" ]] || fail "需要部署包及现有 /data/nicokara 服务。"
+exec 9>"$APP_ROOT/deploy.lock"
+flock -n 9 || fail "已有部署任务正在执行。"
 PREVIOUS_RELEASE="$(readlink -f "$APP_ROOT/current")"
 OLD_PYTHON="$PREVIOUS_RELEASE/backend/.venv/bin/python"
 [[ -x "$OLD_PYTHON" ]] || fail "旧版本 Python 环境不存在。"
 if [[ "$PREVIOUS_RELEASE" == "$RELEASE_DIR" ]]; then
   fail "发布目录就是当前运行版本，不能原地覆盖；请重新生成部署包。"
 fi
-archive_existing_directory() {
-  local path="$1"
-  local parent="$2"
-  local archived
-  local suffix
-  [[ "$path" != "$parent" && "$path" == "$parent/"* ]] || fail "拒绝操作目录：$path"
-  [[ ! -L "$path" ]] || fail "发布目录不能是符号链接：$path"
-  if [[ -e "$path" ]]; then
-    [[ -d "$path" ]] || fail "发布目录不是目录：$path"
-    suffix="$(date +%Y%m%d-%H%M%S)-$$"
-    archived="$path.previous-$suffix"
-    while [[ -e "$archived" ]]; do
-      suffix="$(date +%Y%m%d-%H%M%S)-$RANDOM"
-      archived="$path.previous-$suffix"
-    done
-    mv -- "$path" "$archived"
-    echo "已有目录已保留为：$archived"
-  fi
-  mkdir -p "$path"
-}
-archive_existing_directory "$RELEASE_DIR" "$APP_ROOT/releases"
-archive_existing_directory "$BACKUP_DIR" "$APP_ROOT/backups"
+# Release directories are immutable, including failed attempts and backups.
+# Never rename paths that a running process may still have cached.
+[[ ! -e "$RELEASE_DIR" && ! -L "$RELEASE_DIR" ]] || fail "发布目录已存在，请重新生成部署包。"
+[[ ! -e "$BACKUP_DIR" && ! -L "$BACKUP_DIR" ]] || fail "备份目录已存在，请重新生成部署包。"
 for unit in nicokara-backend nicokara-frontend; do
   [[ "$(systemctl show -p LoadState --value "$unit")" == "loaded" ]] || fail "服务不存在：$unit"
 done
 nginx -t
 printf '%s  %s\n' "$EXPECTED_SHA256" "$ARCHIVE_PATH" | sha256sum -c -
-exec 9>"$APP_ROOT/deploy.lock"
-flock -n 9 || fail "已有部署任务正在执行。"
 
 # Resolve the configured database without displaying credentials.
 DATA_DIR="$("$OLD_PYTHON" - "$ENV_FILE" "$SHARED/data" <<'PY'
@@ -154,7 +136,7 @@ if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then TORCH
   "torch==2.7.1+$TORCH_VARIANT" "torchaudio==2.7.1+$TORCH_VARIANT" "torchvision==0.22.1+$TORCH_VARIANT"
 "$PYTHON" -m pip install --disable-pip-version-check --timeout 120 --retries 3 \
   --index-url "$PIP_INDEX" -e "$RELEASE_DIR/backend[ai]"
-"$PYTHON" -c 'import app.main, torch, torchaudio, faster_whisper, audio_separator; assert hasattr(torchaudio.pipelines, "MMS_FA")'
+"$PYTHON" -c 'import app.main, torch, torchaudio, faster_whisper, audio_separator, httpx; httpx.Client().close(); assert hasattr(torchaudio.pipelines, "MMS_FA")'
 chmod -R a+rX "$RELEASE_DIR"
 
 # Preserve the live announcement and worker settings.
@@ -219,6 +201,24 @@ for attempt in {1..90}; do
   sleep 1
 done
 [[ "$READY" == true ]] || { echo "新版本健康检查失败。" >&2; false; }
+# GET every emitted JavaScript asset; HEAD and the homepage can pass even when
+# the Node runtime's cached absolute filenames no longer exist.
+"$PYTHON" - "$RELEASE_DIR/frontend" <<'PY'
+import hashlib, sys, urllib.request
+from pathlib import Path
+frontend = Path(sys.argv[1])
+assets = sorted((frontend / 'dist' / 'client' / 'assets').glob('*.js'))
+if not assets:
+    assets = sorted((frontend / 'public' / 'assets').glob('*.js'))
+if not assets:
+    raise SystemExit('No frontend JavaScript assets found')
+for asset in assets:
+    with urllib.request.urlopen('http://127.0.0.1:3000/assets/' + asset.name, timeout=15) as response:
+        data = response.read()
+    if hashlib.sha256(data).digest() != hashlib.sha256(asset.read_bytes()).digest():
+        raise SystemExit('Frontend asset mismatch: ' + asset.name)
+print(f'Frontend asset GET/hash checks passed: {len(assets)}')
+PY
 trap - ERR INT TERM
 echo "部署成功：$PUBLIC_ORIGIN"
 echo "提交：$SOURCE_COMMIT"

@@ -24,7 +24,7 @@ APP_ROOT="/data/nicokara"
 RELEASE_DIR="$APP_ROOT/releases/$RELEASE_ID"
 SHARED_DIR="$APP_ROOT/shared"
 
-for command_name in sha256sum tar python3 node ffmpeg nginx curl systemctl readlink; do
+for command_name in sha256sum tar python3 node ffmpeg nginx curl systemctl readlink flock; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "缺少运行环境命令: $command_name，请先完成部署步骤 2。" >&2
     exit 1
@@ -58,23 +58,19 @@ echo "校验部署包..."
     sha256sum -c -
 )
 
-CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)"
-if [[ -e "$RELEASE_DIR" ]]; then
-  if [[ "$CURRENT_RELEASE" == "$RELEASE_DIR" ]]; then
-    echo "当前服务正在使用目标发布目录，先停止服务后再覆盖。" >&2
-    systemctl stop nicokara-frontend nicokara-backend 2>/dev/null || true
-    if systemctl is-active --quiet nicokara-backend || systemctl is-active --quiet nicokara-frontend; then
-      echo "无法停止当前服务，拒绝覆盖: $RELEASE_DIR" >&2
-      exit 1
-    fi
-  fi
-  [[ -d "$RELEASE_DIR" && ! -L "$RELEASE_DIR" ]] || {
-    echo "发布目录不是普通目录，拒绝覆盖: $RELEASE_DIR" >&2
-    exit 1
-  }
-  EXISTING_RELEASE_BACKUP="$RELEASE_DIR.previous-$(date +%Y%m%d-%H%M%S)-$$"
-  mv -- "$RELEASE_DIR" "$EXISTING_RELEASE_BACKUP"
-  echo "已有发布目录已保留为: $EXISTING_RELEASE_BACKUP"
+# This historical installer is for fresh installations only. Upgrades must
+# preserve the existing environment, services, database and release paths.
+[[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "Invalid release ID" >&2; exit 1; }
+mkdir -p "$APP_ROOT"
+exec 9>"$APP_ROOT/deploy.lock"
+flock -n 9 || { echo "Deployment already running" >&2; exit 1; }
+if [[ -e "$APP_ROOT/current" || -L "$APP_ROOT/current" || -f "$SHARED_DIR/nicokara.env" ]]; then
+  echo "已有部署，请使用新版本部署包内的升级脚本。" >&2
+  exit 1
+fi
+if [[ -e "$RELEASE_DIR" || -L "$RELEASE_DIR" ]]; then
+  echo "发布目录已存在，请使用新的发布编号。" >&2
+  exit 1
 fi
 mkdir -p \
   "$RELEASE_DIR" \

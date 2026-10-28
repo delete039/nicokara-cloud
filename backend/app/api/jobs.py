@@ -376,7 +376,8 @@ def start_upload_chunks(
                 settings.storage_dir,
                 ticket_id,
             )
-            expected = payload.model_dump()
+            # Existing sessions own their chunk boundaries across client upgrades.
+            expected = payload.model_dump(exclude={"chunk_size_bytes", "total_chunks"})
             expected["video_name"] = safe_display_name(payload.video_name)
             if any(metadata.get(key) != value for key, value in expected.items()):
                 raise HTTPException(status_code=409, detail="上传分片信息与已存在的会话不一致")

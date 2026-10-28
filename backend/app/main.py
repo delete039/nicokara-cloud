@@ -12,6 +12,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.jobs import router as jobs_router
 from app.api.jobs import upload_tickets_router
@@ -343,7 +344,7 @@ def create_app(
 
     app = FastAPI(
         title=resolved_settings.app_name,
-        version="4.2",
+        version="4.3",
         lifespan=lifespan,
     )
     app.add_middleware(UploadStorageMiddleware, settings=resolved_settings)
@@ -427,6 +428,10 @@ def create_app(
                 and path.endswith("/timeline")
             )
         )
+        chunk_details = ({
+            "chunk_index": int(path.rsplit("/", 1)[1]),
+            "content_length": request.headers.get("content-length"),
+        } if chunk_upload_request else {})
         event_logger = getattr(app.state, "event_logger", None)
         started = time.perf_counter()
         with event_context(request_id=request_id, component="fastapi"), storage_write_context(resolved_settings.min_free_disk_bytes):
@@ -443,8 +448,8 @@ def create_app(
             try:
                 response = await call_next(request)
             except Exception as exc:
-                if event_logger is not None and not suppress_event:
-                    event_logger.emit(
+                if event_logger is not None and (not suppress_event or chunk_upload_request):
+                    await run_in_threadpool(event_logger.emit,
                         event="request.failed",
                         level="ERROR",
                         category="request",
@@ -455,16 +460,21 @@ def create_app(
                         details={
                             "method": method,
                             "route": path,
+                            **chunk_details,
                             **exception_details(exc),
                         },
                     )
                 raise
-            if event_logger is not None and not suppress_event:
+            duration_ms = (time.perf_counter() - started) * 1000
+            slow_chunk = chunk_upload_request and duration_ms >= 30_000
+            if event_logger is not None and (
+                not suppress_event or (chunk_upload_request and (response.status_code >= 400 or slow_chunk))
+            ):
                 route = request.scope.get("route")
                 route_path = getattr(route, "path", path)
-                event_logger.emit(
+                await run_in_threadpool(event_logger.emit,
                     event="request.completed",
-                    level="WARNING" if response.status_code >= 400 else "INFO",
+                    level="WARNING" if response.status_code >= 400 or slow_chunk else "INFO",
                     category="request",
                     message="HTTP 请求处理完成",
                     reference_type=reference_type,
@@ -474,6 +484,7 @@ def create_app(
                         "method": method,
                         "route": route_path,
                         "status_code": response.status_code,
+                        **chunk_details,
                     },
                 )
         response.headers["X-Request-ID"] = request_id

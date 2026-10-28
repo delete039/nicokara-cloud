@@ -83,14 +83,15 @@ class RecordingRunner:
         self.job_ids.append(job_id)
 
 
+@pytest.mark.parametrize("chunk_size", [512 * 1024, 8 * 1024 * 1024])
 def test_audio_upload_resumes_missing_chunks_and_creates_job(
     tmp_path: Path,
+    chunk_size: int,
 ) -> None:
     audio = (
         b"\x00\x00\x00\x18ftypM4A "
-        + b"a" * (TEST_AUDIO_UPLOAD_CHUNK_BYTES * 2 + 1024)
+        + b"a" * (chunk_size * 2 + 1024)
     )
-    chunk_size = TEST_AUDIO_UPLOAD_CHUNK_BYTES
     submission_id = "11111111-2222-4333-8444-555555555555"
     request = {
         "audio_name": "song.audio.m4a",
@@ -120,7 +121,14 @@ def test_audio_upload_resumes_missing_chunks_and_creates_job(
             audio[2 * chunk_size : 3 * chunk_size],
         )
 
-        resumed = client.post("/api/v1/browser/audio-uploads", json=request)
+        # A newer browser proposes smaller parts, but an existing session keeps
+        # its original boundaries and already persisted bytes.
+        resumed = client.post("/api/v1/browser/audio-uploads", json={
+            **request, "chunk_size_bytes": 512 * 1024,
+            "total_chunks": (len(audio) + 512 * 1024 - 1) // (512 * 1024),
+        })
+        assert resumed.status_code == 200
+        assert resumed.json()["chunk_size_bytes"] == chunk_size
         for index in resumed.json()["missing_chunk_indices"]:
             upload_audio_chunk(
                 client,
@@ -250,7 +258,7 @@ def test_audio_upload_rejects_nonstandard_chunk_size(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "音频分片大小必须为 8 MiB"
+    assert "分片大小" in response.json()["detail"]
 
 
 def test_audio_upload_accepts_overlapping_retries_for_the_same_chunk(

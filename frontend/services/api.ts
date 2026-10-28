@@ -17,7 +17,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 const UPLOAD_RECOVERY_TIMEOUT_MS = 120_000;
 const UPLOAD_RECOVERY_POLL_INTERVAL_MS = 3_000;
 const UNKNOWN_UPLOAD_RESULT_STATUSES = new Set([0, 524]);
-const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE_BYTES = 512 * 1024;
+const UPLOAD_HARD_TIMEOUT_MS = 15 * 60_000;
 const UPLOAD_REQUEST_ATTEMPTS = 3;
 const UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const INSTRUMENTAL_DOWNLOAD_ATTEMPTS = 3;
@@ -220,12 +221,28 @@ function uploadForm(url: string, data: FormData, onProgress: (bytes: number) => 
     assertUploadActive(signal);
     const xhr = new XMLHttpRequest();
     const abort = () => xhr.abort();
-    const cleanup = () => signal?.removeEventListener("abort", abort);
+    let idleTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let lastLoaded = 0;
+    const cleanup = () => {
+      globalThis.clearTimeout(idleTimer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const resetIdleTimer = () => {
+      globalThis.clearTimeout(idleTimer);
+      idleTimer = globalThis.setTimeout(() => xhr.abort(), UPLOAD_REQUEST_TIMEOUT_MS);
+    };
     xhr.open("POST", url);
-    xhr.timeout = UPLOAD_REQUEST_TIMEOUT_MS;
+    // A slow transfer can exceed two minutes as long as bytes keep moving.
+    // The separate hard cap still bounds an endlessly trickling connection.
+    xhr.timeout = UPLOAD_HARD_TIMEOUT_MS;
     xhr.upload.addEventListener("progress", (event) => {
+      if (event.loaded > lastLoaded) {
+        lastLoaded = event.loaded;
+        resetIdleTimer();
+      }
       if (event.lengthComputable) onProgress(event.loaded);
     });
+    xhr.upload.addEventListener("load", resetIdleTimer);
     xhr.addEventListener("load", () => {
       cleanup();
       if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
@@ -238,7 +255,13 @@ function uploadForm(url: string, data: FormData, onProgress: (bytes: number) => 
       });
     }
     signal?.addEventListener("abort", abort, { once: true });
-    xhr.send(data);
+    resetIdleTimer();
+    try {
+      xhr.send(data);
+    } catch (reason) {
+      cleanup();
+      reject(reason);
+    }
   });
 }
 

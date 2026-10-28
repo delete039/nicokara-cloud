@@ -33,7 +33,7 @@ describe("announcement configuration", () => {
     expect(announcement).toMatchObject({
       id: "2026-10-28-update-v1",
       title: "2026-10-28 更新日志",
-      version: "v4.2",
+      version: `v${readFileSync(new URL("../../VERSION", import.meta.url), "utf-8").trim()}`,
       publishedAt: "2026-10-28",
       buttonLabel: "わかった",
     });

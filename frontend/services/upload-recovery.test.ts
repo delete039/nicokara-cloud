@@ -4,7 +4,8 @@ import { createJob, createUploadTicket, submitCloudRender } from "./api";
 class UploadRequest {
   static instances: UploadRequest[] = [];
   static pending = false;
-  upload = { addEventListener: vi.fn() };
+  uploadListeners: Record<string, (event: { loaded: number; lengthComputable: boolean }) => void> = {};
+  upload = { addEventListener: vi.fn((name: string, callback: (event: { loaded: number; lengthComputable: boolean }) => void) => { this.uploadListeners[name] = callback; }) };
   status = 200;
   responseText = "{}";
   timeout = 0;
@@ -38,6 +39,57 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("resumable uploads", () => {
+  it("proposes small parts but respects existing server chunk boundaries", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json(ticket)).mockResolvedValueOnce(json(session))
+      .mockResolvedValueOnce(json({ id: "job-1" }));
+    vi.stubGlobal("fetch", fetcher);
+    await createJob(input, vi.fn());
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).chunk_size_bytes).toBe(512 * 1024);
+    const data = UploadRequest.instances[0].send.mock.calls[0] as unknown as [FormData];
+    expect((data[0].get("chunk") as Blob).size).toBe(8);
+  });
+
+  it("allows continued progress beyond two minutes, then expires a stalled response", async () => {
+    vi.useFakeTimers();
+    UploadRequest.pending = true;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(ticket)).mockResolvedValueOnce(json(session)));
+    const controller = new AbortController();
+    const request = createJob(input, vi.fn(), undefined, controller.signal);
+    const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    const xhr = UploadRequest.instances[0];
+    expect(xhr.timeout).toBeGreaterThan(180_000);
+    for (let loaded = 1; loaded <= 3; loaded++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      xhr.uploadListeners.progress({ loaded, lengthComputable: true });
+      expect(xhr.abort).not.toHaveBeenCalled();
+    }
+    xhr.uploadListeners.load({ loaded: 3, lengthComputable: true });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(xhr.abort).toHaveBeenCalledOnce();
+    controller.abort();
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not extend inactivity on duplicate progress events", async () => {
+    vi.useFakeTimers();
+    UploadRequest.pending = true;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(ticket)).mockResolvedValueOnce(json(session)));
+    const controller = new AbortController();
+    const request = createJob(input, vi.fn(), undefined, controller.signal);
+    const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    const xhr = UploadRequest.instances[0];
+    xhr.uploadListeners.progress({ loaded: 1, lengthComputable: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    xhr.uploadListeners.progress({ loaded: 1, lengthComputable: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(xhr.abort).toHaveBeenCalledOnce();
+    controller.abort();
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("sends only missing video chunks", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json(ticket)).mockResolvedValueOnce(json(session))
       .mockResolvedValueOnce(json({ id: "job-1" }));

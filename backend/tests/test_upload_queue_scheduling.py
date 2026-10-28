@@ -13,6 +13,23 @@ from app.core.config import Settings
 from app.main import create_app
 
 
+def test_resuming_video_keeps_existing_chunk_boundaries(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path)
+    video = fake_mp4(b"a" * 900000)
+    with TestClient(create_app(settings, runner=RecordingRunner())) as client:
+        ticket_id = create_ticket(client, name="song.mp4", size=len(video), forwarded_for="192.0.2.1").json()["id"]
+        first = start_chunked_upload(client, ticket_id, name="song.mp4", size=len(video), chunk_size=8 * 1024 * 1024)
+        assert first.status_code == 200
+        assert upload_chunk(client, ticket_id, 0, video).status_code == 200
+        resumed = start_chunked_upload(client, ticket_id, name="song.mp4", size=len(video), chunk_size=512 * 1024)
+        assert resumed.status_code == 200
+        assert resumed.json()["chunk_size_bytes"] == 8 * 1024 * 1024
+        assert resumed.json()["received_chunk_indices"] == [0]
+        assert resumed.json()["missing_chunk_indices"] == []
+        mismatch = start_chunked_upload(client, ticket_id, name="other.mp4", size=len(video), chunk_size=512 * 1024)
+        assert mismatch.status_code == 409
+
+
 def fake_mp4(payload: bytes = b"video-data") -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom" + payload
 

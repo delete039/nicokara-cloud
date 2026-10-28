@@ -584,6 +584,63 @@ def test_video_chunk_upload_skips_blocking_request_logs_but_keeps_business_event
     }
 
 
+def test_failed_chunk_is_visible_at_default_log_level(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", storage_dir=tmp_path / "jobs",
+                        processing_enabled=False, cleanup_enabled=False)
+    submission_id = "10000000-0000-4000-8000-000000000102"
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            f"/api/v1/browser/audio-uploads/{submission_id}/chunks/part/0",
+            headers={"X-Request-ID": "failed-chunk-test"},
+            files={"chunk": ("part", b"test", "application/octet-stream")},
+        )
+        events = client.app.state.database.list_event_logs(
+            request_id="failed-chunk-test", category="request",
+        )["items"]
+    assert response.status_code == 404
+    assert len(events) == 1
+    assert events[0]["level"] == "WARNING"
+    assert events[0]["reference_id"] == submission_id
+    assert events[0]["details"]["status_code"] == 404
+    assert events[0]["details"]["chunk_index"] == 0
+    assert int(events[0]["details"]["content_length"]) > 4
+
+
+def test_slow_successful_chunk_is_logged_without_blocking_event_loop(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+    import threading
+    from types import SimpleNamespace
+    main_module = importlib.import_module("app.main")
+    settings = Settings(data_dir=tmp_path / "data", storage_dir=tmp_path / "jobs",
+                        processing_enabled=False, cleanup_enabled=False)
+    submission_id = "10000000-0000-4000-8000-000000000103"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        assert client.post("/api/v1/browser/audio-uploads", json={
+            "audio_name": "song.wav", "audio_size_bytes": 4,
+            "original_video_name": "song.mp4", "original_video_size_bytes": 100,
+            "chunk_size_bytes": 512 * 1024, "total_chunks": 1,
+            "client_submission_id": submission_id,
+        }).status_code == 201
+        ticks = iter([0, 31, 31])
+        monkeypatch.setattr(main_module, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
+        emitted_threads = []
+        emit = app.state.event_logger.emit
+        def recording_emit(**kwargs):
+            if kwargs.get("event") == "request.completed":
+                emitted_threads.append(threading.current_thread().name)
+            return emit(**kwargs)
+        monkeypatch.setattr(app.state.event_logger, "emit", recording_emit)
+        response = client.post(f"/api/v1/browser/audio-uploads/{submission_id}/chunks/part/0",
+                               files={"chunk": ("part", b"test")})
+        events = app.state.database.list_event_logs(category="request", reference_id=submission_id)["items"]
+    assert response.status_code == 200
+    assert len(events) == 1
+    assert events[0]["duration_ms"] == 31000
+    assert events[0]["level"] == "WARNING"
+    assert emitted_threads == ["AnyIO worker thread"]
+
+
 def test_periodic_cleanup_applies_event_log_retention(tmp_path: Path) -> None:
     database = Database(tmp_path / "events.sqlite3")
     database.initialize()

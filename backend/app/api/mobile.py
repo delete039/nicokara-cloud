@@ -65,7 +65,8 @@ from app.subtitle.kirakara_generator import KirakaraAssConfig, KirakaraAssGenera
 router = APIRouter(tags=["browser processing"])
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 MAX_LOCAL_MEDIA_BYTES = 300 * 1024 * 1024
-AUDIO_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+AUDIO_UPLOAD_CHUNK_BYTES = 512 * 1024
+LEGACY_AUDIO_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 def audio_upload_response(
@@ -115,8 +116,8 @@ def create_or_resume_audio_upload(
         raise HTTPException(status_code=415, detail="仅支持 WAV、MP3、M4A、AAC、FLAC 或 OGG 音频")
     if not 0 < payload.audio_size_bytes <= settings.max_audio_bytes:
         raise HTTPException(status_code=413, detail="音频文件超过大小限制")
-    if payload.chunk_size_bytes != AUDIO_UPLOAD_CHUNK_BYTES:
-        raise HTTPException(status_code=400, detail="音频分片大小必须为 8 MiB")
+    if payload.chunk_size_bytes not in {AUDIO_UPLOAD_CHUNK_BYTES, LEGACY_AUDIO_UPLOAD_CHUNK_BYTES}:
+        raise HTTPException(status_code=400, detail="音频分片大小必须为 512 KiB 或 8 MiB")
 
     ticket_id = submission_id
     with database.locked_upload_admission() as connection:
@@ -150,8 +151,6 @@ def create_or_resume_audio_upload(
                 "upload_kind": "audio",
                 "video_name": audio_name,
                 "video_size_bytes": payload.audio_size_bytes,
-                "chunk_size_bytes": payload.chunk_size_bytes,
-                "total_chunks": payload.total_chunks,
                 "original_video_name": original_video_name,
                 "original_video_size_bytes": payload.original_video_size_bytes,
                 "client_submission_id": submission_id,
@@ -172,8 +171,8 @@ def create_or_resume_audio_upload(
             details={
                 "resumed": response.status_code == status.HTTP_200_OK,
                 "audio_size_bytes": payload.audio_size_bytes,
-                "chunk_size_bytes": payload.chunk_size_bytes,
-                "total_chunks": payload.total_chunks,
+                "chunk_size_bytes": metadata["chunk_size_bytes"],
+                "total_chunks": metadata["total_chunks"],
                 "original_video_size_bytes": (
                     payload.original_video_size_bytes
                 ),
