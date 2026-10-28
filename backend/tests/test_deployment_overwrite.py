@@ -14,7 +14,9 @@ def test_update_locks_before_reading_current_or_mutating_directories() -> None:
     assert script.index("flock -n 9") < script.index('PREVIOUS_RELEASE="$(readlink')
     assert script.index("flock -n 9") < script.index('mkdir -p "$RELEASE_DIR"')
     assert 'mv -- "$path" "$archived"' not in script
-    assert "httpx.Client().close()" in script
+    assert "httpx.Client(trust_env=False).close()" in script
+    assert 'PIP_CACHE_DIR="$APP_ROOT/cache/pip"' in script
+    assert 'install -d -o root -g root -m 0755 "$PIP_CACHE_DIR"' in script
     assert "response.read()" in script
     assert "hashlib.sha256(data)" in script
 

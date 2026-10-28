@@ -125,8 +125,8 @@ tar -xzf "$ARCHIVE_PATH" -C "$RELEASE_DIR" --strip-components=1 --no-same-owner
 echo "安装新版本 Python 依赖，旧服务此时继续运行。"
 python3 -m venv "$RELEASE_DIR/backend/.venv"
 PYTHON="$RELEASE_DIR/backend/.venv/bin/python"
-export PIP_CACHE_DIR="$SHARED/cache/pip"
-mkdir -p "$PIP_CACHE_DIR"
+export PIP_CACHE_DIR="$APP_ROOT/cache/pip"
+install -d -o root -g root -m 0755 "$PIP_CACHE_DIR"
 PIP_INDEX="${NICOKARA_PIP_INDEX_URL:-https://pypi.org/simple}"
 "$PYTHON" -m pip install --disable-pip-version-check --timeout 120 --retries 3 --index-url "$PIP_INDEX" --upgrade pip
 TORCH_VARIANT=cpu
@@ -136,7 +136,7 @@ if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then TORCH
   "torch==2.7.1+$TORCH_VARIANT" "torchaudio==2.7.1+$TORCH_VARIANT" "torchvision==0.22.1+$TORCH_VARIANT"
 "$PYTHON" -m pip install --disable-pip-version-check --timeout 120 --retries 3 \
   --index-url "$PIP_INDEX" -e "$RELEASE_DIR/backend[ai]"
-"$PYTHON" -c 'import app.main, torch, torchaudio, faster_whisper, audio_separator, httpx; httpx.Client().close(); assert hasattr(torchaudio.pipelines, "MMS_FA")'
+"$PYTHON" -c 'import app.main, torch, torchaudio, faster_whisper, audio_separator, httpx; httpx.Client(trust_env=False).close(); assert hasattr(torchaudio.pipelines, "MMS_FA")'
 chmod -R a+rX "$RELEASE_DIR"
 
 # Preserve the live announcement and worker settings.
