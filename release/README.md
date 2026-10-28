@@ -2,7 +2,8 @@
 
 发布工具和模板保留在本目录根部，生成的部署包、校验文件和部署说明按规范版本归档到对应版本目录。
 
-当前源码版本为 `v4.2`，但本次版本整理不生成新的部署包。目录中已有的 `v0.3.0-alpha.*` 产物属于历史部署物，不能仅通过改文件名伪装成 `v4.2`；需要发布新包时重新运行 `package_release.py`。
+当前源码版本为 `v4.2`，最新部署包位于 `release/artifacts/v4.2/`。目录中已有的
+`v0.3.0-alpha.*` 产物属于历史部署物，仅用于追溯，不能作为当前版本部署包。
 
 修改版本元数据后，先运行：
 
@@ -16,4 +17,18 @@ python release/check_version.py
 release/artifacts/v4.2/nicokara-cloud-v4.2-<shortsha>-<buildtime>.tar.gz
 release/artifacts/v4.2/deploy-nicokara-cloud-v4.2-<shortsha>-<buildtime>.sh
 release/artifacts/v4.2/部署说明-v4.2-<shortsha>-<buildtime>.md
+```
+
+SSH 面板已有 `/data/nicokara` 部署时，最简升级命令为：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/install-latest.sh | sudo bash
+```
+
+也可以通过环境变量覆盖网站地址和产物地址：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/install-latest.sh | \
+  sudo env NICOKARA_RELEASE_BASE_URL=https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/artifacts/v4.2 \
+  bash -s -- https://your-domain.example
 ```
