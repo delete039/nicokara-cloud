@@ -64,6 +64,7 @@ export function KirakaraRenderActions({
             <KirakaraExportControls video={video} timeline={timeline} profile={capabilities.profile}
               style={style} jobId={jobId} vocalMode={mode}
               disabled={disabled || (activeLocalMode !== null && activeLocalMode !== mode)}
+              instrumentalReady={Boolean(job?.instrumental_ready)}
               counterpartVideo={localOutputs[mode === "on" ? "off" : "on"] ?? null}
               onExportingChange={(exporting) => {
                 setActiveLocalMode((previous) => exporting

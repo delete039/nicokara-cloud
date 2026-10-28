@@ -11,7 +11,10 @@ import {
   exportKirakaraVideo,
   replaceKirakaraVideoAudio,
 } from "@/lib/kirakara-video-export";
-import { getOrPrepareInstrumentalAudio } from "@/services/api";
+import {
+  getInstrumentalAudio,
+  getOrPrepareInstrumentalAudio,
+} from "@/services/api";
 
 type ExportState = "idle" | "exporting" | "completed" | "error";
 type ExportPhase = "audio" | "rendering" | "replacing" | "validating";
@@ -24,8 +27,14 @@ export async function resolveExportAudio(
     signal?: AbortSignal,
   ) => Promise<File> = getOrPrepareInstrumentalAudio,
   signal?: AbortSignal,
+  instrumentalReady = false,
+  readyLoader: (
+    jobId: string,
+    signal?: AbortSignal,
+  ) => Promise<File> = getInstrumentalAudio,
 ): Promise<File | undefined> {
-  return vocalMode === "off" ? loader(jobId, signal) : undefined;
+  if (vocalMode !== "off") return undefined;
+  return (instrumentalReady ? readyLoader : loader)(jobId, signal);
 }
 
 export function KirakaraExportControls({
@@ -36,6 +45,7 @@ export function KirakaraExportControls({
   jobId = "",
   vocalMode = "on",
   disabled = false,
+  instrumentalReady = false,
   counterpartVideo = null,
   onCompleted,
   onExportingChange,
@@ -47,6 +57,7 @@ export function KirakaraExportControls({
   jobId?: string;
   vocalMode?: string;
   disabled?: boolean;
+  instrumentalReady?: boolean;
   counterpartVideo?: File | null;
   onCompleted?: (file: File | null) => void;
   onExportingChange?: (exporting: boolean) => void;
@@ -95,6 +106,8 @@ export function KirakaraExportControls({
         vocalMode,
         getOrPrepareInstrumentalAudio,
         controller.signal,
+        instrumentalReady,
+        getInstrumentalAudio,
       );
       let result;
       if (counterpartVideo) {
@@ -214,7 +227,11 @@ export function KirakaraExportControls({
       )}
       <p className="mt-3 text-xs text-muted-foreground">
         {counterpartVideo
-          ? "复用已生成的视频画面，仅替换当前音轨，不会重新渲染字幕。"
+          ? vocalMode === "off" && instrumentalReady
+            ? "复用已生成的视频画面，直接使用上一步已分离的伴奏音轨，仅替换音轨。"
+            : "复用已生成的视频画面，仅替换当前音轨，不会重新渲染字幕。"
+          : vocalMode === "off" && instrumentalReady
+            ? "使用上一步已分离的伴奏音轨，不会重复分离；这是串联导出的第一步。"
           : "这是串联导出的第一步，会生成字幕画面；第二个版本将仅替换音轨。"}
       </p>
     </div>
