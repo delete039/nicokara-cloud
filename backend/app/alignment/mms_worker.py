@@ -55,6 +55,8 @@ def recognize_non_silent_ranges(
 def map_packed_time_ms(
     packed_time_ms: int | float,
     non_silent_ranges: list[tuple[float, float]],
+    *,
+    is_end: bool = False,
 ) -> int:
     """Map a timestamp in packed non-silent audio back to the source audio."""
     if not non_silent_ranges:
@@ -63,7 +65,8 @@ def map_packed_time_ms(
     cumulative_duration = 0.0
     for start_seconds, end_seconds in non_silent_ranges:
         segment_duration = end_seconds - start_seconds
-        if adjusted_seconds < cumulative_duration + segment_duration:
+        boundary = cumulative_duration + segment_duration
+        if adjusted_seconds < boundary or (is_end and adjusted_seconds <= boundary):
             return round(
                 (start_seconds + adjusted_seconds - cumulative_duration)
                 * 1000
@@ -126,7 +129,7 @@ def _adjust_line_boundaries(
             end_ms = math.ceil(end * 1000)
             if start_ms <= line_end <= end_ms:
                 first_end = int(spans[first_index]["end_ms"])
-                if start_ms < first_end:
+                if start_ms < first_end and abs(start_ms - line_start) <= 250:
                     spans[first_index]["start_ms"] = start_ms
                 break
 
@@ -140,8 +143,10 @@ def _adjust_line_boundaries(
         candidate = next(
             (
                 math.ceil(end * 1000)
-                for _, end in fine_ranges
-                if current_end <= math.ceil(end * 1000) < next_start
+                for start, end in fine_ranges
+                if round(start * 1000) <= current_end
+                and current_end <= math.ceil(end * 1000) < next_start
+                and math.ceil(end * 1000) - current_end <= 250
             ),
             None,
         )
@@ -151,7 +156,9 @@ def _adjust_line_boundaries(
                 candidate,
             )
             continue
-        if math.isfinite(next_start) and any(
+        # RMS detects music as well as vocals. Only refine a nearby edge;
+        # never stretch the last phoneme through an instrumental passage.
+        if math.isfinite(next_start) and next_start - current_end <= 250 and any(
             round(start * 1000) <= current_end
             and math.ceil(end * 1000) >= next_start
             for start, end in fine_ranges
@@ -236,11 +243,15 @@ def align_audio(
 
     model = bundle.get_model().to(device)
     try:
+        from app.alignment.ctc import infer_emissions, align_moras
+
+        model.eval()
         tokenizer = bundle.get_tokenizer()
-        aligner = bundle.get_aligner()
         with torch.inference_mode():
-            emission, _ = model(waveform.to(device))
-            token_spans = aligner(emission[0], tokenizer(tokens))
+            emission = infer_emissions(
+                waveform, lambda chunk: model(chunk.to(device))[0]
+            )
+            token_spans = align_moras(emission[0].numpy(), tokenizer(tokens), blank=0)
     finally:
         del model
         if torch.cuda.is_available():
@@ -270,6 +281,7 @@ def align_audio(
                 "end_ms": map_packed_time_ms(
                     token_group[-1].end * frame_ms,
                     coarse_ranges,
+                    is_end=True,
                 ),
                 "score": max(0.0, min(1.0, score)),
             }

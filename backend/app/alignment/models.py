@@ -147,8 +147,10 @@ def shift_timeline(timeline: LyricTimeline, offset_ms: int) -> LyricTimeline:
     )
 
 
-def close_mora_gaps(timeline: LyricTimeline) -> LyricTimeline:
-    """Extend each mora through positive gaps inside its own lyric line."""
+def close_mora_gaps(
+    timeline: LyricTimeline, *, max_gap_ms: int | None = None,
+) -> LyricTimeline:
+    """Close nearby highlighting gaps, optionally preserving acoustic silence."""
     lines: list[AlignedLine] = []
     for line in timeline.lines:
         tokens = [
@@ -169,6 +171,9 @@ def close_mora_gaps(timeline: LyricTimeline) -> LyricTimeline:
             current_mora = current_token.moras[current_mora_index]
             next_mora = next_token.moras[next_mora_index]
             if current_mora.end_ms >= next_mora.start_ms:
+                continue
+            if (max_gap_ms is not None and
+                    next_mora.start_ms - current_mora.end_ms > max_gap_ms):
                 continue
 
             boundary = next_mora.start_ms

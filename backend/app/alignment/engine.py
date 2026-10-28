@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +40,39 @@ class ResilientAlignmentEngine:
         self.robust_primary = robust_primary
         self.event_logger = event_logger
 
+    def _attempt(self, aligner, lyrics, transcript, audio_path, alignment_mode):
+        started = time.monotonic()
+        try:
+            timeline = aligner.align(lyrics, transcript, audio_path=audio_path)
+        except Exception as exc:
+            if self.event_logger is not None:
+                self.event_logger.emit(
+                    event="external.alignment_attempt_failed",
+                    level="WARNING", category="external", component="fa_kara",
+                    message="时间轴模型尝试失败",
+                    details={
+                        "alignment_mode": alignment_mode,
+                        "selected_component": type(aligner).__name__,
+                        "duration_seconds": round(time.monotonic() - started, 3),
+                        **exception_details(exc, include_traceback=False),
+                    },
+                )
+            raise
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                event="external.alignment_completed",
+                level="INFO", category="external", component="fa_kara",
+                message="时间轴模型对齐完成",
+                details={
+                    "alignment_mode": alignment_mode,
+                    "alignment_engine": timeline.alignment_engine,
+                    "alignment_model": timeline.alignment_model,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                    "confidence": timeline.confidence,
+                },
+            )
+        return timeline
+
     def align(
         self,
         lyrics: LyricDocument,
@@ -72,10 +106,8 @@ class ResilientAlignmentEngine:
             selected_label = "robust dual"
             selected_warning = "robust_dual_quality_fallback"
         try:
-            return selected.align(
-                lyrics,
-                transcript,
-                audio_path=audio_path,
+            return self._attempt(
+                selected, lyrics, transcript, audio_path, alignment_mode,
             )
         except Exception as exc:
             if selected is not self.primary:
@@ -85,10 +117,8 @@ class ResilientAlignmentEngine:
                     type(exc).__name__,
                 )
                 try:
-                    timeline = self.primary.align(
-                        lyrics,
-                        transcript,
-                        audio_path=audio_path,
+                    timeline = self._attempt(
+                        self.primary, lyrics, transcript, audio_path, alignment_mode,
                     )
                     return replace(
                         timeline,

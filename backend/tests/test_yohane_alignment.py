@@ -201,32 +201,58 @@ def test_resilient_engine_uses_original_mix_for_alignment_input() -> None:
     assert engine.requires_vocals is False
 
 
-def test_yohane_worker_passes_multichannel_waveform_to_upstream_aligner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("speed", [1.0, 2.0])
+def test_yohane_worker_mixes_once_and_uses_bounded_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, speed: float,
 ) -> None:
     from app.alignment.yohane_worker import align_audio
 
     class Waveform:
-        channels = 2
-
-        def mean(self, **kwargs):
-            raise AssertionError("worker must not mix audio before FA-Kara")
+        def mean(self, axis):
+            assert axis == 0
+            return types.SimpleNamespace(numpy=lambda: "mono audio")
 
     class FakeModel:
         def to(self, device):
+            return self
+
+        def eval(self):
             return self
 
     class FakeAligner:
         def __init__(self, model_dir):
             self.device = None
             self.model = FakeModel()
+            self.blank = 29
+            self.processor = Processor()
 
         def tokenize(self, tokens):
             return [[1] for _ in tokens]
 
-        def align(self, token_ids, waveform, sample_rate):
-            assert waveform.channels == 2
-            return None, [[types.SimpleNamespace(start=1, end=2, score=0.8)]], 16000
+    class Processor:
+        feature_extractor = types.SimpleNamespace(sampling_rate=16000)
+
+        def __call__(self, *, audio, sampling_rate, return_tensors):
+            assert audio == ("mono audio" if speed == 1.0 else "stretched audio")
+            return types.SimpleNamespace(input_values="normalized audio")
+
+    def infer(waveform, callback):
+        assert waveform == "normalized audio"
+        return [types.SimpleNamespace(numpy=lambda: "emission")]
+
+    def align(emission, tokens, *, blank):
+        assert emission == "emission"
+        assert blank == 29
+        return [[types.SimpleNamespace(start=1, end=2, score=0.8)]]
+
+    monkeypatch.setattr("app.alignment.ctc.infer_emissions", infer)
+    monkeypatch.setattr("app.alignment.ctc.align_moras", align)
+    def stretch(audio, *, rate):
+        assert audio == "mono audio" and rate == speed
+        return "stretched audio"
+    monkeypatch.setitem(sys.modules, "librosa", types.SimpleNamespace(
+        effects=types.SimpleNamespace(time_stretch=stretch),
+    ))
 
     fake_torch = types.SimpleNamespace(
         cuda=types.SimpleNamespace(is_available=lambda: False),
@@ -234,6 +260,7 @@ def test_yohane_worker_passes_multichannel_waveform_to_upstream_aligner(
     )
     fake_torchaudio = types.SimpleNamespace(
         load=lambda path: (Waveform(), 16000),
+        functional=types.SimpleNamespace(resample=lambda audio, source, target: audio),
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "torchaudio", fake_torchaudio)
@@ -255,10 +282,10 @@ def test_yohane_worker_passes_multichannel_waveform_to_upstream_aligner(
         model_dir=model_dir,
         source_dir=source_dir,
         device_name="cpu",
-        audio_speed=1.0,
+        audio_speed=speed,
     )
 
-    assert result == [{"start_ms": 20, "end_ms": 40, "score": 0.8}]
+    assert result == [{"start_ms": 20 * speed, "end_ms": 40 * speed, "score": 0.8}]
 
 
 def test_resilient_engine_marks_multivoice_quality_fallback() -> None:
@@ -281,8 +308,12 @@ def test_resilient_engine_marks_multivoice_quality_fallback() -> None:
         def align(self, lyrics, transcript):
             return LyricTimeline(confidence=0.1, alignment_engine="whisper_mora")
 
+    events = []
+    event_logger = types.SimpleNamespace(emit=lambda **event: events.append(event))
+
     result = ResilientAlignmentEngine(
-        primary=Primary(), fallback=Fallback(), multivoice_primary=Yohane()
+        primary=Primary(), fallback=Fallback(), multivoice_primary=Yohane(),
+        event_logger=event_logger,
     ).align(
         sample_lyrics(),
         TranscriptDocument("ja", 1.0, 1.0, "", []),
@@ -292,6 +323,12 @@ def test_resilient_engine_marks_multivoice_quality_fallback() -> None:
 
     assert result.alignment_engine == "fa_kara_mms"
     assert "multivoice_yohane_quality_fallback" in result.warnings
+    assert [event["event"] for event in events] == [
+        "external.alignment_attempt_failed", "external.alignment_completed"
+    ]
+    assert events[0]["details"]["selected_component"] == "Yohane"
+    assert "duration exceeds" in events[0]["details"]["error_summary"]
+    assert events[1]["details"]["alignment_engine"] == "fa_kara_mms"
 
 
 def test_resilient_engine_routes_robust_mode_to_dual_aligner() -> None:

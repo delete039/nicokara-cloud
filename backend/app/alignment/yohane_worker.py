@@ -34,6 +34,7 @@ def align_audio(
     import torch
     import torchaudio
     from align_yohane import Wav2Vec2ForcedAligner
+    from app.alignment.ctc import infer_emissions, align_moras
 
     if audio_speed <= 0:
         raise ValueError("Yohane audio speed must be greater than zero")
@@ -44,15 +45,28 @@ def align_audio(
         raise RuntimeError("Yohane CUDA device was requested but is unavailable")
     device = torch.device(requested)
 
-    # FA-Kara's Wav2Vec2 aligner performs the channel mixdown itself. Mixing
-    # here first turns its second ``mean(0)`` into a scalar on current torch,
-    # which makes Transformers fail with ``len() of unsized object``.
     waveform, sample_rate = torchaudio.load(str(audio_path))
     aligner = Wav2Vec2ForcedAligner(str(model_dir))
     aligner.device = device
     aligner.model.to(device)
+    aligner.model.eval()
     token_ids = aligner.tokenize(tokens)
-    _, token_spans, target_rate = aligner.align(token_ids, waveform, sample_rate)
+    target_rate = int(aligner.processor.feature_extractor.sampling_rate)
+    waveform = torchaudio.functional.resample(waveform, sample_rate, target_rate)
+    # Mix down exactly once, then normalize the complete recording once so
+    # overlapping windows share the same input scale.
+    mono = waveform.mean(0).numpy()
+    if audio_speed != 1.0:
+        import librosa
+        mono = librosa.effects.time_stretch(mono, rate=audio_speed)
+    inputs = aligner.processor(audio=mono, sampling_rate=target_rate, return_tensors="pt")
+    emission = infer_emissions(
+        inputs.input_values,
+        lambda chunk: torch.nn.functional.log_softmax(
+            aligner.model(input_values=chunk.to(device)).logits, dim=-1
+        ),
+    )
+    token_spans = align_moras(emission[0].numpy(), token_ids, blank=aligner.blank)
     if len(token_spans) != len(tokens):
         raise RuntimeError("Yohane returned incomplete token spans")
 

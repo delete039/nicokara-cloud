@@ -588,6 +588,7 @@ def test_fa_kara_time_mapping_restores_packed_audio_positions() -> None:
     assert map_packed_time_ms(0, ranges) == 1000
     assert map_packed_time_ms(500, ranges) == 1500
     assert map_packed_time_ms(1000, ranges) == 4000
+    assert map_packed_time_ms(1000, ranges, is_end=True) == 2000
     assert map_packed_time_ms(1250, ranges) == 4250
     assert map_packed_time_ms(4000, ranges) == 6000
 
@@ -649,6 +650,31 @@ def test_fa_kara_line_boundary_correction_does_not_collapse_first_mora() -> None
 
     assert corrected[0]["start_ms"] == 1000
     assert corrected[0]["end_ms"] == 1100
+
+
+def test_line_tail_does_not_absorb_instrumental_outro_or_next_activity():
+    from app.alignment.mms_worker import _adjust_line_boundaries
+
+    for fine_ranges in [[(0.0, 60.0)], [(40.0, 40.1)]]:
+        spans = [{"start_ms": 1000, "end_ms": 1200, "score": 0.9}]
+        assert _adjust_line_boundaries(spans, [1], [(0.0, 60.0)], fine_ranges) == [
+            {"start_ms": 1000, "end_ms": 1200, "score": 0.9}
+        ]
+
+
+def test_validated_mora_is_not_stretched_across_a_long_pause(tmp_path):
+    from app.alignment.mms import MMSForcedAligner, MMSMoraSpan
+
+    class Runtime:
+        def align(self, audio_path, tokens, timeout_seconds, *, line_token_counts):
+            return [MMSMoraSpan(1000 + i * 20000, 1200 + i * 20000, .9)
+                    for i in range(len(tokens))]
+
+    timeline = MMSForcedAligner(runtime=Runtime()).align(
+        sample_lyrics(), None, audio_path=tmp_path / "audio.wav",
+    )
+    assert all(mora.end_ms - mora.start_ms == 200
+               for line in timeline.lines for token in line.tokens for mora in token.moras)
 
 
 def test_mms_aligner_rejects_zero_duration_mora_spans(

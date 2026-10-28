@@ -54,7 +54,7 @@ describe("MobileSubmissionProgress", () => {
     );
 
     expect(html).toContain("正在上传音频");
-    expect(html).toContain("8 MiB 分片");
+    expect(html).toContain("音频分片发送");
     expect(html).toContain("自动重试");
     expect(html).toContain("继续");
     expect(html).toContain("原始视频保留在此设备");

@@ -230,7 +230,9 @@ class MMSForcedAligner:
                 "MMS_FA span count does not match the lyric mora count"
             )
         self._validate_spans(spans, line_token_counts)
-        timeline = close_mora_gaps(self._timeline(lyrics, targets, spans))
+        timeline = close_mora_gaps(
+            self._timeline(lyrics, targets, spans), max_gap_ms=250,
+        )
         warnings = list(timeline.warnings)
         for line_index, line in enumerate(timeline.lines, start=1):
             if line.confidence < self.min_confidence:
@@ -316,7 +318,7 @@ class MMSForcedAligner:
         line_token_counts: list[int],
     ) -> None:
         previous_end = 0
-        for span in spans:
+        for index, span in enumerate(spans):
             if (
                 span.start_ms < previous_end
                 or span.end_ms < span.start_ms
@@ -329,7 +331,10 @@ class MMSForcedAligner:
                 )
             if span.end_ms - span.start_ms > self.max_mora_duration_ms:
                 raise ForcedAlignmentError(
-                    "MMS_FA mora duration exceeds the usable limit"
+                    "MMS_FA mora duration exceeds the usable limit: "
+                    f"model={self.alignment_model}, mora_index={index}, "
+                    f"start_ms={span.start_ms}, end_ms={span.end_ms}, "
+                    f"score={span.score:.4f}, limit_ms={self.max_mora_duration_ms}"
                 )
             previous_end = span.end_ms
 
