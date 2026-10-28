@@ -22,13 +22,15 @@ release/artifacts/v4.2/部署说明-v4.2-<shortsha>-<buildtime>.md
 SSH 面板已有 `/data/nicokara` 部署时，最简升级命令为：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/install-latest.sh | sudo bash
+curl -fsSL -H 'Accept: application/vnd.github.raw' \
+  'https://api.github.com/repos/delete039/nicokara-cloud/contents/release/install-latest.sh?ref=main' | sudo bash
 ```
 
 也可以通过环境变量覆盖网站地址和产物地址：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/install-latest.sh | \
-  sudo env NICOKARA_RELEASE_BASE_URL=https://raw.githubusercontent.com/delete039/nicokara-cloud/main/release/artifacts/v4.2 \
+curl -fsSL -H 'Accept: application/vnd.github.raw' \
+  'https://api.github.com/repos/delete039/nicokara-cloud/contents/release/install-latest.sh?ref=main' | \
+  sudo env NICOKARA_RELEASE_BASE_URL=https://api.github.com/repos/delete039/nicokara-cloud/contents/release/artifacts/v4.2 \
   bash -s -- https://your-domain.example
 ```
