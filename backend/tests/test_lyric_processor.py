@@ -557,20 +557,6 @@ def test_deepseek_reviewer_allows_only_surface_anchored_spaces() -> None:
             "literal kana",
         ),
         (
-            "無き声",
-            [
-                {
-                    "line_index": 0,
-                    "start_token": 0,
-                    "end_token": 3,
-                    "surface": "無き声",
-                    "current_reading": "なきこえ",
-                    "corrected_reading": "なきこえ",
-                }
-            ],
-            "no-op",
-        ),
-        (
             "物語",
             [
                 {

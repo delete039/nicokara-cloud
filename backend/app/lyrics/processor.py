@@ -391,7 +391,9 @@ class DeepSeekReadingReviewer:
                     "correction current reading does not match tokens"
                 )
             if corrected_reading == current_reading:
-                raise LyricProcessingError("correction is a no-op")
+                # Providers may include confirmations alongside real corrections.
+                # Source anchors above still have to match; preserve these tokens.
+                continue
             if any(
                 token.alignment_pronunciation is not None for token in selected
             ):
