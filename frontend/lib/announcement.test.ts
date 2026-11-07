@@ -31,25 +31,27 @@ describe("announcement configuration", () => {
 
     expect(announcement).not.toBeNull();
     expect(announcement).toMatchObject({
-      id: "2026-10-28-update-v1",
-      title: "2026-10-28 更新日志",
+      id: "2026-11-07-migration-done",
+      title: "服务器迁移完成",
       version: `v${readFileSync(new URL("../../VERSION", import.meta.url), "utf-8").trim()}`,
-      publishedAt: "2026-10-28",
+      publishedAt: "2026-11-07",
       buttonLabel: "わかった",
     });
     expect(announcement?.content).toEqual([
-      "更新内容：",
-      "1. 优化了歌词粘贴导入提示功能。",
-      "2. 增加了一些返回上一步功能。",
-      "3. 优化了工作台布局，增加了视频预览画中画显示。",
-      "4. ON/OFF VOCAL 替换时改为仅替换声道。",
-      "5. 修复了一些已知的问题。",
+      "为了改善项目的使用体验，近期对服务器进行了迁移升级，目前网络不稳定的问题已基本得到解决，感谢大家一直以来的理解与支持！",
+      "如果大家用得开心，欢迎大家使用微信扫描赞赏码助力我回血新服务器费用( ´▽｀)",
       "QQ 交流群",
       "欢迎加入ニコカラ自动生成器 QQ 交流群：1101583605。",
       "群内可交流使用问题、反馈建议和获取项目更新。",
     ]);
+    expect(announcement?.rewardCode).toEqual({
+      imageUrl: "/reward-code.jpg",
+      caption: "微信赞赏码",
+      alt: "微信赞赏码",
+    });
     const bundle = parseAnnouncementBundle(config);
     expect(bundle?.history.map(({ id }) => id)).toEqual([
+      "2026-11-07-server-migration",
       "2026-10-01-update-v1",
       "2026-09-21-update-v1",
       "2026-09-04-update-v1",
@@ -61,6 +63,43 @@ describe("announcement configuration", () => {
       "2026-08-06-update-v1",
       "2026-08-06-qq-group-v1",
     ]);
+  });
+
+  it("keeps announcements without reward codes unchanged", () => {
+    expect(
+      parseAnnouncement({
+        id: "notice-plain",
+        enabled: true,
+        title: "服务公告",
+        content: ["内容"],
+      }),
+    ).toEqual({
+      id: "notice-plain",
+      enabled: true,
+      title: "服务公告",
+      publishedAt: undefined,
+      content: ["内容"],
+      buttonLabel: "我知道了",
+    });
+  });
+
+  it("drops malformed reward codes", () => {
+    expect(
+      parseAnnouncement({
+        id: "notice-2",
+        enabled: true,
+        title: "服务公告",
+        content: ["内容"],
+        rewardCode: { imageUrl: "/reward.jpg" },
+      }),
+    ).toEqual({
+      id: "notice-2",
+      enabled: true,
+      title: "服务公告",
+      publishedAt: undefined,
+      content: ["内容"],
+      buttonLabel: "我知道了",
+    });
   });
 
   it("parses enabled plain-text announcements", () => {

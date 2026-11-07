@@ -8,15 +8,15 @@ import { HOME_COPY } from "@/lib/ui-copy";
 const steps = [
   {
     icon: FileUp,
-    ...HOME_COPY.steps[0],
+    title: HOME_COPY.steps[0].title,
   },
   {
     icon: Zap,
-    ...HOME_COPY.steps[1],
+    title: HOME_COPY.steps[1].title,
   },
   {
     icon: Download,
-    ...HOME_COPY.steps[2],
+    title: HOME_COPY.steps[2].title,
   },
 ];
 
@@ -33,12 +33,6 @@ export default function Home() {
           </h1>
           <ThemeToggle />
           </div>
-          <p className="mt-7 max-w-xl text-base leading-8 text-muted-foreground sm:text-lg">
-            喜欢的歌太冷门，找不到ニコカラ版本？
-            <br />
-            {HOME_COPY.introduction}
-          </p>
-
           <ol className="mt-10 space-y-5">
             {steps.map((step) => (
               <li key={step.title} className="flex gap-4">
@@ -47,9 +41,6 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="font-medium">{step.title}</p>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                    {step.text}
-                  </p>
                 </div>
               </li>
             ))}

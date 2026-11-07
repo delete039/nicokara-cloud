@@ -1,8 +1,16 @@
 # 更新日志
 
-本文件按项目功能阶段记录已经完成并验证的主要更新。当前版本为 `v4.5`；尚未实现的计划保留在 [ROADMAP.md](./docs/planning/ROADMAP.md)。
+本文件按项目功能阶段记录已经完成并验证的主要更新。当前版本为 `v4.6`；尚未实现的计划保留在 [ROADMAP.md](./docs/planning/ROADMAP.md)。
+
+## v4.6 - 2026-11-07
+
+- 服务器迁移完成：站点迁至新服务器，网络稳定性问题基本解决，公告已更新并保留迁移过程公告于历史记录。
+- 公告支持可选的赞赏码展示：公告 JSON 增加内部 `rewardCode` 字段（图片、说明与替代文本），公告弹窗在正文中渲染赞赏码缩略图并支持点击放大预览；未配置时显示保持不变。
+- 管理面板可通过更新公告 JSON 持久化赞赏码，布局与交互与现有公告一致。
 
 ## v4.5 - 2026-10-29
+
+- Simplified the frontend upload flow by removing nonessential descriptive helper copy while keeping core actions and state feedback.
 
 - DeepSeek 读音审阅在验证原文、索引及原读音后忽略未改变读音的条目，保留同一响应中的有效修正，避免整次审阅误报失败。
 - 增加未修改项、混合修正、助词发音保留及无效来源锚点的回归测试。

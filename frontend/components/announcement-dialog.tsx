@@ -10,7 +10,7 @@ import {
   markAnnouncementSeen,
   parseAnnouncementBundle,
 } from "@/lib/announcement";
-import type { Announcement } from "@/types/announcement";
+import type { Announcement, RewardCode } from "@/types/announcement";
 
 export function isAnnouncementHeadline(paragraph: string): boolean {
   return paragraph.trim() === "！！！！！重大更新！！！！！";
@@ -21,6 +21,7 @@ export function AnnouncementDialog() {
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const [history, setHistory] = useState<Announcement[]>([]);
   const [openRequested, setOpenRequested] = useState(false);
+  const [rewardPreview, setRewardPreview] = useState<RewardCode | null>(null);
   const [view, setView] = useState<
     | { kind: "current" }
     | { kind: "history" }
@@ -91,6 +92,7 @@ export function AnnouncementDialog() {
     }
     dialogRef.current?.close();
     setOpenRequested(false);
+    setRewardPreview(null);
   }, [announcement]);
 
   if (!announcement) return null;
@@ -104,19 +106,45 @@ export function AnnouncementDialog() {
   const contentId = isHistoryList ? "announcement-history" : "announcement-content";
 
   function renderAnnouncementContent(item: Announcement) {
-    return item.content.map((paragraph, index) => (
-      <p
-        key={`${item.id}-${index}`}
-        className={isAnnouncementHeadline(paragraph)
-          ? "break-words text-2xl font-black leading-tight tracking-wide text-primary sm:text-3xl"
-          : undefined}
-      >
-        {paragraph}
-      </p>
-    ));
+    return (
+      <>
+        {item.content.map((paragraph, index) => (
+          <p
+            key={`${item.id}-${index}`}
+            className={isAnnouncementHeadline(paragraph)
+              ? "break-words text-2xl font-black leading-tight tracking-wide text-primary sm:text-3xl"
+              : undefined}
+          >
+            {paragraph}
+          </p>
+        ))}
+        {item.rewardCode && (
+          <figure className="flex flex-col items-center gap-2 rounded-lg border bg-card px-4 py-4">
+            <button
+              type="button"
+              onClick={() => setRewardPreview(item.rewardCode ?? null)}
+              title="查看大图"
+              className="focus-ring overflow-hidden rounded-md transition hover:brightness-95"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={item.rewardCode.imageUrl}
+                alt={item.rewardCode.alt}
+                className="size-40 object-contain sm:size-44"
+                loading="lazy"
+              />
+            </button>
+            <figcaption className="text-xs text-muted-foreground">
+              {item.rewardCode.caption}
+            </figcaption>
+          </figure>
+        )}
+      </>
+    );
   }
 
   return (
+    <>
     <dialog
       ref={dialogRef}
       aria-labelledby="announcement-title"
@@ -232,5 +260,25 @@ export function AnnouncementDialog() {
         </div>
       </div>
     </dialog>
+    {rewardPreview && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={rewardPreview.alt}
+        onClick={() => setRewardPreview(null)}
+        className="fixed inset-0 z-[60] flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-foreground/70 p-4 backdrop-blur-[2px]"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={rewardPreview.imageUrl}
+          alt={rewardPreview.alt}
+          className="max-h-[min(72dvh,32rem)] w-auto max-w-[min(88vw,26rem)] rounded-lg bg-card object-contain shadow-2xl"
+        />
+        <p className="text-xs text-card-foreground/80">
+          {rewardPreview.caption}（点击任意处关闭）
+        </p>
+      </div>
+    )}
+    </>
   );
 }

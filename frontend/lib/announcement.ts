@@ -1,4 +1,4 @@
-import type { Announcement, AnnouncementBundle } from "@/types/announcement";
+import type { Announcement, AnnouncementBundle, RewardCode } from "@/types/announcement";
 
 export const ANNOUNCEMENT_CONFIG_URL = "/announcement.json";
 export const ANNOUNCEMENT_OPEN_EVENT = "nicokara:announcement:open";
@@ -46,6 +46,7 @@ function parseAnnouncementRecord(
   }
 
   const version = value.version?.trim();
+  const rewardCode = parseRewardCode(value.rewardCode);
   return {
     id: value.id.trim(),
     enabled: true,
@@ -54,6 +55,23 @@ function parseAnnouncementRecord(
     publishedAt: value.publishedAt?.trim(),
     content: value.content.map((paragraph) => paragraph.trim()),
     buttonLabel: value.buttonLabel?.trim() ?? "我知道了",
+    ...(rewardCode ? { rewardCode } : {}),
+  };
+}
+
+function parseRewardCode(value: unknown): RewardCode | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    !nonEmptyString(value.imageUrl)
+    || !nonEmptyString(value.caption)
+    || !nonEmptyString(value.alt)
+  ) {
+    return undefined;
+  }
+  return {
+    imageUrl: value.imageUrl.trim(),
+    caption: value.caption.trim(),
+    alt: value.alt.trim(),
   };
 }
 

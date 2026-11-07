@@ -6,6 +6,13 @@ export type Announcement = {
   publishedAt?: string;
   content: string[];
   buttonLabel: string;
+  rewardCode?: RewardCode;
+};
+
+export type RewardCode = {
+  imageUrl: string;
+  caption: string;
+  alt: string;
 };
 
 export type AnnouncementBundle = {

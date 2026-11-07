@@ -68,11 +68,6 @@ type PendingLyricsWarning = {
   resumeSubmit: boolean;
 };
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-}
-
 export function UploadForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -433,9 +428,6 @@ export function UploadForm() {
             <div className="max-w-full">
               <CheckCircle2 className="mx-auto mb-3 size-7 text-primary" />
               <p className="break-all font-medium">{video.name}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {formatBytes(video.size)} · 拖入新视频或点击重新选择
-              </p>
             </div>
           ) : (
             <div>
@@ -448,9 +440,6 @@ export function UploadForm() {
                 {draggingVideo
                   ? `松开以上传${SUPPORTED_VIDEO_LABEL}视频`
                   : UPLOAD_COPY.videoPrompt}
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                拖放支持的视频文件到这里，或点击选择。{UPLOAD_COPY.videoHelp}
               </p>
             </div>
           )}
@@ -516,11 +505,6 @@ export function UploadForm() {
               移除文件
             </button>
           )}
-          {!lyricsFile && (
-            <span className="text-xs text-muted-foreground">
-              {UPLOAD_COPY.lyricsHint}
-            </span>
-          )}
         </div>
       </section>
 
@@ -565,7 +549,7 @@ export function UploadForm() {
               </button>
             )}
           </div>
-          {reviewedArtifacts ? (
+          {reviewedArtifacts && (
             <ul className="mt-3 space-y-2 text-sm">
               {reviewedArtifacts.files.map((file, index) => (
                 <li
@@ -581,10 +565,6 @@ export function UploadForm() {
                 </li>
               ))}
             </ul>
-          ) : (
-            <p className="mt-2 text-xs text-muted-foreground">
-              支持调整后注音 JSON、mora 时间轴 JSON 和 ASS 字幕，可同时选择。
-            </p>
           )}
           {reviewedArtifacts?.requiresRemoteVideo && (
             <p className="mt-3 text-xs text-muted-foreground">
@@ -594,9 +574,6 @@ export function UploadForm() {
         </div>
       </section>
 
-      <p className="text-sm text-muted-foreground">
-        生成后可分别导出 ON VOCAL 和 OFF VOCAL，两种版本共用注音、时间轴与字幕样式，并支持本地或云端导出。
-      </p>
 
       {error && (
         <ErrorFeedbackPanel
@@ -689,9 +666,6 @@ export function UploadForm() {
             : uploadPaused ? "继续上传" : UPLOAD_COPY.submitButton}
         </button>
 
-        <p className="text-center text-xs text-muted-foreground">
-          {UPLOAD_COPY.footer}
-        </p>
       </div>
 
       {lyricsWarning && (

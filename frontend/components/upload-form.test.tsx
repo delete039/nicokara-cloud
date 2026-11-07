@@ -11,7 +11,8 @@ describe("UploadForm", () => {
   it("uses one submission entry instead of choosing the vocal mode at upload", () => {
     const html = renderToStaticMarkup(<UploadForm />);
     expect(html).not.toContain('id="vocal-heading"');
-    expect(html).toContain("生成后可分别导出 ON VOCAL 和 OFF VOCAL");
+    expect(html).toContain("提交生成任务");
+    expect(html).not.toContain("生成后可分别导出 ON VOCAL 和 OFF VOCAL");
   });
   it("does not expose alignment model choices on the main upload page", () => {
     const html = renderToStaticMarkup(<UploadForm />);
@@ -20,12 +21,12 @@ describe("UploadForm", () => {
     expect(html).not.toContain("多声部增强");
     expect(html).not.toContain("稳健双模型");
   });
-  it("shows the common video formats accepted by the upload area", () => {
+  it("keeps accepted video formats in the file input while keeping the drop area quiet", () => {
     const html = renderToStaticMarkup(<UploadForm />);
 
-    expect(html).toContain("拖放支持的视频文件到这里");
     expect(html).toContain(".mp4,.m4v,.mov,.3gp");
     expect(html).toContain(".mkv,.webm,.avi,.wmv");
+    expect(html).not.toContain("拖放支持的视频文件到这里");
   });
 
   it("accepts existing LRC lyric files as well as plain text", () => {
