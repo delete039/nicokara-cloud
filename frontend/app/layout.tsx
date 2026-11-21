@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { AnnouncementDialog } from "@/components/announcement-dialog";
 import { PageviewTracker } from "@/components/pageview-tracker";
 import { ThemeSync } from "@/components/theme-sync";
-import { HOME_COPY } from "@/lib/ui-copy";
+import { HOME_COPY, SITE_COPY } from "@/lib/ui-copy";
 import { THEME_INITIALIZATION_SCRIPT } from "@/lib/theme";
 
 import "./globals.css";
@@ -48,6 +48,16 @@ export default function RootLayout({
         <ThemeSync />
         <PageviewTracker />
         {children}
+        <footer className="border-t px-5 py-4 text-center text-xs text-muted-foreground">
+          <a
+            href={SITE_COPY.icpUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground hover:underline"
+          >
+            {SITE_COPY.icp}
+          </a>
+        </footer>
         <AnnouncementDialog />
       </body>
     </html>

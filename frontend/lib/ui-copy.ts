@@ -1,3 +1,8 @@
+export const SITE_COPY = {
+  icp: "津ICP备2026017628号",
+  icpUrl: "https://beian.miit.gov.cn/",
+} as const;
+
 export const HOME_COPY = {
   introduction:
     "上传原版 MV 和日语歌词：支持的浏览器会把视频保留在浏览器，仅上传音频到服务器。先确认假名注音，再由高精度时间轴引擎生成 Mora 时间轴和字幕。",

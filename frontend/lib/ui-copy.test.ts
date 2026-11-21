@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { HOME_COPY, JOB_COPY, UPLOAD_COPY } from "./ui-copy";
+import { HOME_COPY, JOB_COPY, SITE_COPY, UPLOAD_COPY } from "./ui-copy";
 
 describe("server-facing interface copy", () => {
   it("describes server processing without local performance promises", () => {
@@ -18,6 +18,11 @@ describe("server-facing interface copy", () => {
     expect(UPLOAD_COPY.footer).toContain("排队时请保持页面打开");
     expect(UPLOAD_COPY.footer).toContain("保存浏览器地址");
     expect(UPLOAD_COPY.footer).toContain("之后打开即可查看结果");
+  });
+
+  it("exposes the ICP filing number", () => {
+    expect(SITE_COPY.icp).toBe("津ICP备2026017628号");
+    expect(SITE_COPY.icpUrl).toBe("https://beian.miit.gov.cn/");
   });
 
   it("labels transfer progress as uploading rather than video production", () => {
