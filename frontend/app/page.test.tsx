@@ -11,9 +11,10 @@ describe("Cloud home page", () => {
   it("shows the intro content and centers the upload form column", () => {
     const html = renderToStaticMarkup(<Home />);
 
-    expect(html).toContain("qq：280475274");
-    expect(html).toContain("bilibili：esrgt");
+    expect(html).toContain("QQ：280475274");
+    expect(html).toContain("Bilibili：esrgt");
     expect(html).toContain("小红书：esr");
+    expect(html).toContain("特别鸣谢：<br/>");
     expect(html).toContain('href="https://github.com/delete039/nicokara-cloud"');
     expect(html).toContain('href="https://github.com/FMPeach"');
     expect(html).toContain('href="https://github.com/FMPeach/Kirakara-Player"');

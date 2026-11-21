@@ -61,8 +61,8 @@ export default function Home() {
           >
             <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
               <div className="min-w-0">
-                <p>qq：{HOME_COPY.author.qq}</p>
-                <p>bilibili：{HOME_COPY.author.bilibili}</p>
+                <p>QQ：{HOME_COPY.author.qq}</p>
+                <p>Bilibili：{HOME_COPY.author.bilibili}</p>
                 <p>小红书：{HOME_COPY.author.xiaohongshu}</p>
                 <p className="mt-2 max-w-md">
                   <a
@@ -77,7 +77,12 @@ export default function Home() {
                 </p>
                 {HOME_COPY.author.acknowledgements.map((acknowledgement, index) => (
                   <p key={acknowledgement.project} className="mt-2 max-w-md">
-                    {index === 0 ? "特别鸣谢：" : ""}
+                    {index === 0 ? (
+                      <>
+                        特别鸣谢：
+                        <br />
+                      </>
+                    ) : null}
                     <a
                       href={acknowledgement.developerUrl}
                       target="_blank"
